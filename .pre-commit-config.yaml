@@ -1,0 +1,43 @@
+default_language_version:
+  python: python3
+
+exclude: ^(.gitlab-ci.yml|cicd/gitlab/|src/grpc|tools/migration_assistant.py) # TODO(alpasim): enable in future
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # list of supported hooks: https://pre-commit.com/hooks.html
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: debug-statements
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+      - id: check-toml
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        name: isort (python)
+        args: ["--profile", "black", "--filter-files"]
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.10.0
+    hooks:
+      - id: black
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.1
+    hooks:
+    - id: flake8
+      args: ["--max-line-length=120"] # TODO(alpasim): decide if we want to enforce line length
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: "f56614d"
+    hooks:
+    -   id: mypy
+        exclude: ^(src/wizard/tests)
+        files: ^src/wizard/.*\.py$
+        args:
+          - --config-file=mypy.ini
+        additional_dependencies: ["types-PyYAML", "hydra-core", "GitPython", "pandas","pandas-stubs", "types-aiofiles"]
