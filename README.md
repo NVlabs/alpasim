@@ -1,12 +1,12 @@
 # AlpaSim: A modular, lightweight, and data-driven research simulator for autonomous driving
+
 <div align="center">
   <img src="docs/assets/images/thumbnail.gif" alt="AlpaSim Simulation Demo" width="600">
 </div>
 
-
 # Coming Soon
 
-This project is currently in the process of being open-sourced. Stay tuned for updates!
+This project is currently in the process of being open-sourced. Expected release date is end of November, stay tuned!
 
 ## What is AlpaSim?
 
@@ -22,24 +22,26 @@ Suitable use cases include:
 - **Performance Benchmarking/Regression Testing**: Compare different models and configurations
 - **Debugging**: Understand and debug complex autonomous driving behaviors
 
-
 ### **Sensor Fidelity**
+
 - Neural Rendering (NuRec) integration for photorealistic sensor simulation of novel views
 - High-fidelity camera feeds with configurable field-of-view, resolution, and frame rates
 - Realistic sensor noise and environmental conditions
 
 ### **Research Hackability**
+
 - Python-based implementation built for rapid prototyping and experimentation
 - Modular grpc interface design allows researchers to swap out components with custom implementations
 - Extensive configuration options and debugging tools
 
 ### **Horizontal Scalability**
+
 - Microservices architecture enabling distributed computing
 - Scale individual components for optimal load balancing
 - Support for multi-node deployments
 
-
 ## Citation
+
 If you use this software, please cite it as follows:
 
 ```
@@ -70,7 +72,8 @@ If you use this software, please cite it as follows:
 }
 ```
 
-## Project Contributors:
+## Project Contributors
+
 Contributors in each topic in alphabetical order
 
 **Project Lead:** Maximilian Igl
@@ -92,11 +95,11 @@ Contributors in each topic in alphabetical order
 **Testing & debugging:** Guillermo Garcia Cobo, Peter Karkus, Ellie Tanimura
 
 **Service Modules:**
-* Driver integration: Maximilian Igl, Peter Karkus, Michal Tyszkiewicz
-* Evaluation: Yulong Cao, Maximilian Igl
-* Controller: Michael Watson
-* Physics: Riccardo de Lutio
-* Trafficsim: Maximilian Igl, Boris Ivanovic
+- Driver integration: Maximilian Igl, Peter Karkus, Michal Tyszkiewicz
+- Evaluation: Yulong Cao, Maximilian Igl
+- Controller: Michael Watson
+- Physics: Riccardo de Lutio
+- Trafficsim: Maximilian Igl, Boris Ivanovic
 
 **Product Manager:** Matt Cragun
 
