@@ -155,10 +155,9 @@ statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the 
 ### Scenes
 Additional scenes are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release)
-and, once downloaded, should be placed somewhere under `data/nre-artifacts/all-usdzs`. At the moment, scene
-suites are not yet enabled in the public repo, so the selection of scenes is a manual process. The
-set of scenes can be specified through the wizard argument `scenes.scene_ids`. For example, to run
+and, once downloaded, should be placed somewhere under `data/nre-artifacts/all-usdzs`.
 
+#### Downloading Scenes
 The huggingface cli can be used to download additional scenes. For instance:
 ```bash
 hf download --repo-type=dataset \
@@ -167,8 +166,21 @@ hf download --repo-type=dataset \
     sample_set/25.07_release/Batch0001/02eadd92-02f1-46d8-86fe-a9e338fed0b6/02eadd92-02f1-46d8-86fe-a9e338fed0b6.usdz
 ```
 
-followed by: `alpasim_wizard +deploy=local wizard.log_dir=<dir> scenes.scene_ids=['sceneid-1', 'sceneid-2', ...]`.
-For example:
+#### Using Scene Suites
+Scene suites provide pre-validated collections of scenes for testing.
+
+> :information_source: **Prerequisite:** Scene suites assume you have already downloaded the required scenes from [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release) to your local `data/nre-artifacts/` directory. See the [Downloading Scenes](#downloading-scenes) section above for details.
+
+To use the public sceneset with 901 validated scenes:
+
+```bash
+alpasim_wizard +deploy=local +experiment/scenes=public_2507_all_ex19 wizard.log_dir=$PWD/tutorial_suite
+```
+
+This will run simulations across all 901 scenes in the `public_2507_all_ex19` suite, which excludes 19 problematic scenes from the full 25.07 release dataset.
+
+#### Selecting Individual Scenes
+For custom scene selection, you can specify scenes manually using `scenes.scene_ids`:
 
 ```bash
 alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
