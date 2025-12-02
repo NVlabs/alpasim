@@ -105,11 +105,11 @@ Contributors in each topic in alphabetical order
 
 **Architecture Design & Networking:** Michal Tyszkiewicz
 
-**Open Sourcing:** Guillermo Garcia Cobo, Maximilian Igl, Peter Karkus, Michael Watson
+**Open Sourcing:** Guillermo Garcia Cobo, Maximilian Igl, Peter Karkus, Ellie Tanimura, Michael Watson
 
 **Infrastructure & Wizard:** Maximilian Igl, Aaron Smith, Michal Tyszkiewicz, Michael Watson, Qi Wu (SLURM deployment), Le Zhang (Data management)
 
-**Runtime:** Maximilian Igl, Aaron Smith, Michal Tyszkiewicz, Michael Watson
+**Runtime:** Maximilian Igl, Aaron Smith, Ellie Tanimura, Michal Tyszkiewicz, Michael Watson
 
 **CICD:** Maximilian Igl, Aaron Smith
 
