@@ -226,7 +226,7 @@ or simulation behavior.
 your favorite debugger attached.
 
 # Level 3
-In level 3 we focus we show how to circumvent the `alpasim_wizard` defined components: this enables
+In level 3 we show how to circumvent the `alpasim_wizard` defined components: this enables
 use cases such as enabling breakpoint debugging in components or even replacing components entirely.
 The basic idea behind the approach is to:
 
@@ -255,7 +255,7 @@ with:
     cd <repo_root>/src/controller/
     mkdir my_controller_log_dir
     # Note: port (6003 in this case) must match the port allocated in docker-compose.yaml
-    uv run python -m alpasim_controller.server --port=6003 --log_dir=my_controller_logdir --log-level=INFO
+    uv run python -m alpasim_controller.server --port=6003 --log_dir=my_controller_log_dir --log-level=INFO
     ```
 4. (Terminal 1) Start the rest of the simulation with docker compose:
     ```bash
