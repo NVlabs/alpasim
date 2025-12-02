@@ -12,6 +12,14 @@ fi
 # Get the repository root directory
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
+# Probably not necessary, but just in case, we do an lfs pull
+echo "Ensuring Git LFS files are pulled..."
+git lfs pull
+if [[ $? -ne 0 ]]; then
+    echo "❌ Git LFS pull failed. Exiting."
+    return 1
+fi
+
 # Setup GRPC
 echo "Setting up GRPC..."
 pushd "${REPO_ROOT}/src/grpc" > /dev/null
@@ -38,7 +46,7 @@ else
     echo "VAVAM models already present. Skipping download."
 fi
 
-# Ensure hugging face cli is installed and logged in
+# Ensure Hugging Face cli is installed and logged in
 # check for binary hf
 if ! command -v hf &> /dev/null; then
     echo "Hugging Face CLI not found. Installing with pip install -U huggingface_hub? (y/n)"
@@ -54,7 +62,8 @@ fi
 echo "Logging into Hugging Face CLI..."
 hf auth login
 if [[ $? -ne 0 ]]; then
-    echo "❌ Failed to log into Hugging Face CLI. Exiting."
+    echo "❌ Failed to log into Hugging Face CLI. If you have a Hugging Face token,"
+    echo "   you may not have sufficient privileges on that token. Exiting."
     return 1
 fi
 
@@ -62,9 +71,10 @@ fi
 hf download --repo-type=dataset \
     --local-dir=data/nre-artifacts/all-usdzs \
     nvidia/PhysicalAI-Autonomous-Vehicles-NuRec \
-    sample_set/25.07_release/Batch0001/026d6a39-bd8f-4175-bc61-fe50ed0403a3/026d6a39-bd8f-4175-bc61-fe50ed0403a3.usdz
+    sample_set/25.07_release/Batch0001/05bb8212-63e1-40a8-b4fc-3142c0e94646/05bb8212-63e1-40a8-b4fc-3142c0e94646.usdz
 if [[ $? -ne 0 ]]; then
-    echo "❌ Failed to download sample data from Hugging Face. Exiting."
+    echo "❌ Failed to download sample data from Hugging Face. If you have a Hugging Face token,"
+    echo "   you may not have sufficient privileges on that token. Exiting."
     return 1
 fi
 

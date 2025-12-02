@@ -11,7 +11,8 @@ defines:
   nre_cache_size: 5  # Because below we have 2 sensorsim instances on each GPU
   physics_cache_size: 6  # should match or exceed concurrent unique scenes
 
-eval.num_processes: 32
+eval:
+  num_processes: 32
 
 wizard:
     run_method: "SLURM"

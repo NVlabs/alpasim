@@ -5,8 +5,6 @@ This tutorial makes three assumptions
 3. It focuses on letting the user do simple things quick and leaves detail for later. This is
 reflected in subdivision into three levels of complexity.
 
-[TOC]
-
 # Level 1
 In level 1 we focus we run a default simulation, learn how to interpret the results, and perform
 basic debugging.
@@ -24,12 +22,13 @@ docker/enroot.
 
 ## Running with docker compose
 Let's start by executing a run with default settings.
-1. Ensure that you have the sample LFS artifact (`git lfs pull`)
-2. Download and install `uv` if not yet done: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-   Alternatively, run `uv self update` as older versions have been reported to not work.
-3. Set up your environment with:
+1. Follow [instructions in onboarding](/docs/ONBOARDING.md) to ensure necessary dependencies have
+been installed
+2. Set up your environment with:
     * `source setup_local_env.sh`
-4. Run the wizard to create the necessary config files and run a simulation
+    * This will compile protos, download an example driver model, download a sample scene from
+      Hugging Face, and install the `alpasim_wizard` command line tool.
+3. Run the wizard to create the necessary config files and run a simulation
     * `alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial`
     * This will create a `tutorial/` directory with all necessary config files and run the simulation
 
@@ -158,7 +157,7 @@ Additional scenes are stored on
 and, once downloaded, should be placed somewhere under `data/nre-artifacts/all-usdzs`.
 
 #### Downloading Scenes
-The huggingface cli can be used to download additional scenes. For instance:
+The Hugging Face cli can be used to download additional scenes. For instance:
 ```bash
 hf download --repo-type=dataset \
     --local-dir=data/nre-artifacts/all-usdzs \

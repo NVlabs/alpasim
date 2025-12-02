@@ -136,7 +136,6 @@ class DockerComposeDeployment:
                     "src/ddb/Dockerfile" if ("ddb" in container.name) else "Dockerfile"
                 ),
                 "tags": [container.service_config.image],
-                "secrets": ["netrc"],
             }
 
         if container.command:
@@ -238,7 +237,6 @@ class DockerComposeDeployment:
         # Create compose structure with ordered services
         compose = {
             "networks": {"microservices_network": {"driver": "bridge"}},
-            "secrets": {"netrc": {"file": "${HOME}/.netrc"}},
             "services": services,  # Services maintain insertion order in Python 3.7+
         }
 

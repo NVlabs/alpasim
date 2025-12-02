@@ -9,9 +9,14 @@ Alpasim depends on access to the following:
     * You will need to create a free Hugging Face account if you do not already have one and create
     an access token with read access. See [access tokens](https://huggingface.co/settings/tokens).
 * A version of `uv` installed (see [here](https://docs.astral.sh/uv/getting-started/installation/))
+    * Example installation command for Ubuntu: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+* Docker installed (see [setup instructions](https://docs.docker.com/engine/install/ubuntu/))
 * Docker compose installed (see [setup instructions](https://docs.docker.com/compose/install/linux/))
     * The wizard needs `docker`, `docker-compose-plugin`, and `docker-buildx-plugin`
+    * Docker needs to be able to run without `sudo`. If you see a permission error when running
+    `docker` commands, add yourself to the docker group: `sudo usermod -aG docker $USER`
 * CUDA 12.6 or greater installed (see [here](https://developer.nvidia.com/cuda-downloads) for instructions)
+* Install the NVIDIA Container Toolkit (see [here](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
 
 Once you have access to the above, please follow instructions in the [tutorial](/docs/TUTORIAL.md) to
 get started running Alpasim.
