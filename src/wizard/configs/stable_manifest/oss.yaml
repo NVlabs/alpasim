@@ -16,17 +16,17 @@ services:
     image: docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0
     external_image: true
   driver:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   physics:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   runtime:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   controller:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   eval:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   trafficsim:
-    image: alpasim-base:0.1.1 # temporary stub
+    image: alpasim-base:0.1.2 # temporary stub
 runtime:
   default_scenario_parameters:
     # no latency

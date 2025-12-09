@@ -41,29 +41,21 @@ class AlpasimConfig:
 
 
 @dataclass
-class USDZDatabaseConfig:
+class ScenesConfig:
+    # Selection method (exactly one must be set)
+    scene_ids: Optional[list[str]] = None
+    test_suite_id: Optional[str] = None
+
+    # Paths
     scene_cache: str = MISSING
+    scenes_csv: str = MISSING
+    suites_csv: str = MISSING
+
     # used to override services.sensorsim.image for the USDZ database service if NRE is not enabled
     nre_version_string: Optional[str] = None
 
-
-@dataclass
-class LocalScenesConfig:
-    directory: str = MISSING  # relative to nre-artifacts directory
-    suites: Optional[dict[str, list[str]]] = None  # map suite name to list of scene IDs
-
-
-@dataclass
-class ScenesConfig:
-    # exactly one of the following must be set
-    scene_ids: Optional[list[str]] = None
-    test_suite_id: Optional[str] = None
-    source: Optional[str] = "local"
-    database: USDZDatabaseConfig = field(default_factory=USDZDatabaseConfig)
-    local: LocalScenesConfig = field(default_factory=LocalScenesConfig)
-
     # maps (nre_version, artifact_version) -> is_compatible
-    # 1. versions are version strings with dotes replaced by _, i.e. 0_2_335-deadbeef
+    # 1. versions are version strings with dots replaced by _, i.e. 0_2_335-deadbeef
     #    underscores will be replaced by dots when used as keys in the config
     # 2. all versions are assumed to be compatible with themselves. Including
     #    `artifact_compatibility_matrix.0_2_335-deadbeef.0_2_335-deadbeef` is an error

@@ -3,8 +3,11 @@
 
 import logging
 
+from .compatibility import CompatibilityMatrix
+from .scenes import USDZManager
 from .schema import AlpasimConfig
 from .setup_omegaconf import main_wrapper
+from .utils import nre_image_to_nre_version
 
 logger = logging.getLogger("alpasim_wizard")
 logger.setLevel(logging.INFO)
@@ -17,6 +20,27 @@ def check_config(cfg: AlpasimConfig) -> None:
     if cfg.services.sensorsim is None:
         # TODO: could we run in these conditions?
         raise ValueError("Missing 'sensorsim' config in 'services' section.")
+
+    nre_version_string = nre_image_to_nre_version(cfg.services.sensorsim.image)
+    compatibility_matrix = CompatibilityMatrix.from_config(
+        cfg.scenes.artifact_compatibility_matrix
+    )
+    compatible_versions = list(compatibility_matrix.lookup(nre_version_string))
+
+    manager = USDZManager.from_cfg(cfg.scenes)
+    if cfg.scenes.test_suite_id is not None:
+        artifacts = manager.query_by_suite_id(
+            cfg.scenes.test_suite_id, compatible_versions
+        )
+    elif cfg.scenes.scene_ids is not None:
+        artifacts = manager.query_by_scene_ids(
+            cfg.scenes.scene_ids, compatible_versions
+        )
+    else:
+        print("No scene_ids or test_suite_id specified.")
+        return
+
+    print(f"Found {len(artifacts)} scenes compatible with {nre_version_string=}.")
 
 
 def main() -> None:

@@ -16,6 +16,8 @@ dependencies = [
     "pyYAML",
     "GitPython",
     "pandas",
+    "polars>=1.0.0",
+    "pyarrow",
     "filelock",
     "tqdm",
     "typing-extensions",

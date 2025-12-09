@@ -87,8 +87,14 @@ wizard:
   log_level: INFO
 
 scenes:
-  # `scene_ids` is defined in stable_manifest/oss.yaml
-  source: "local" # "local" only for OSS at the moment
+  # Selection method (set one of these two)
+  scene_ids: null        # List of scene IDs to use
+  test_suite_id: null    # Test suite ID to use (from suites_csv)
+
+  # Paths
+  scene_cache: "${defines.filesystem}/nre-artifacts"
+  scenes_csv: "${repo-relative:'data/scenes/sim_scenes.csv'}"
+  suites_csv: "${repo-relative:'data/scenes/sim_suites.csv'}"
 
   artifact_compatibility_matrix:
     # 1. the keys replace dots with underscores because of hydra limitations. They will be interpreted with `.replace('_', '.')`
@@ -102,13 +108,6 @@ scenes:
       "25_7_8-fc8b0551": true
       "0_2_578-e82c0193": true
 
-  database:
-    scene_cache: "${defines.filesystem}/nre-artifacts"
-
-  local:
-    directory: ??? # relative path to the nre-artifacts directory
-    suites: null # optional: dictionary mapping suite names to lists of scene IDs
-
 # \/ services.* defines the individual components of the simulation. Each of them is deployed from an image so the layout of
 # each item is similar. For the services that pull in local code (e.g., controller, runtime, eval) we mount the repo-relative
 # `src/` directory into `/mnt/src` in the container and run from there. The virtual environment is reused from the container.
@@ -118,7 +117,7 @@ services:
     image: ???
     # \/ volumes lets us mount host (ORD/local) containers to the running container
     volumes:
-      - "${scenes.database.scene_cache}:/mnt/nre-data"
+      - "${scenes.scene_cache}:/mnt/nre-data"
       - "${defines.sensordata}/ego-hoods:/mnt/ego-hoods"
     # \/ environments lets you set environment variables inside the container
     environments:
@@ -162,7 +161,7 @@ services:
   physics:
     image: ???
     volumes:
-      - "${scenes.database.scene_cache}:/mnt/nre-data"
+      - "${scenes.scene_cache}:/mnt/nre-data"
       - "${repo-relative:'src'}:/repo/src"
     environments:
       - WARP_CACHE_PATH='/mnt/warp'
@@ -209,7 +208,7 @@ services:
       - trafficsim
       - controller
     volumes:
-      - "${scenes.database.scene_cache}:/mnt/nre-data"
+      - "${scenes.scene_cache}:/mnt/nre-data"
       - "${wizard.log_dir}:/mnt/rollouts"
       - "${repo-relative:'src'}:/repo/src"
     gpus: null # uses no GPUs
@@ -226,7 +225,7 @@ services:
     image: ???
     volumes:
       - "${wizard.log_dir}:/mnt/log_dir"
-      - "${scenes.database.scene_cache}:/mnt/nre-data"
+      - "${scenes.scene_cache}:/mnt/nre-data"
       - "${repo-relative:'src'}:/repo/src"
     replicas_per_container: 1
     gpus: null

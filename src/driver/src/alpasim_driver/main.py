@@ -910,7 +910,6 @@ class VAMPolicyService(EgodriverServiceServicer):
         logger.debug("Ground truth received but not used by VAM")
         return Empty()
 
-    @async_log_call
     def _check_frames_ready(self, session: Session) -> bool:
         """Check if all cameras have enough frames for inference."""
         return session.all_cameras_ready()
