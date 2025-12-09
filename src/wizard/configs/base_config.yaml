@@ -262,9 +262,11 @@ runtime:
     sensorsim:
       # how many rollouts can run on a single worker at once
       n_concurrent_rollouts: 2
+      skip: false
 
     driver:
       n_concurrent_rollouts: 14
+      skip: false
 
     physics:
       n_concurrent_rollouts: 14
