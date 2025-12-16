@@ -12,11 +12,12 @@ from alpasim_wizard.scenes.csv_utils import (
     merge_suites_csv,
     validate_csvs,
 )
-from alpasim_wizard.scenes.sceneset import SceneIdAndUuid, USDZManager
+from alpasim_wizard.scenes.sceneset import LOCAL_SUITE_ID, SceneIdAndUuid, USDZManager
 
 __all__ = [
     "ArtifactRepository",
     "CSVValidationError",
+    "LOCAL_SUITE_ID",
     "SCENES_COLUMNS",
     "SUITES_COLUMNS",
     "SceneIdAndUuid",

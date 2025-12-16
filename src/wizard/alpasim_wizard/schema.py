@@ -51,6 +51,14 @@ class ScenesConfig:
     scenes_csv: str = MISSING
     suites_csv: str = MISSING
 
+    # Optional: path to a local directory containing *.usdz files.
+    # When set, the wizard will scan this directory to generate in-memory
+    # sim_scenes/sim_suites data, bypassing the CSV files. A test suite (called "local")
+    # is created automatically containing all discovered scenes.
+    # If local_usdz_dir is provided and neither scene_ids nor test_suite_id is set,
+    # all scenes in the directory will be simulated.
+    local_usdz_dir: Optional[str] = None
+
     # used to override services.sensorsim.image for the USDZ database service if NRE is not enabled
     nre_version_string: Optional[str] = None
 

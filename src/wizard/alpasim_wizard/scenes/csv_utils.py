@@ -23,6 +23,7 @@ class ArtifactRepository(str, Enum):
 
     SWIFTSTACK = "swiftstack"
     HUGGINGFACE = "huggingface"
+    LOCAL = "local"  # Files on local filesystem
 
     def __str__(self) -> str:
         return self.value

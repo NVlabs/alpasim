@@ -9,8 +9,6 @@ defaults:
 scenes:
   scene_ids:
     - clipgt-05bb8212-63e1-40a8-b4fc-3142c0e94646 # taken from huggingface
-  local:
-    directory: "all-usdzs" # relative to nre-artifacts directory
 services:
   sensorsim:
     image: docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0

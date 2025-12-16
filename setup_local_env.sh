@@ -33,7 +33,7 @@ popd > /dev/null
 
 
 # Download vavam models if not already present
-VAVAM_DIR="${REPO_ROOT}/data/vavam-driver"
+VAVAM_DIR="${REPO_ROOT}/data/drivers"
 if [[ ! -d "${VAVAM_DIR}" ]]; then
     echo "Downloading vavam assets..."
     ./data/download_vavam_assets.sh --model vavam-b
@@ -46,41 +46,16 @@ else
     echo "VAVAM models already present. Skipping download."
 fi
 
-# Ensure Hugging Face cli is installed and logged in
-# check for binary hf
-if ! command -v hf &> /dev/null; then
-    echo "Hugging Face CLI not found. Installing with pip install -U huggingface_hub? (y/n)"
-    read -r response
-    if [[ "$response" == "y" ]]; then
-        pip install -U huggingface_hub
-    else
-        echo "❌ Hugging Face CLI is required. Exiting."
-        return 1
-    fi
-fi
-
-echo "Logging into Hugging Face CLI..."
-hf auth login
-if [[ $? -ne 0 ]]; then
-    echo "❌ Failed to log into Hugging Face CLI. If you have a Hugging Face token,"
-    echo "   you may not have sufficient privileges on that token. Exiting."
-    return 1
-fi
-
-# Download the sample model to cache
-hf download --repo-type=dataset \
-    --local-dir=data/nre-artifacts/all-usdzs \
-    nvidia/PhysicalAI-Autonomous-Vehicles-NuRec \
-    sample_set/25.07_release/Batch0001/05bb8212-63e1-40a8-b4fc-3142c0e94646/05bb8212-63e1-40a8-b4fc-3142c0e94646.usdz
-if [[ $? -ne 0 ]]; then
-    echo "❌ Failed to download sample data from Hugging Face. If you have a Hugging Face token,"
-    echo "   you may not have sufficient privileges on that token. Exiting."
-    return 1
-fi
-
-
 # Install Wizard in development mode
 echo "Installing Wizard in development mode..."
 uv tool install -e "${REPO_ROOT}/src/wizard"
+
+# Ensure Hugging Face token is available (needed to download files)
+# Check if HF_TOKEN is set in the environment
+if [[ -z "${HF_TOKEN}" ]]; then
+    echo "❌ Hugging Face token (HF_TOKEN) not found in environment."
+    echo "If you need to download files from Hugging Face, please set HF_TOKEN."
+    return 1
+fi
 
 echo "Setup complete"

@@ -8,6 +8,7 @@ Alpasim depends on access to the following:
     for more information on the contents of artifacts used to define scenes
     * You will need to create a free Hugging Face account if you do not already have one and create
     an access token with read access. See [access tokens](https://huggingface.co/settings/tokens).
+    * Once you have the token, set it as an environment variable: `export HF_TOKEN=<token>`
 * A version of `uv` installed (see [here](https://docs.astral.sh/uv/getting-started/installation/))
     * Example installation command for Ubuntu: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 * Docker installed (see [setup instructions](https://docs.docker.com/engine/install/ubuntu/))

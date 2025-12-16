@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import glob
 import hashlib
 import logging
 import os
@@ -13,6 +14,7 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime
 
 import polars as pl  # type: ignore[import-not-found]
 import yaml
@@ -23,6 +25,8 @@ from filelock import FileLock
 from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
 from tqdm.asyncio import tqdm  # type: ignore[import-untyped]
 from typing_extensions import ClassVar, Self
+
+LOCAL_SUITE_ID = "local"
 
 logger = logging.getLogger("alpasim_wizard")
 
@@ -55,6 +59,87 @@ def _deduplicate(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# TODO(mwatson): unify with car2sim.py logic wrt metadata extraction
+def scan_local_usdz_directory(usdz_dir: str) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Scan a local directory for USDZ files and create sim_scenes/sim_suites DataFrames.
+
+    This function reads metadata from each USDZ file to populate the DataFrames.
+
+    Args:
+        usdz_dir: Path to directory containing *.usdz files.
+
+    Returns:
+        Tuple of (sim_scenes DataFrame, sim_suites DataFrame).
+
+    Raises:
+        ValueError: If the directory doesn't exist or contains no USDZ files.
+    """
+    if not os.path.isdir(usdz_dir):
+        raise ValueError(f"Local USDZ directory does not exist: {usdz_dir}")
+
+    usdz_files = glob.glob(os.path.join(usdz_dir, "**/*.usdz"), recursive=True)
+    if not usdz_files:
+        raise ValueError(f"No *.usdz files found in directory: {usdz_dir}")
+
+    logger.info(f"Scanning {len(usdz_files)} USDZ files in {usdz_dir}")
+
+    scene_rows = []
+    suite_rows = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for usdz_file in usdz_files:
+        try:
+            with zipfile.ZipFile(usdz_file, "r") as usdz_zip:
+                with usdz_zip.open("metadata.yaml") as manifest_file:
+                    data = yaml.safe_load(manifest_file)
+
+                    # Extract metadata - similar to car2sim.py logic
+                    uuid = data["uuid"]
+                    scene_id = data.get("scene_id")
+                    nre_version_string = data.get("version_string", "unknown")
+
+                    scene_rows.append(
+                        {
+                            "uuid": uuid,
+                            "scene_id": scene_id,
+                            "nre_version_string": nre_version_string,
+                            "path": os.path.abspath(usdz_file),
+                            "last_modified": now,
+                            "artifact_repository": "local",
+                        }
+                    )
+
+                    suite_rows.append(
+                        {
+                            "test_suite_id": str(ArtifactRepository.LOCAL),
+                            "scene_id": scene_id,
+                        }
+                    )
+
+        except (zipfile.BadZipFile, KeyError, yaml.YAMLError) as e:
+            logger.warning(f"Failed to read metadata from {usdz_file}: {e}")
+            continue
+
+    if not scene_rows:
+        raise ValueError(
+            f"No valid USDZ files with metadata found in directory: {usdz_dir}"
+        )
+
+    sim_scenes = pl.DataFrame(scene_rows)
+    sim_suites = pl.DataFrame(suite_rows)
+
+    sim_scenes.write_csv(os.path.join(usdz_dir, "sim_scenes.csv"))
+    sim_suites.write_csv(os.path.join(usdz_dir, "sim_suites.csv"))
+
+    logger.info(
+        f"Found {len(scene_rows)} scenes in local directory. "
+        f"Test suite '{str(ArtifactRepository.LOCAL)}' created with all scenes."
+    )
+    logger.info(f"Generated sim_scenes.csv and sim_suites.csv in {usdz_dir}")
+
+    return sim_scenes, sim_suites
+
+
 @dataclass
 class USDZManager:
     """Manager for querying and downloading USDZ scene artifacts."""
@@ -77,12 +162,23 @@ class USDZManager:
 
     @classmethod
     def from_cfg(cls, cfg: ScenesConfig) -> Self:
-        """Create a USDZManager from a ScenesConfig."""
-        sim_scenes = pl.read_csv(cfg.scenes_csv)
-        sim_suites = pl.read_csv(cfg.suites_csv)
+        """Create a USDZManager from a ScenesConfig.
+
+        If cfg.local_usdz_dir is set, scans that directory for USDZ files
+        instead of reading from CSV files. A "local" test suite is created
+        automatically containing all discovered scenes.
+        """
+        # Handle local USDZ directory mode
+        if cfg.local_usdz_dir is not None:
+            sim_scenes, sim_suites = scan_local_usdz_directory(cfg.local_usdz_dir)
+            # Use the local_usdz_dir as the cache directory for scenesets
+            cache_dir = cfg.local_usdz_dir
+        else:
+            sim_scenes = pl.read_csv(cfg.scenes_csv)
+            sim_suites = pl.read_csv(cfg.suites_csv)
+            cache_dir = cfg.scene_cache
 
         # Ensure directories exist
-        cache_dir = cfg.scene_cache
         if not os.path.isdir(cache_dir):
             raise ValueError(f"Cache directory {cache_dir} does not exist.")
 
@@ -93,13 +189,14 @@ class USDZManager:
             cache_dir=cache_dir,
         )
 
-        if not os.path.isdir(manager.scenesets_dir):
-            logger.warning(f"{manager.scenesets_dir=} doesn't exist. Creating it.")
-            os.makedirs(manager.scenesets_dir, exist_ok=True)
+        if cfg.local_usdz_dir is None:
+            if not os.path.isdir(manager.scenesets_dir):
+                logger.warning(f"{manager.scenesets_dir=} doesn't exist. Creating it.")
+                os.makedirs(manager.scenesets_dir, exist_ok=True)
 
-        if not os.path.isdir(manager.all_usdzs_dir):
-            logger.warning(f"{manager.all_usdzs_dir=} doesn't exist. Creating it.")
-            os.makedirs(manager.all_usdzs_dir, exist_ok=True)
+            if not os.path.isdir(manager.all_usdzs_dir):
+                logger.warning(f"{manager.all_usdzs_dir=} doesn't exist. Creating it.")
+                os.makedirs(manager.all_usdzs_dir, exist_ok=True)
 
         return manager
 
@@ -234,18 +331,34 @@ class USDZManager:
 
         Supports downloading from multiple artifact repositories:
         - swiftstack: Downloads via S3 API
-        - huggingface: Not yet implemented (raises NotImplementedError)
+        - huggingface: Downloads from HuggingFace Hub
+        - local: No download needed (files already on local filesystem)
         """
         artifact_info = self.get_artifact_info(uuids)
 
         # Group by repository type for better logging
         swiftstack_uuids = []
         huggingface_uuids = []
+        local_uuids = []
         for uuid, (path, repo) in artifact_info.items():
             if repo == ArtifactRepository.SWIFTSTACK:
                 swiftstack_uuids.append(uuid)
             elif repo == ArtifactRepository.HUGGINGFACE:
                 huggingface_uuids.append(uuid)
+            elif repo == ArtifactRepository.LOCAL:
+                local_uuids.append(uuid)
+
+        # Local artifacts - no download needed, but verify files exist
+        if local_uuids:
+            logger.info(
+                f"Using {len(local_uuids)} local artifacts (no download needed)"
+            )
+            for uuid in local_uuids:
+                path, _ = artifact_info[uuid]
+                if not os.path.exists(path):
+                    raise FileNotFoundError(
+                        f"Local artifact not found: {path} (uuid={uuid})"
+                    )
 
         # Handle HuggingFace artifacts
         if huggingface_uuids:
@@ -338,10 +451,13 @@ class USDZManager:
                         # Re-raise any exceptions from the download
                         future.result()
 
-    def create_sceneset_directory(self, uuids: list[str]) -> str | None:
-        """Download artifacts and create symlinked sceneset directory."""
+    def create_sceneset_directory(self, uuids: list[str]) -> str:
+        """
+        Download artifacts and create symlinked sceneset directory.
+        Note: this should not be used for local USDZ directory configurations.
+        """
         if not uuids:
-            return None
+            raise ValueError("At least one uuid must be provided to create a sceneset.")
 
         asyncio.get_event_loop().run_until_complete(self._download_artifacts(uuids))
 

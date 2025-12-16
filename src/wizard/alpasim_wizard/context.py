@@ -14,14 +14,14 @@ from pathlib import Path
 from typing import Iterator
 
 from .compatibility import CompatibilityMatrix
-from .scenes import SceneIdAndUuid, USDZManager
+from .scenes import LOCAL_SUITE_ID, SceneIdAndUuid, USDZManager
 from .schema import AlpasimConfig
 from .utils import nre_image_to_nre_version
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str | None]:
+def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
     """Fetch artifacts using the scene manager."""
 
     compatibility_matrix = CompatibilityMatrix.from_config(
@@ -39,39 +39,62 @@ def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str | Non
 
     # Query scenes
     manager = USDZManager.from_cfg(cfg.scenes)
-    if cfg.scenes.test_suite_id is not None:
-        if cfg.scenes.scene_ids is not None:
+
+    # Determine which selection method to use
+    test_suite_id = cfg.scenes.test_suite_id
+    scene_ids = cfg.scenes.scene_ids
+    use_local_scenes = cfg.scenes.local_usdz_dir is not None
+
+    if test_suite_id is not None and scene_ids is not None:
+        raise ValueError(
+            "Both scene_ids and test_suite_id are set; only one can be set."
+        )
+    elif use_local_scenes and test_suite_id not in (None, LOCAL_SUITE_ID):
+        raise ValueError(
+            "When using local_usdz_dir, test_suite_id must be None or 'local'."
+        )
+
+    # If local_usdz_dir is set and neither scene_ids nor test_suite_id is provided,
+    # default to using the "local" test suite (all scenes in the directory)
+    if use_local_scenes:
+        if test_suite_id is None and scene_ids is None:
+            test_suite_id = LOCAL_SUITE_ID
+            logger.info(
+                f"Using local USDZ directory: {cfg.scenes.local_usdz_dir}. "
+                f"Defaulting to test_suite_id='{test_suite_id}' (all scenes)."
+            )
+
+    if test_suite_id is not None:
+        if scene_ids is not None:
             logger.warning(
                 "Both scene_ids and test_suite_id are set; using test_suite_id=%s",
-                cfg.scenes.test_suite_id,
+                test_suite_id,
             )
-        artifacts = manager.query_by_suite_id(
-            cfg.scenes.test_suite_id, compatible_versions
-        )
-    elif cfg.scenes.scene_ids is not None:
-        artifacts = manager.query_by_scene_ids(
-            cfg.scenes.scene_ids, compatible_versions
-        )
+        artifacts = manager.query_by_suite_id(test_suite_id, compatible_versions)
+    elif scene_ids is not None:
+        artifacts = manager.query_by_scene_ids(scene_ids, compatible_versions)
     else:
         raise ValueError("Either scene_ids or test_suite_id must be set")
 
-    # Create sceneset directory
-    sceneset_dir_abs_path = manager.create_sceneset_directory(
-        [a.uuid for a in artifacts]
-    )
-
-    if sceneset_dir_abs_path is not None:
-        sceneset_dir_relative_path = Path(sceneset_dir_abs_path).relative_to(
-            cfg.scenes.scene_cache
+    # Create sceneset directory if not using local USDZ directory
+    if use_local_scenes:
+        sceneset_dir_abs_path = os.path.abspath(str(cfg.scenes.local_usdz_dir))
+        sceneset_dir_relative_path = "."
+        # Note: for local USDZ directories, override the scene cache directory for proper mounting
+        cfg.scenes.scene_cache = sceneset_dir_abs_path
+        logger.info(
+            f"Using local files--overriding scene_cache to: {sceneset_dir_abs_path}"
+        )
+    else:
+        sceneset_dir_abs_path = manager.create_sceneset_directory(
+            [a.uuid for a in artifacts]
+        )
+        sceneset_dir_relative_path = str(
+            Path(sceneset_dir_abs_path).relative_to(cfg.scenes.scene_cache)
         )
         logger.info(f"Relative sceneset path: {sceneset_dir_relative_path}")
-    else:
-        logger.info("No sceneset directory created.")
-        sceneset_dir_relative_path = None
 
-    return artifacts, (
-        str(sceneset_dir_relative_path) if sceneset_dir_relative_path else None
-    )
+    return artifacts, sceneset_dir_relative_path
 
 
 def detect_gpus() -> int:
