@@ -18,7 +18,7 @@ The `artifact_repository` column in `sim_scenes.csv` indicates where scene files
 | Suite ID | Scenes | Creator | Description |
 |----------|--------|---------|-------------|
 | `dev.alpasim.unit_tests.v0` | 3 | @alpasim-team | CI smoke test suite with minimal scenes for quick validation. Uses stripped USDZ files containing only metadata (fast to download). |
-| `public_2507_all_ex3` | 920 | @migl | All public NRE scenes (date 05. Dez 2025) excluding those with missing maps. |
+| `public_2507_ex_failures` | 910 | @mwatson | All public NRE scenes (date 10. Dec 2025) excluding those with map issues. |
 | `cle_hcm_8251` | 8249 | @migl | Human driven clips from CLE. |
 | `cle_nudge_1432_v2` | 1424 | @migl | Nudging clips from CLE. |
 | `interactive0_0` | 63 | @migl | 3DGS AND NeRF artifacts for interactive0. |

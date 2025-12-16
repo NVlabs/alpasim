@@ -9,13 +9,18 @@ import asyncio
 import hashlib
 import logging
 import os
+import tempfile
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import polars as pl  # type: ignore[import-not-found]
+import yaml
 from alpasim_wizard.s3_api import S3Connection, S3Path
-from alpasim_wizard.scenes.csv_utils import ArtifactRepository
+from alpasim_wizard.scenes.csv_utils import HUGGINGFACE_REPO, ArtifactRepository
 from alpasim_wizard.schema import ScenesConfig
 from filelock import FileLock
+from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
 from tqdm.asyncio import tqdm  # type: ignore[import-untyped]
 from typing_extensions import ClassVar, Self
 
@@ -242,13 +247,9 @@ class USDZManager:
             elif repo == ArtifactRepository.HUGGINGFACE:
                 huggingface_uuids.append(uuid)
 
-        # Handle HuggingFace (not yet implemented)
+        # Handle HuggingFace artifacts
         if huggingface_uuids:
-            raise NotImplementedError(
-                f"HuggingFace artifact downloads are not yet implemented. "
-                f"Found {len(huggingface_uuids)} scenes requiring HuggingFace: "
-                f"{huggingface_uuids[:5]}{'...' if len(huggingface_uuids) > 5 else ''}"
-            )
+            self._download_huggingface_artifacts(huggingface_uuids, artifact_info)
 
         # Download SwiftStack artifacts
         if swiftstack_uuids:
@@ -265,6 +266,77 @@ class USDZManager:
                 len(swiftstack_uuids),
             )
             await tqdm.gather(*tasks)
+
+    def _download_single_huggingface_artifact(
+        self, uuid: str, hf_filepath: str, tmpdir: str
+    ) -> None:
+        """Download and validate a single HuggingFace artifact.
+
+        Args:
+            uuid: The expected UUID of the artifact.
+            hf_filepath: The file path within the HuggingFace repository.
+            tmpdir: Temporary directory for downloading.
+        """
+        logger.info(
+            f"Downloading HuggingFace artifact for uuid {uuid} from {hf_filepath}"
+        )
+        downloaded_usdz = hf_hub_download(
+            repo_id=HUGGINGFACE_REPO,
+            repo_type="dataset",
+            local_dir=tmpdir,
+            filename=hf_filepath,
+        )
+
+        # sanity check that the uuid matches what we expect
+        with zipfile.ZipFile(downloaded_usdz, "r") as usdz_zip:
+            with usdz_zip.open("metadata.yaml") as manifest_file:
+                data = yaml.safe_load(manifest_file)
+                actual_uuid = data.get("uuid", None)
+                if actual_uuid != uuid:
+                    raise RuntimeError(
+                        f"Downloaded HuggingFace artifact {hf_filepath} "
+                        f"has unexpected uuid {actual_uuid}, expected {uuid}."
+                    )
+                else:
+                    os.rename(
+                        downloaded_usdz,
+                        os.path.join(self.all_usdzs_dir, f"{uuid}.usdz"),
+                    )
+
+    def _download_huggingface_artifacts(
+        self, uuids: list[str], artifact_info: dict[str, tuple[str, ArtifactRepository]]
+    ) -> None:
+        """
+        Download the required HuggingFace artifacts, rename them based on their metadata uuids,
+        and store them in the all_usdzs_dir.
+
+        Downloads are parallelized with a maximum of 5 concurrent downloads.
+        """
+        missing_uuid_to_filepath = {}
+        for uuid in uuids:
+            cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
+            if not os.path.exists(cache_path):
+                missing_uuid_to_filepath[uuid] = artifact_info[uuid][0]
+        if missing_uuid_to_filepath:
+            logger.info(
+                f"Missing {len(missing_uuid_to_filepath)} required HuggingFace artifacts"
+            )
+            max_workers = min(5, len(missing_uuid_to_filepath))
+            with tempfile.TemporaryDirectory(dir=self.scenesets_dir) as tmpdir:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            self._download_single_huggingface_artifact,
+                            uuid,
+                            hf_filepath,
+                            tmpdir,
+                        ): uuid
+                        for uuid, hf_filepath in missing_uuid_to_filepath.items()
+                    }
+                    for future in as_completed(futures):
+                        uuid = futures[future]
+                        # Re-raise any exceptions from the download
+                        future.result()
 
     def create_sceneset_directory(self, uuids: list[str]) -> str | None:
         """Download artifacts and create symlinked sceneset directory."""

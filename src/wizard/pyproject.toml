@@ -19,6 +19,8 @@ dependencies = [
     "polars>=1.0.0",
     "pyarrow",
     "filelock",
+    "boto3",
+    "huggingface_hub",
     "tqdm",
     "typing-extensions",
     "pandas",

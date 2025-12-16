@@ -115,17 +115,23 @@ alpasim-scenes-validate --scenes-csv=data/scenes/sim_scenes.csv --suites-csv=dat
 Create test suites from Car2Sim workflow runs. This is a multi-phase workflow for importing scenes from the perception team's S3 bucket.
 
 **Prerequisites:**
-- Access to the perception bucket (`PERCEPTION_GT_S3_SECRET` environment variable)
-- Run from `tools/run-on-ord` directory on ORD cluster
+- (swiftstack only) Access to the perception bucket (`PERCEPTION_GT_S3_SECRET` environment variable)
+- Run from `src/tools/run-on-ord` directory on ORD cluster
 
 ```bash
 # Phase 1: Download scenes from perception bucket (run on data copier node)
+alpasim-scenes-car2sim --huggingface_dataset_subdir=sample_set/25.07_release --phase=download
+# or
 alpasim-scenes-car2sim --workflow_run=2025.03.13-1828-35ez1fcn4uu4f --phase=download
 
 # Phase 2: Sanity check scenes (run on login node, repeat until all pass)
+alpasim-scenes-car2sim --huggingface_dataset_subdir=sample_set/25.07_release --phase=iterate_sanity_check
+# or
 alpasim-scenes-car2sim --workflow_run=2025.03.13-1828-35ez1fcn4uu4f --phase=iterate_sanity_check
 
 # Phase 3: Upload to alpasim bucket and update CSVs (run on data copier node)
+alpasim-scenes-car2sim --huggingface_dataset_subdir=sample_set/25.07_release --phase=upload --new-suite-name=public_2507_ex_failures
+# or
 alpasim-scenes-car2sim --workflow_run=2025.03.13-1828-35ez1fcn4uu4f --phase=upload
 ```
 

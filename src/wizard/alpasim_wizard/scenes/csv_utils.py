@@ -15,6 +15,9 @@ import polars as pl  # type: ignore[import-not-found]
 logger = logging.getLogger(__name__)
 
 
+HUGGINGFACE_REPO = "nvidia/PhysicalAI-Autonomous-Vehicles-NuRec"
+
+
 class ArtifactRepository(str, Enum):
     """Supported artifact repositories for USDZ scene files."""
 
