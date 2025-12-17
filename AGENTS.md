@@ -13,7 +13,7 @@
 - Static checks: `pre-commit run --all-files` covers `black`, `ruff`, import sorting, and basic lint. Type-check runtime-heavy code via `uv run mypy src/runtime`.
 
 ## Coding Style & Naming Conventions
-- Python 3.11+, 4-space indentation, limit files to UTF-8 ASCII unless data demands otherwise.
+- Python 3.12+, 4-space indentation, limit files to UTF-8 ASCII unless data demands otherwise.
 - Auto-format with `black`; keep imports sorted by the hooks. Use `ruff` to satisfy lint warnings before pushing.
 - Follow PEP 8 naming plus domain hints: prefix vectors/poses with frames (`pose_local_to_rig`, `velocity_vehicle_in_local`) to avoid ambiguity in physics/AV math.
 - Document complex flows with concise comments; prefer dataclasses and type hints for public APIs.

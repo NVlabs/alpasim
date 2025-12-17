@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "alpasim_grpc"
 version = "0.53.0"
 description = "gRPC API definitions for Alpamayo Sim"
-requires-python = ">=3.11,<=3.12"
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "grpcio",
   "grpcio-tools",

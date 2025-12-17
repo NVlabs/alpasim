@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim-runtime"
-version = "1.49.0"
+version = "1.50.0"
 description = "Runtime of the Alpamayo Sim"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11,<3.13"
 authors = [{name = "Michal Tyszkiewicz", email = "mtyszkiewicz@nvidia.com"}]
 dependencies = [
     "aiofiles>=24.1.0",

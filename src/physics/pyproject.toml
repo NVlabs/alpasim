@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim-physics"
-version = "1.8.0"
+version = "1.9.0"
 description = "Physics micro-service of the Alpamayo Sim"
-requires-python = ">=3.11,<=3.12"
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "alpasim_grpc",
   "alpasim_utils",
