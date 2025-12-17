@@ -1,0 +1,51 @@
+# Should be used in defaults list, e.g.
+# - /driver: ar1
+# Type validation happens at driver runtime via OmegaConf.structured merge
+
+defaults:
+  - _self_                  # YAML values override schema defaults
+
+# Alpamayo-R1 Driver Configuration for Alpasim
+
+# Logging level (uses wizard's global setting)
+log_level: ${wizard.log_level}
+
+# Model configuration
+model:
+  model_type: ALPAMAYO_R1  # Model type: alpamayo_r1
+  # HuggingFace model ID (requires cached download or hf authentication in the driver container)
+  checkpoint_path: "nvidia/Alpamayo-R1-10B"
+  # # Alternative local path to a pre-downloaded model
+  # checkpoint_path: "/mnt/drivers/ar1/Alpamayo-R1-10B"
+  device: "cuda"
+
+# Server configuration
+host: "0.0.0.0"
+port: ???
+
+# Inference configuration
+inference:
+  use_cameras:
+     - camera_cross_left_120fov
+     - camera_front_wide_120fov
+     - camera_cross_right_120fov
+     - camera_front_tele_30fov
+  max_batch_size: 1  # AR1 is memory intensive, start with batch size 1
+  subsample_factor: 1
+  context_length: 4  # AR1 uses 4 temporal frames per camera
+
+# Route configuration
+route:
+  default_command: 2  # Default command: 0=right, 1=left, 2=straight
+  use_waypoint_commands: true
+  command_distance_threshold: 3.0  # Lateral displacement threshold in meters
+  min_lookahead_distance: 20.0  # Minimum distance to look ahead for waypoints in meters
+
+# Output configuration
+output_dir: "/mnt/output/driver"
+
+# Trajectory optimization (disabled by default for AR1)
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

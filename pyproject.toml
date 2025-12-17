@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.10.0"
+version = "0.12.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -17,4 +17,13 @@ members = [
   "src/physics",
   "src/tools",
   "src/driver",
+]
+
+# This is a hacky workaround to skip installing flash attention
+# which is an AR1 dependency but does not declare its own dependencies
+# properly, leading to uv install errors.
+# TODO: make flash attention optional in alpamayo-r1 repo.
+[tool.uv]
+override-dependencies = [
+   "flash-attn; python_version < '0'",
 ]

@@ -166,10 +166,17 @@ def _aggregate_eval_videos(
         condition_folder = target_video_dir / "violations" / condition_name
         os.makedirs(condition_folder, exist_ok=True)
         for row in filtered_df.iter_rows(named=True):
+            layout_id = (
+                cfg.video.video_layouts[0].index
+                if len(cfg.video.video_layouts) > 0
+                else 0
+            )
             video_file_name = VIDEO_FILE_NAME_FORMAT.format(
                 clipgt_id=row["clipgt_id"],
                 batch_id=row["batch_id"],
                 rollout_id=row["rollout_id"],
+                camera_id=cfg.video.camera_id_to_render,
+                layout_id=layout_id,
             )
             (condition_folder / video_file_name).unlink(missing_ok=True)
             # Create a relative symlink to the video in all_videos_dir to ensure the link will be

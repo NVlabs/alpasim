@@ -32,8 +32,11 @@ class DriveCommand(IntEnum):
 class ModelPrediction:
     """Unified model output."""
 
-    trajectory_xy: np.ndarray  # (N, 2) x,y offsets in rig frame
-    headings: np.ndarray  # (N,) headings in radians (rig frame)
+    trajectory_xy: np.ndarray  # (T, 2) x,y offsets in rig frame
+    headings: np.ndarray  # (T,) headings in radians (rig frame)
+    reasoning_text: str | None = (
+        None  # optional text output (e.g. chain-of-causation reasoning)
+    )
 
 
 class BaseTrajectoryModel(ABC):
@@ -145,6 +148,7 @@ class BaseTrajectoryModel(ABC):
         command: DriveCommand,  # Canonical navigation command
         speed: float,  # Current speed m/s
         acceleration: float,  # Current longitudinal acceleration m/s²
+        ego_pose_at_time_history_local: list | None = None,
     ) -> ModelPrediction:
         """Generate trajectory prediction.
 
@@ -159,7 +163,9 @@ class BaseTrajectoryModel(ABC):
                 Model encodes this internally via _encode_command().
             speed: Current vehicle speed in m/s (magnitude of velocity).
             acceleration: Current longitudinal acceleration in m/s²
-                (x component in rig frame).
+            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
+                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
+                orientation in local frame.
 
         Returns:
             ModelPrediction with trajectory and headings in rig frame

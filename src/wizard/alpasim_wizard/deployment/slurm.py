@@ -225,11 +225,30 @@ class SlurmDeployment:
         # overrides CUDA_VISIBLE_DEVICES even when exported as an environment variable.
         # Instead we set it in the command line. Use export to allow chaining commands with &&.
         s_gpu = f"export CUDA_VISIBLE_DEVICES={container.gpu};" if container.gpu else ""
-        s_env = (
-            f"--export={','.join(container.environments)} "
-            if container.environments
+
+        # Separate environment variables:
+        #  - 'VAR=value' format to export in bash. The value will be logged, not secure for secrets.
+        #  - 'VAR' format pass-through from host. The value will not be logged, secure for secrets.
+        env_export_set = []  # VAR=value format
+        env_passthrough_set = []  # VAR only format
+        for e in container.environments or []:
+            if "=" in e:
+                env_export_set.append(e)
+            else:
+                env_passthrough_set.append(e)
+
+        # Construct environment variable arguments
+        # Export VAR=value vars inside bash command (more reliable than --container-env)
+        s_env_exports = (
+            " ".join(f"export {e};" for e in env_export_set) + " "
+            if env_export_set
             else ""
         )
+        # Use --export for pass-through variables from host environment
+        s_env_passthrough = (
+            f"--export={','.join(env_passthrough_set)} " if env_passthrough_set else ""
+        )
+
         s_mnt = ",".join([v.to_str() for v in container.volumes])
 
         cmd = r"srun --verbose --overlap "
@@ -245,8 +264,8 @@ class SlurmDeployment:
         escaped_command = container.command.replace("$$", r"\$")
 
         if mode == RunMode.BATCH:
-            cmd += f"--output={s_log} --error={s_log} {s_env}"
-            cmd += f'bash -c "{s_gpu} {escaped_command}"'
+            cmd += f"--output={s_log} --error={s_log} {s_env_passthrough}"
+            cmd += f'bash -c "{s_gpu}{s_env_exports}{escaped_command}"'
         elif mode == RunMode.ATTACH_BASH:
             cmd += "--pty bash"
         elif mode == RunMode.ATTACH_VSCODE:

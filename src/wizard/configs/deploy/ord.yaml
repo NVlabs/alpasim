@@ -28,6 +28,10 @@ services:
 
   driver:
     environments:
+      # HuggingFace offline mode - use pre-downloaded models from shared cache
+      - HF_HOME=/mnt/hf_cache
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
       - PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.5 # 40gb should be ample
 
     gpus: [4, 5, 6, 7]

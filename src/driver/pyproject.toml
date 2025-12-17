@@ -5,12 +5,13 @@ build-backend = "uv_build"
 
 [project]
 name = "alpasim_driver"
-version = "0.6.0"
+version = "0.7.0"
 description = "Adapters for open-source drivers in Alpasim"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "vam",
+  "alpamayo_r1",
   "einops",
   "numpy",
   "opencv-python",
@@ -32,4 +33,5 @@ alpasim_driver_main = "alpasim_driver.main:main"
 
 [tool.uv.sources]
 vam = { git = "https://github.com/valeoai/VideoActionModel.git" }
+alpamayo_r1 = { git = "https://github.com/NVlabs/alpamayo.git", rev = "74750b0bd86605ced9faed9fe83434b07f95e9dc"}
 alpasim-grpc = { workspace = true }

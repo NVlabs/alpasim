@@ -12,6 +12,7 @@ class ModelType(str, Enum):
 
     VAM = "vam"
     TRANSFUSER = "transfuser"
+    ALPAMAYO_R1 = "alpamayo_r1"
 
 
 @dataclass

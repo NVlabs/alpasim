@@ -57,6 +57,7 @@ import grpc.aio
 
 from .frame_cache import FrameCache
 from .models import DriveCommand
+from .models.ar1_model import AR1Model
 from .models.base import BaseTrajectoryModel, ModelPrediction
 from .models.transfuser_model import TransfuserModel
 from .models.vam_model import VAMModel
@@ -429,6 +430,13 @@ def _create_model(
             device=device,
             camera_ids=camera_ids,
         )
+    elif cfg.model_type == ModelType.ALPAMAYO_R1:
+        return AR1Model(
+            checkpoint_path=cfg.checkpoint_path,
+            device=device,
+            camera_ids=camera_ids,
+            context_length=context_length or 4,
+        )
     else:
         raise ValueError(f"Unknown model type: {cfg.model_type}")
 
@@ -697,13 +705,13 @@ class EgoDriverService(EgodriverServiceServicer):
         fig.savefig(output_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
 
-    def _run_batch(self, batch: list[DriveJob]) -> list[DriveResponse]:
+    def _run_batch(self, batch: list[DriveJob]) -> list[ModelPrediction]:
         """Run inference for a batch of jobs using the model abstraction.
 
         Each model handles its own preprocessing, tokenization (if applicable),
         and inference internally.
         """
-        responses: list[DriveResponse] = []
+        responses: list[ModelPrediction] = []
 
         for job in batch:
             camera_images = self._prepare_camera_images(job.session)
@@ -715,14 +723,10 @@ class EgoDriverService(EgodriverServiceServicer):
                 command=job.command,
                 speed=speed,
                 acceleration=acceleration,
+                ego_pose_at_time_history_local=job.session.poses,
             )
 
-            # Convert model prediction to Alpasim trajectory format
-            alpasim_traj = self._convert_prediction_to_alpasim(
-                prediction, job.pose, job.timestamp_us
-            )
-
-            responses.append(DriveResponse(trajectory=alpasim_traj))
+            responses.append(prediction)
 
         return responses
 
@@ -901,7 +905,7 @@ class EgoDriverService(EgodriverServiceServicer):
                 trajectory=empty_traj,
             )
 
-        future: asyncio.Future[DriveResponse] = self._loop.create_future()
+        future: asyncio.Future[ModelPrediction] = self._loop.create_future()
         job = DriveJob(
             session_id=request.session_uuid,
             session=session,
@@ -912,7 +916,13 @@ class EgoDriverService(EgodriverServiceServicer):
         )
         self._job_queue.put_nowait(job)
 
-        response = await future
+        prediction = await future
+
+        # Convert model prediction to Alpasim trajectory format
+        alpasim_traj: Trajectory = self._convert_prediction_to_alpasim_trajectory(
+            prediction, job.pose, job.timestamp_us
+        )
+        reasoning_text: str | None = prediction.reasoning_text
 
         debug_data = {
             "command": int(session.current_command),
@@ -923,14 +933,18 @@ class EgoDriverService(EgodriverServiceServicer):
             },
             "num_cameras": len(session.frame_caches),
             "num_poses": len(session.poses),
-            "trajectory_points": len(response.trajectory.poses),
+            "trajectory_points": len(alpasim_traj.poses),
+            "reasoning_text": reasoning_text,
         }
-        response.debug_info.unstructured_debug_info = pickle.dumps(debug_data)
+        debug_info = DriveResponse.DebugInfo(
+            unstructured_debug_info=pickle.dumps(debug_data)
+        )
+        response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
 
         logger.debug("Returning drive response at time %s", request.time_now_us)
         return response
 
-    def _convert_prediction_to_alpasim(
+    def _convert_prediction_to_alpasim_trajectory(
         self,
         prediction: ModelPrediction,
         current_pose: PoseAtTime,

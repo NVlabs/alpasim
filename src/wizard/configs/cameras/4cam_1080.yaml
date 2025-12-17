@@ -1,0 +1,38 @@
+# @package _global_
+
+runtime:
+  default_scenario_parameters:
+    cameras:
+    - # Front wide camera
+      # NRE will resize to match original aspect ratio.
+      # Specifically 1900 -> 1916 actual width.
+      logical_id: camera_front_wide_120fov
+      height: 1080
+      width: 1900  # NRE will resize to 1916
+      frame_interval_us: 100_000  # 10 Hz
+      shutter_duration_us: 30_000
+      first_frame_offset_us: -30_000
+
+    - # Front tele camera
+      logical_id: camera_front_tele_30fov
+      height: 1080
+      width: 1900  # NRE will resize to 1916
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+      first_frame_offset_us: -30_000
+
+    - # Left cross camera
+      logical_id: camera_cross_left_120fov
+      height: 1080
+      width: 1900  # NRE will resize to 1916
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+      first_frame_offset_us: -30_000
+
+    - # Right cross camera
+      logical_id: camera_cross_right_120fov
+      height: 1080
+      width: 1900  # NRE will resize to 1916
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+      first_frame_offset_us: -30_000

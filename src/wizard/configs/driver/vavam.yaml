@@ -13,9 +13,9 @@ log_level: ${wizard.log_level}
 # Model configuration
 model:
   model_type: VAM  # Model type: VAM or TRANSFUSER
-  checkpoint_path: "/mnt/drivers/VAM_width_1024_pretrained_139k.pt"
+  checkpoint_path: "/mnt/drivers/vavam/VAM_width_1024_pretrained_139k.pt"
   device: "cuda"
-  tokenizer_path: "/mnt/drivers/VQ_ds16_16384_llamagen_encoder.jit"
+  tokenizer_path: "/mnt/drivers/vavam/VQ_ds16_16384_llamagen_encoder.jit"
 
 # Server configuration
 host: "0.0.0.0"

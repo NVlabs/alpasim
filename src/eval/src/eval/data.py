@@ -315,6 +315,8 @@ class DriverResponseAtTime:
     safety_monitor_safe: Optional[bool] = None
     # Command name from driver debug info (e.g. "LEFT", "RIGHT", "STRAIGHT").
     command_name: Optional[str] = None
+    # Optional reasoning text from driver debug info.
+    reasoning_text: Optional[str] = None
 
     @staticmethod
     def _extract_debug_extra(driver_response: DriveResponse) -> dict | None:
@@ -417,12 +419,15 @@ class DriverResponseAtTime:
         """Helper function. Create DriverResponseAtTime from DriveResponse."""
         safety_monitor_safe = None
         command_name = None
+        reasoning_text = None
         extra = DriverResponseAtTime._extract_debug_extra(driver_response)
         if extra is not None:
             if "safe_trajectory" in extra:
                 safety_monitor_safe = extra["safe_trajectory"]
             if "command_name" in extra:
                 command_name = extra["command_name"]
+            if "reasoning_text" in extra:
+                reasoning_text = extra["reasoning_text"]
 
         # Selected trajectory
         selected_traj = RenderableTrajectory.from_grpc_with_aabb(
@@ -456,6 +461,7 @@ class DriverResponseAtTime:
             sampled_trajectories=sampled_trajs,
             safety_monitor_safe=safety_monitor_safe,
             command_name=command_name,
+            reasoning_text=reasoning_text,
         )
 
 

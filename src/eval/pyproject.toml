@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim_eval"
-version = "1.29.0"
+version = "1.30.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

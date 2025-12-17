@@ -159,7 +159,7 @@ https://github.com/valeoai/VideoActionModel/releases/download/v1.0.0/VAM_width_2
   )
 
   local target_dir
-  target_dir="$script_dir/drivers"
+  target_dir="$script_dir/drivers/vavam"
   mkdir -p "$target_dir"
 
   printf 'Downloading tokenizer and detokenizer into %s...\n' "$target_dir"

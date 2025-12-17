@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from contextlib import nullcontext
+from typing import Any
 
 import numpy as np
 import omegaconf.dictconfig
@@ -186,6 +187,7 @@ class VAMModel(BaseTrajectoryModel):
         command: DriveCommand,
         speed: float,
         acceleration: float,
+        ego_pose_at_time_history_local: list[Any] | None = None,
     ) -> ModelPrediction:
         """Generate trajectory prediction.
 
@@ -196,10 +198,13 @@ class VAMModel(BaseTrajectoryModel):
             command: Canonical navigation command.
             speed: Current vehicle speed in m/s (unused by VAM).
             acceleration: Current longitudinal acceleration (unused by VAM).
-
+            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
+                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
+                orientation in local frame.
         Returns:
             ModelPrediction with trajectory in rig frame.
         """
+        del ego_pose_at_time_history_local
         self._validate_cameras(camera_images)
 
         # VAM uses single camera

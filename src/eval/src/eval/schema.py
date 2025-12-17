@@ -35,6 +35,14 @@ class MapElements(StrEnum):
     AGENTS = "agents"
 
 
+class VideoLayout(StrEnum):
+    # Default debug view: BEV map, camera, metrics.
+    DEFAULT = "default"
+    # Reasoning overlay view: first-person camera with reasoning text overlay
+    #   + trajectory chart on right.
+    REASONING_OVERLAY = "reasoning_overlay"
+
+
 @dataclass
 class MapVideoConfig:
     # Radius around ego.
@@ -51,6 +59,8 @@ class MapVideoConfig:
 class VideoRendererConfig:
     # Whether to render the video at all
     render_video: bool = MISSING
+    # List of video layouts to render.
+    video_layouts: list[VideoLayout] = MISSING
     # Which camera to render (logical id)
     camera_id_to_render: str = MISSING
     # Whether to overlay planner trajectories onto the camera view
@@ -65,6 +75,8 @@ class VideoRendererConfig:
     generate_combined_video: bool = MISSING
     # Speed factor for ffmpeg for the combined video (e.g. 0.5 = double speed)
     combined_video_speed_factor: float = MISSING
+    # How often to refresh the reasoning text (in seconds). If None, refresh every frame.
+    reasoning_text_refresh_interval_s: float = MISSING
 
 
 class MinADEScorerTarget(StrEnum):

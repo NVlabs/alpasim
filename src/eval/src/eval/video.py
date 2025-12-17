@@ -16,39 +16,18 @@ from tqdm import tqdm
 
 from eval.aggregation.processing import ProcessedMetricDFs
 from eval.data import CameraProjector, EvaluationResultContainer, SimulationResult
-from eval.schema import EvalConfig, MapElements
+from eval.schema import EvalConfig, MapElements, VideoLayout
 from eval.video_data import ShapelyMap
+from eval.video_reasoning_overlay_utils import render_reasoning_overlay_style_video
 
 logger = logging.getLogger("alpasim.eval.video")
 
 mpl.use("Agg")
 mplstyle.use("fast")
 
-VIDEO_FILE_NAME_FORMAT = "{clipgt_id}_{batch_id}_{rollout_id}.mp4"
-
-
-def _compute_frame_timing(
-    timestamps_us: np.ndarray,
-    render_every_nth_frame: int,
-) -> tuple[float, float]:
-    """Derive animation interval (ms) and FPS from simulation timestamps."""
-    if render_every_nth_frame < 1:
-        raise ValueError("render_every_nth_frame must be at least 1")
-    if len(timestamps_us) <= 1:
-        raise ValueError("At least 2 timestamps are required")
-
-    deltas_us = np.diff(timestamps_us.astype(np.int64))
-    if not np.all(deltas_us == deltas_us[0]):
-        logger.warning(
-            "Timestamp deltas are not uniform: %s. Using median delta for frame timing.",
-            deltas_us,
-        )
-    base_delta_us = float(np.median(deltas_us))
-    frame_delta_us = base_delta_us * render_every_nth_frame
-
-    fps = max(1e-6, 1_000_000.0 / frame_delta_us)
-    interval_ms = frame_delta_us / 1_000.0
-    return interval_ms, fps
+VIDEO_FILE_NAME_FORMAT = (
+    "{clipgt_id}_{batch_id}_{rollout_id}_{camera_id}_{layout_id}.mp4"
+)
 
 
 def render_and_save_video_for_eval_container(
@@ -61,27 +40,56 @@ def render_and_save_video_for_eval_container(
         "Rendering video for evaluation container %s ",
         evaluation_result_container.file_path,
     )
-    anim_1, fps = create_video_animation_for_eval_container(
-        processed_metric_dfs,
-        evaluation_result_container,
-        cfg,
-    )
+
     clipgt_id, batch_id, rollout_id = (
         evaluation_result_container.get_clipgt_batch_and_rollout_id()
     )
     os.makedirs(os.path.join(output_dir, "videos"), exist_ok=True)
-    anim_1.save(
-        os.path.join(
+
+    for video_layout in cfg.video.video_layouts:
+        output_path = os.path.join(
             output_dir,
             "videos",
             VIDEO_FILE_NAME_FORMAT.format(
-                clipgt_id=clipgt_id, batch_id=batch_id, rollout_id=rollout_id
+                clipgt_id=clipgt_id,
+                batch_id=batch_id,
+                rollout_id=rollout_id,
+                camera_id=cfg.video.camera_id_to_render,
+                layout_id=video_layout.index,
             ),
-        ),
-        fps=fps,
-        dpi=100,
-        writer="ffmpeg",
-    )
+        )
+
+        if os.path.exists(output_path):
+            logger.info(
+                "Video already exists, skipping %s. Delete it to re-render.",
+                output_path,
+            )
+            continue
+
+        if video_layout == VideoLayout.REASONING_OVERLAY:
+            # Use reasoning overlay style rendering (camera, reasoning text overlay, trajectory chart)
+            logger.info("Using reasoning overlay style video rendering")
+            render_reasoning_overlay_style_video(
+                evaluation_result_container,
+                processed_metric_dfs,
+                output_path,
+                cfg,
+            )
+        elif video_layout == VideoLayout.DEFAULT:
+            # Use the default debug view rendering (bev map, camera, metrics)
+            anim_1, fps = create_video_animation_for_eval_container(
+                processed_metric_dfs,
+                evaluation_result_container,
+                cfg,
+            )
+            anim_1.save(
+                output_path,
+                fps=fps,
+                dpi=100,
+                writer="ffmpeg",
+            )
+        else:
+            raise ValueError(f"Unknown video layout: {video_layout}")
 
 
 def _setup_fig() -> tuple[plt.Figure, dict[str, plt.Axes]]:
@@ -122,6 +130,30 @@ def _list_in_dict_in_dict_to_list(
         for list_of_artists in sub_dict.values():
             all_artists.extend(list_of_artists)
     return all_artists
+
+
+def _compute_frame_timing(
+    timestamps_us: np.ndarray,
+    render_every_nth_frame: int,
+) -> tuple[float, float]:
+    """Derive animation interval (ms) and FPS from simulation timestamps."""
+    if render_every_nth_frame < 1:
+        raise ValueError("render_every_nth_frame must be at least 1")
+    if len(timestamps_us) <= 1:
+        raise ValueError("At least 2 timestamps are required")
+
+    deltas_us = np.diff(timestamps_us.astype(np.int64))
+    if not np.all(deltas_us == deltas_us[0]):
+        logger.warning(
+            "Timestamp deltas are not uniform: %s. Using median delta for frame timing.",
+            deltas_us,
+        )
+    base_delta_us = float(np.median(deltas_us))
+    frame_delta_us = base_delta_us * render_every_nth_frame
+
+    fps = max(1e-6, 1_000_000.0 / frame_delta_us)
+    interval_ms = frame_delta_us / 1_000.0
+    return interval_ms, fps
 
 
 def get_ego_transform(

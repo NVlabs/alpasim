@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 import torch
@@ -116,6 +117,7 @@ class TransfuserModel(BaseTrajectoryModel):
         command: DriveCommand,
         speed: float,
         acceleration: float,
+        ego_pose_at_time_history_local: list[Any] | None = None,
     ) -> ModelPrediction:
         """Generate trajectory prediction.
 
@@ -126,12 +128,16 @@ class TransfuserModel(BaseTrajectoryModel):
             command: Canonical navigation command.
             speed: Current vehicle speed in m/s.
             acceleration: Current longitudinal acceleration in m/s².
+            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
+                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
+                orientation in local frame.
 
         Returns:
             ModelPrediction with trajectory in rig frame coordinates.
             CARLA uses Y+ right, rig frame uses Y+ left, so Y axis
             is inverted.
         """
+        del ego_pose_at_time_history_local
         self._validate_cameras(camera_images)
 
         # Validate frame count (Transfuser uses single frame)
