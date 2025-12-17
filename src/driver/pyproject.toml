@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.scripts]
-alpasim_driver_driver = "alpasim_driver.main:main"
+alpasim_driver_main = "alpasim_driver.main:main"
 
 [tool.uv.sources]
 vam = { git = "https://github.com/valeoai/VideoActionModel.git" }

@@ -51,7 +51,6 @@ echo "Installing Wizard in development mode..."
 uv tool install -e "${REPO_ROOT}/src/wizard"
 
 # Ensure Hugging Face token is available (needed to download files)
-# Check if HF_TOKEN is set in the environment
 if [[ -z "${HF_TOKEN}" ]]; then
     echo "❌ Hugging Face token (HF_TOKEN) not found in environment."
     echo "If you need to download files from Hugging Face, please set HF_TOKEN."
