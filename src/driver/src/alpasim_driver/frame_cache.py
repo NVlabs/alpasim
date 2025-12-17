@@ -1,37 +1,37 @@
-"""Session-specific helpers for async VAM driver."""
+"""Session-specific helpers for driver service."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import wraps
 from threading import RLock
-from typing import List, Optional, cast
+from typing import Callable, List, TypeVar
 
 import numpy as np
-import torch
+
+F = TypeVar("F", bound=Callable)
 
 
 @dataclass
 class FrameEntry:
-    """Represents a single camera frame and its cached tokenization."""
+    """Represents a single camera frame."""
 
     timestamp_us: int
-    image: Optional[np.ndarray]
-    tokens: Optional[torch.Tensor]
+    image: np.ndarray
 
 
-def synchronized(method):
+def synchronized(method: F) -> F:
     @wraps(method)
-    def wrapper(self, *args, **kwargs):
-        with self._lock:
+    def wrapper(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        with self._lock:  # noqa: SLF001
             return method(self, *args, **kwargs)
 
-    return wrapper
+    return wrapper  # type: ignore[return-value]
 
 
 @dataclass
 class FrameCache:
-    """Keeps a bounded, time-ordered buffer of frames and tokens for a session.
+    """Keeps a bounded, time-ordered buffer of frames for a session.
 
     When subsample_factor > 1, the cache stores more frames than context_length
     to allow selecting every Nth frame for inference. This enables running
@@ -52,7 +52,7 @@ class FrameCache:
 
     @synchronized
     def add_image(self, timestamp_us: int, image: np.ndarray) -> None:
-        """Insert or replace an image while keeping entries ordered by timestamp."""
+        """Insert an image while keeping entries ordered by timestamp."""
         inserted = False
         # Iterate from newest to oldest since most inserts append.
         for offset, entry in enumerate(reversed(self.entries)):
@@ -60,22 +60,13 @@ class FrameCache:
                 raise ValueError(f"Frame {timestamp_us} already exists in cache")
             if entry.timestamp_us < timestamp_us:
                 insert_at = len(self.entries) - offset
-                self.entries.insert(insert_at, FrameEntry(timestamp_us, image, None))
+                self.entries.insert(insert_at, FrameEntry(timestamp_us, image))
                 inserted = True
                 break
         if not inserted:
-            self.entries.insert(0, FrameEntry(timestamp_us, image, None))
+            self.entries.insert(0, FrameEntry(timestamp_us, image))
 
-        self.prune()
-
-    @synchronized
-    def pending_frames(self) -> List[FrameEntry]:
-        """Return frames that still need tokenization in timestamp order."""
-        return [
-            entry
-            for entry in self.entries
-            if entry.image is not None and entry.tokens is None
-        ]
+        self._prune()
 
     @synchronized
     def frame_count(self) -> int:
@@ -83,68 +74,54 @@ class FrameCache:
         return len(self.entries)
 
     def min_frames_required(self) -> int:
-        """Minimum number of frames needed to construct a token window."""
+        """Minimum number of frames needed for inference."""
         return (self.context_length - 1) * self.subsample_factor + 1
 
     @synchronized
     def has_enough_frames(self) -> bool:
-        """Check if there are enough frames for a subsampled token window."""
+        """Check if there are enough frames for inference."""
         return len(self.entries) >= self.min_frames_required()
 
     @synchronized
-    def token_count(self) -> int:
-        """Number of frames that already have cached tokens."""
-        return sum(1 for entry in self.entries if entry.tokens is not None)
-
-    @synchronized
-    def latest_token_window(self) -> List[torch.Tensor]:
-        """Return the newest context window of tokens (oldest first).
+    def latest_frame_entries(self, count: int) -> List[FrameEntry]:
+        """Return the newest `count` frame entries with subsampling (oldest first).
 
         When subsample_factor > 1, selects every Nth frame starting from the
         newest frame and walking backwards. This maintains the expected temporal
         spacing between frames while allowing inference at higher frequencies.
 
+        Args:
+            count: Number of frames to return.
+
         Returns:
-            List of context_length token tensors, ordered oldest to newest.
+            List of FrameEntry objects, ordered oldest to newest.
 
         Raises:
-            ValueError: If insufficient frames or tokens are available.
+            ValueError: If insufficient frames are available for subsampled selection.
         """
-        min_required = self.min_frames_required()
-        assert len(self.entries) >= min_required, (
-            f"Insufficient frames: have {len(self.entries)}, need at least "
-            f"{min_required} (context_length={self.context_length}, "
-            f"subsample_factor={self.subsample_factor})"
-        )
+        min_required = (count - 1) * self.subsample_factor + 1
+        if len(self.entries) < min_required:
+            raise ValueError(
+                f"Insufficient frames: have {len(self.entries)}, need at least "
+                f"{min_required} (count={count}, subsample_factor={self.subsample_factor})"
+            )
 
         # Select frames: start from newest, walk backwards by subsample_factor
         selected_indices = []
         idx = len(self.entries) - 1  # Start at newest
-        for _ in range(self.context_length):
+        for _ in range(count):
             selected_indices.append(idx)
             idx -= self.subsample_factor
 
         # Reverse to get oldest-first order
         selected_indices = selected_indices[::-1]
 
-        tokens = [self.entries[i].tokens for i in selected_indices]
-        if any(token is None for token in tokens):
-            raise ValueError(
-                "Insufficient tokens: some selected frames are not yet tokenized"
-            )
+        return [self.entries[i] for i in selected_indices]
 
-        return cast(List[torch.Tensor], tokens)
-
-    @synchronized
-    def prune(self) -> None:
+    def _prune(self) -> None:
         """Bound the cache to accommodate subsampled context queries."""
         max_entries = self.context_length * self.subsample_factor
         excess = len(self.entries) - max_entries
         if excess <= 0:
             return
         del self.entries[:excess]
-
-    @synchronized
-    def reset(self) -> None:
-        """Clear all cached frames (e.g., when resetting the session)."""
-        self.entries.clear()

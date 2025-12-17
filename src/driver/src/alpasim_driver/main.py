@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025 NVIDIA Corporation
 
-"""VAM Driver implementation for Alpasim."""
+"""Unified driver implementation for Alpasim supporting multiple model backends."""
 
 from __future__ import annotations
 
@@ -12,10 +12,7 @@ import os
 import pickle
 import queue
 import threading
-from collections import OrderedDict
-from contextlib import nullcontext
 from dataclasses import dataclass, field
-from enum import IntEnum
 from importlib.metadata import version
 from io import BytesIO
 from typing import Any, Callable, Optional, cast
@@ -23,10 +20,7 @@ from typing import Any, Callable, Optional, cast
 import hydra
 import matplotlib.pyplot as plt
 import numpy as np
-import omegaconf.dictconfig
-import omegaconf.listconfig
 import torch
-import torch.serialization
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import sensorsim_pb2
 from alpasim_grpc.v0.common_pb2 import (
@@ -57,18 +51,21 @@ from alpasim_grpc.v0.egodriver_pb2_grpc import (
 )
 from omegaconf import OmegaConf
 from PIL import Image
-from vam.action_expert import VideoActionModelInference
-from vam.datalib.transforms import NeuroNCAPTransform
 
 import grpc
 import grpc.aio
 
-from .frame_cache import FrameCache, FrameEntry
+from .frame_cache import FrameCache
+from .models import DriveCommand
+from .models.base import BaseTrajectoryModel, ModelPrediction
+from .models.transfuser_model import TransfuserModel
+from .models.vam_model import VAMModel
+from .navigation import determine_command_from_route
 from .rectification import (
     FthetaToPinholeRectifier,
     build_ftheta_rectifier_for_resolution,
 )
-from .schema import RectificationTargetConfig, VAMDriverConfig
+from .schema import DriverConfig, ModelConfig, ModelType, RectificationTargetConfig
 from .trajectory_optimizer import (
     TrajectoryOptimizer,
     VehicleConstraints,
@@ -76,64 +73,6 @@ from .trajectory_optimizer import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class DriveCommand(IntEnum):
-    """Discrete high-level maneuver commands passed to the VAM."""
-
-    RIGHT = 0
-    LEFT = 1
-    STRAIGHT = 2
-
-
-torch.serialization.add_safe_globals(
-    # Let torch.load's safe unpickler recreate OmegaConf containers embedded in checkpoints.
-    [
-        omegaconf.listconfig.ListConfig,
-        omegaconf.dictconfig.DictConfig,
-    ]
-)
-
-
-def load_inference_VAM(
-    checkpoint_path: str,
-    device: torch.device | str = "cuda",
-    tempdir: Optional[str] = None,
-) -> VideoActionModelInference:
-    """Custom loader that handles PyTorch 2.6+ weights_only issue."""
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-
-    config = ckpt["hyper_parameters"]["vam_conf"].copy()
-    config.pop("_target_", None)
-    config.pop("_recursive_", None)
-    config["gpt_checkpoint_path"] = None
-    config["action_checkpoint_path"] = None
-    config["gpt_mup_base_shapes"] = None
-    config["action_mup_base_shapes"] = None
-
-    logging.info("Loading VAM checkpoint from %s", checkpoint_path)
-    logging.info("VAM config: %s", config)
-
-    vam = VideoActionModelInference(**config)
-    state_dict = OrderedDict()
-    for key, value in ckpt["state_dict"].items():
-        state_dict[key.replace("vam.", "")] = value
-    vam.load_state_dict(state_dict, strict=True)
-    vam = vam.eval().to(device)
-    return vam
-
-
-def _format_trajs(trajs: torch.Tensor) -> np.ndarray:
-    """Normalize VAM trajectory tensor shape to (T, 2)."""
-
-    array = trajs.detach().float().cpu().numpy()
-    while array.ndim > 2 and array.shape[0] == 1:
-        array = array.squeeze(0)
-
-    if array.ndim != 2:
-        raise ValueError(f"Unexpected trajectory shape {array.shape}")
-
-    return array
 
 
 def _quat_to_yaw(quaternion: Quat) -> float:
@@ -192,7 +131,7 @@ class DriveJob:
 
 @dataclass
 class Session:
-    """Represents a VAM session."""
+    """Represents a driver session."""
 
     uuid: str
     seed: int
@@ -213,11 +152,25 @@ class Session:
     @staticmethod
     def create(
         request: DriveSessionRequest,
-        cfg: VAMDriverConfig,
+        cfg: DriverConfig,
         context_length: int,
         subsample_factor: int = 1,
     ) -> Session:
-        """Create a new VAM session."""
+        """Create a new driver session.
+
+        Args:
+            request: The gRPC session request with vehicle/camera definitions.
+            cfg: Driver configuration.
+            context_length: Number of temporal frames needed.
+            subsample_factor: Subsampling factor for frames.
+
+        Returns:
+            A new Session instance.
+
+        Note:
+            Camera count validation is now handled by the model's __init__
+            which raises ValueError if the camera count doesn't match.
+        """
         debug_scene_id = (
             request.debug_info.scene_id
             if request.debug_info is not None
@@ -248,13 +201,6 @@ class Session:
         desired_cameras_logical_ids = set(cfg.inference.use_cameras)
         if not desired_cameras_logical_ids:
             raise ValueError("No cameras specified in inference configuration")
-
-        # VAM model currently requires exactly one camera
-        if len(cfg.inference.use_cameras) != 1:
-            raise ValueError(
-                f"VAM model requires exactly one camera, got {len(cfg.inference.use_cameras)}: "
-                f"{cfg.inference.use_cameras}. Multi-camera support requires a different model."
-            )
 
         missing_defs = desired_cameras_logical_ids - set(camera_specs.keys())
         if missing_defs:
@@ -316,13 +262,6 @@ class Session:
             return 0
         return min(cache.frame_count() for cache in self.frame_caches.values())
 
-    def pending_frames_all_cameras(self) -> list[FrameEntry]:
-        """Return pending frames across all cameras."""
-        result = []
-        for cache in self.frame_caches.values():
-            result.extend(cache.pending_frames())
-        return result
-
     def _maybe_build_rectifier(
         self, logical_id: str, source_resolution_hw: tuple[int, int]
     ) -> Optional[FthetaToPinholeRectifier]:
@@ -381,7 +320,7 @@ class Session:
                 May be None if not provided by the client.
         """
         if dynamic_state is None:
-            return
+            raise ValueError("Dynamic state is required")
         self.dynamic_states.append((timestamp_us, dynamic_state))
         self.dynamic_states = sorted(self.dynamic_states, key=lambda x: x[0])
         logger.debug(
@@ -398,9 +337,11 @@ class Session:
         command_distance_threshold: Optional[float] = None,
         min_lookahead_distance: Optional[float] = None,
     ) -> None:
-        """Derive command from waypoints using VAM-style logic.
+        """Derive command from waypoints using route geometry.
+
         Note: this is called for RouteRequest and assumed to be in the
         true rig frame.
+
         Args:
             route: Route containing waypoints in the rig frame.
             use_waypoint_commands: Whether to derive commands from waypoints.
@@ -422,30 +363,16 @@ class Session:
                 "when use_waypoint_commands is True"
             )
 
-        target_waypoint = None
-        for wp in route.waypoints:
-            distance = np.hypot(wp.x, wp.y)
-
-            if distance >= min_lookahead_distance:
-                target_waypoint = wp
-                break
-
-        if target_waypoint is None:
-            return
-
-        dy_rig = target_waypoint.y  # already in rig frame (positive is left)
-
-        if dy_rig > command_distance_threshold:
-            self.current_command = DriveCommand.LEFT
-        elif dy_rig < -command_distance_threshold:
-            self.current_command = DriveCommand.RIGHT
-        else:
-            self.current_command = DriveCommand.STRAIGHT
+        # Use the navigation module to determine command
+        self.current_command = determine_command_from_route(
+            route=route,
+            command_distance_threshold=command_distance_threshold,
+            min_lookahead_distance=min_lookahead_distance,
+        )
 
         logger.debug(
-            "Command: %s (lateral displacement: %.2fm)",
+            "Command updated: %s",
             self.current_command.name,
-            dy_rig,
         )
 
 
@@ -464,29 +391,67 @@ def async_log_call(func: Callable) -> Callable:
     return async_wrapped
 
 
-class VAMPolicyService(EgodriverServiceServicer):
-    """VAM Policy service implementing the Alpasim ego driver interface."""
+def _create_model(
+    cfg: ModelConfig,
+    device: torch.device,
+    camera_ids: list[str],
+    context_length: int | None,
+) -> BaseTrajectoryModel:
+    """Factory method to create the appropriate model.
+
+    Args:
+        cfg: Model configuration.
+        device: Torch device to load model on.
+        camera_ids: List of camera logical IDs in order.
+        context_length: Number of temporal frames (None uses model default).
+
+    Returns:
+        Model instance implementing BaseTrajectoryModel.
+
+    Raises:
+        ValueError: If model type is unknown or required config is missing.
+    """
+    if cfg.model_type == ModelType.VAM:
+
+        if cfg.tokenizer_path is None:
+            raise ValueError("VAM model requires tokenizer_path")
+        return VAMModel(
+            checkpoint_path=cfg.checkpoint_path,
+            tokenizer_path=cfg.tokenizer_path,
+            device=device,
+            camera_ids=camera_ids,
+            context_length=context_length or 8,
+        )
+    elif cfg.model_type == ModelType.TRANSFUSER:
+
+        return TransfuserModel(
+            checkpoint_path=cfg.checkpoint_path,
+            device=device,
+            camera_ids=camera_ids,
+        )
+    else:
+        raise ValueError(f"Unknown model type: {cfg.model_type}")
+
+
+class EgoDriverService(EgodriverServiceServicer):
+    """Unified policy service supporting multiple model backends."""
 
     def __init__(
         self,
-        cfg: VAMDriverConfig,
+        cfg: DriverConfig,
         loop: asyncio.AbstractEventLoop,
         grpc_server: grpc.aio.Server,
-        device: torch.device,
-        dtype: torch.dtype,
     ) -> None:
-        """Initialize the VAM Policy service.
+        """Initialize the Ego Driver service.
 
-        Sets up the VAM model, image tokenizer, preprocessing pipeline, and starts
-        a background worker thread for batched inference processing.
+        Sets up the model backend, and starts a background
+        worker thread for batched inference processing.
 
         Args:
             cfg: Hydra configuration containing model paths and inference settings
             loop: Asyncio event loop for coordinating async operations and scheduling
                 futures from the worker thread back to the async gRPC handlers
             grpc_server: gRPC server instance for service registration
-            device: PyTorch device (CPU or CUDA) for model execution
-            dtype: PyTorch data type for tensor operations
         """
 
         # Private members
@@ -494,27 +459,41 @@ class VAMPolicyService(EgodriverServiceServicer):
         self._loop = loop
         self._grpc_server = grpc_server
 
-        self._device = device
-        self._dtype = dtype
-        self._image_tokenizer = torch.jit.load(
-            cfg.model.tokenizer_path, map_location=self._device
+        # Determine device
+        self._device = torch.device(
+            cfg.model.device if torch.cuda.is_available() else "cpu"
         )
-        self._image_tokenizer.to(self._device)
-        self._image_tokenizer.eval()
 
-        self._vam = load_inference_VAM(cfg.model.checkpoint_path, self._device)
-        self._preproc_pipeline = NeuroNCAPTransform()
-        self._use_autocast = self._device.type == "cuda"
+        # Create model using factory
+        self._model = _create_model(
+            cfg.model,
+            self._device,
+            camera_ids=cfg.inference.use_cameras,
+            context_length=cfg.inference.context_length,
+        )
+
+        # Get context length from model or config override
+        self._context_length = (
+            cfg.inference.context_length
+            if cfg.inference.context_length is not None
+            else self._model.context_length
+        )
+
+        logger.info(
+            "Initialized %s model with %d cameras, context_length=%d",
+            cfg.model.model_type.value,
+            self._model.num_cameras,
+            self._context_length,
+        )
 
         self._max_batch_size = cfg.inference.max_batch_size
         self._job_queue: queue.Queue[DriveJob | object] = queue.Queue()
         self._worker_stop = threading.Event()
         self._worker_thread = threading.Thread(
             target=self._worker_main,
-            name="vam-policy-worker",
+            name="ego-driver-worker",
             daemon=True,
         )
-        self._context_length = self._cfg.inference.context_length
         self._sessions: dict[str, Session] = {}
 
         # Initialize trajectory optimizer if enabled
@@ -593,25 +572,25 @@ class VAMPolicyService(EgodriverServiceServicer):
                 batch.append(next_job)
 
             try:
-                logger.debug("Running VAM batch of size %s", len(batch))
+                logger.debug("Running inference batch of size %s", len(batch))
                 responses = self._run_batch(batch)
                 batch_count += 1
                 total_items += len(batch)
                 if batch_count % 100 == 0:
                     logger.info(
-                        "VAM batches: %d processed, %d total items, avg size %.1f",
+                        "Inference batches: %d processed, %d total items, avg size %.1f",
                         batch_count,
                         total_items,
                         total_items / batch_count,
                     )
             except Exception as exc:
-                logger.exception("VAM batch failed")
+                logger.exception("Inference batch failed")
                 for pending_job in batch:
                     self._loop.call_soon_threadsafe(
                         pending_job.result.set_exception, exc
                     )
             else:
-                logger.debug("VAM batch succeeded")
+                logger.debug("Inference batch succeeded")
                 for pending_job, response in zip(batch, responses, strict=True):
                     self._loop.call_soon_threadsafe(
                         pending_job.result.set_result, response
@@ -631,37 +610,49 @@ class VAMPolicyService(EgodriverServiceServicer):
                 continue
             self._loop.call_soon_threadsafe(leftover.result.cancel)
 
-    def _tokenize_frames(self, batch: list[DriveJob]) -> None:
-        """Tokenize frames for all cameras in the given batch."""
-        frames_to_tokenize: list[FrameEntry] = []
+    def _get_speed_and_acceleration(self, session: Session) -> tuple[float, float]:
+        """Extract speed and acceleration from session's dynamic state.
 
-        # Collect pending frames from all cameras across all jobs
-        for job in batch:
-            frames_to_tokenize.extend(job.session.pending_frames_all_cameras())
+        Falls back to finite differences from ego positions if dynamic state
+        reports zero speed and acceleration.
 
-        if frames_to_tokenize:
-            images = [frame.image for frame in frames_to_tokenize]
-            token_batches = self._tokenize_batch(images)
+        Args:
+            session: Session containing dynamic state history.
 
-            # Assign tokens back to frame entries
-            for frame, tokens in zip(frames_to_tokenize, token_batches, strict=True):
-                frame.tokens = tokens
+        Returns:
+            Tuple of (speed_m_s, acceleration_m_s2).
 
-    def _tokenize_batch(self, images: list[np.ndarray]) -> list[torch.Tensor]:
-        if not images:
-            return []
+        Raises:
+            ValueError: If no dynamic states are available.
+        """
+        if not session.dynamic_states:
+            raise ValueError(
+                "No dynamic states available in session. "
+                "Ensure egomotion observations are submitted before calling drive."
+            )
 
-        tensors = [self._preproc_pipeline(image) for image in images]
-        batch = torch.stack(tensors, dim=0).to(self._device)
-        autocast_ctx = (
-            torch.amp.autocast(self._device.type, dtype=self._dtype)
-            if self._use_autocast
-            else nullcontext()
-        )
-        with torch.no_grad():
-            with autocast_ctx:
-                token_batch = self._image_tokenizer(batch)
-        return [tokens.detach().cpu() for tokens in token_batch]
+        _, state = session.dynamic_states[-1]
+        speed = np.sqrt(state.linear_velocity.x**2 + state.linear_velocity.y**2)
+        acceleration = state.linear_acceleration.x
+
+        return float(speed), float(acceleration)
+
+    def _prepare_camera_images(
+        self, session: Session
+    ) -> dict[str, list[tuple[int, np.ndarray]]]:
+        """Collect raw images from frame caches for all cameras.
+
+        Returns dict mapping camera_id to list of (timestamp_us, image) tuples.
+        List length equals context_length.
+        """
+        camera_images: dict[str, list[tuple[int, np.ndarray]]] = {}
+
+        for cam_id in self._model.camera_ids:
+            frame_cache = session.frame_caches[cam_id]
+            entries = frame_cache.latest_frame_entries(self._context_length)
+            camera_images[cam_id] = [(e.timestamp_us, e.image) for e in entries]
+
+        return camera_images
 
     def _maybe_save_rectification_debug_image(
         self,
@@ -707,61 +698,31 @@ class VAMPolicyService(EgodriverServiceServicer):
         plt.close(fig)
 
     def _run_batch(self, batch: list[DriveJob]) -> list[DriveResponse]:
-        self._tokenize_frames(batch)
+        """Run inference for a batch of jobs using the model abstraction.
 
-        inputs: list[torch.Tensor] = []
-        commands: list[DriveCommand] = []
-        timestamps: list[int] = []
+        Each model handles its own preprocessing, tokenization (if applicable),
+        and inference internally.
+        """
+        responses: list[DriveResponse] = []
 
         for job in batch:
-            # Collect tokens from all cameras (VAM validates single camera at session creation)
-            camera_tokens = []
-            for frame_cache in job.session.frame_caches.values():
-                token_window = frame_cache.latest_token_window()
-                camera_tokens.append(torch.stack(token_window, dim=0))  # (T, C, H, W)
+            camera_images = self._prepare_camera_images(job.session)
 
-            # # Concatenate along channel dimension: (T, N*C, H, W)
-            # tensor = torch.cat(camera_tokens, dim=1)
-            # For now assume a single camera
-            if len(camera_tokens) != 1:
-                raise ValueError(f"Expected 1 camera token, got {len(camera_tokens)}")
-            tensor = camera_tokens[0]  # NOTE: Remove when we want more cameras!
-            inputs.append(tensor)
-            commands.append(job.command)
-            timestamps.append(job.timestamp_us)
+            speed, acceleration = self._get_speed_and_acceleration(job.session)
 
-        visual_tokens = torch.stack(inputs, dim=0).to(self._device)  # (B, T, C, H, W)
-        command_tensor = torch.tensor(  # (B, 1)
-            [int(cmd) for cmd in commands], device=self._device, dtype=torch.long
-        ).unsqueeze(-1)
-
-        autocast_ctx = (
-            torch.amp.autocast(self._device.type, dtype=self._dtype)
-            if self._use_autocast
-            else nullcontext()
-        )
-
-        with torch.no_grad():
-            with autocast_ctx:
-                trajectories = self._vam(visual_tokens, command_tensor, self._dtype)
-        trajectories = trajectories.detach().cpu()
-
-        responses: list[DriveResponse] = []
-        vam_trajectories: list[np.ndarray] = []
-        alpasim_trajectories: list[Trajectory] = []
-
-        for job, traj, now_us in zip(batch, trajectories, timestamps, strict=True):
-            np_traj = _format_trajs(traj)
-            alpasim_traj = self._convert_vam_trajectory_to_alpasim(
-                np_traj, job.pose, now_us
+            prediction = self._model.predict(
+                camera_images=camera_images,
+                command=job.command,
+                speed=speed,
+                acceleration=acceleration,
             )
-            responses.append(
-                DriveResponse(
-                    trajectory=alpasim_traj,
-                )
+
+            # Convert model prediction to Alpasim trajectory format
+            alpasim_traj = self._convert_prediction_to_alpasim(
+                prediction, job.pose, job.timestamp_us
             )
-            vam_trajectories.append(np_traj)
-            alpasim_trajectories.append(alpasim_traj)
+
+            responses.append(DriveResponse(trajectory=alpasim_traj))
 
         return responses
 
@@ -776,7 +737,11 @@ class VAMPolicyService(EgodriverServiceServicer):
             )
             return SessionRequestStatus()
 
-        logger.info(f"Starting VAM session {request.session_uuid}")
+        logger.info(
+            "Starting %s session %s",
+            self._cfg.model.model_type.value,
+            request.session_uuid,
+        )
         session = Session.create(
             request,
             self._cfg,
@@ -803,30 +768,12 @@ class VAMPolicyService(EgodriverServiceServicer):
         self, request: Empty, context: grpc.aio.ServicerContext
     ) -> VersionId:
         driver_version = version("alpasim_driver")
+        model_type = self._cfg.model.model_type.value
         return VersionId(
-            version_id=f"vam-driver-{driver_version}",
+            version_id=f"{model_type}-driver-{driver_version}",
             git_hash="unknown",
             grpc_api_version=API_VERSION_MESSAGE,
         )
-
-    def _resize_and_crop_image(self, image: Image.Image) -> Image.Image:
-        img_w, img_h = image.size
-
-        if img_h != self._cfg.inference.image_height:
-            resize_factor = self._cfg.inference.image_height / img_h
-            target_width = int(img_w * resize_factor)
-            image = image.resize((target_width, self._cfg.inference.image_height))
-            img_w, img_h = image.size
-
-        if img_w > self._cfg.inference.image_width:
-            left = (img_w - self._cfg.inference.image_width) // 2
-            image = image.crop((left, 0, left + self._cfg.inference.image_width, img_h))
-        elif img_w < self._cfg.inference.image_width:
-            raise ValueError(
-                f"Image width {img_w} is less than expected {self._cfg.inference.image_width}"
-            )
-
-        return image
 
     @async_log_call
     async def submit_image_observation(
@@ -846,10 +793,9 @@ class VAMPolicyService(EgodriverServiceServicer):
             grpc_image.logical_id,
             grpc_image.frame_end_us,
         )
-        resized_rectified_image = self._resize_and_crop_image(rectified_image)
         session.add_image(
             grpc_image.logical_id,
-            np.array(resized_rectified_image),
+            np.array(rectified_image),
             grpc_image.frame_end_us,
         )
 
@@ -907,7 +853,7 @@ class VAMPolicyService(EgodriverServiceServicer):
     async def submit_recording_ground_truth(
         self, request: GroundTruthRequest, context: grpc.aio.ServicerContext
     ) -> Empty:
-        logger.debug("Ground truth received but not used by VAM")
+        logger.debug("Ground truth received but not used by driver")
         return Empty()
 
     def _check_frames_ready(self, session: Session) -> bool:
@@ -984,28 +930,42 @@ class VAMPolicyService(EgodriverServiceServicer):
         logger.debug("Returning drive response at time %s", request.time_now_us)
         return response
 
-    def _convert_vam_trajectory_to_alpasim(
+    def _convert_prediction_to_alpasim(
         self,
-        vam_trajectory: np.ndarray,  # Shape: (N, 2) - x,y offsets in rig frame
+        prediction: ModelPrediction,
         current_pose: PoseAtTime,
         time_now_us: int,
     ) -> Trajectory:
+        """Convert model prediction to Alpasim trajectory format.
+
+        If the model provides headings, use them directly.
+        Otherwise, compute headings from position deltas (existing behavior).
+
+        Args:
+            prediction: Model prediction with trajectory_xy and optional headings.
+            current_pose: Current vehicle pose in local frame.
+            time_now_us: Current time in microseconds.
+
+        Returns:
+            Alpasim Trajectory protobuf message.
+        """
         trajectory = Trajectory()
         trajectory.poses.append(current_pose)
 
-        if vam_trajectory is None or len(vam_trajectory) == 0:
+        model_trajectory = prediction.trajectory_xy
+        if model_trajectory is None or len(model_trajectory) == 0:
             return trajectory
 
         curr_z = current_pose.pose.vec.z
-        frequency_hz = self._cfg.trajectory.frequency_hz
+        frequency_hz = self._model.output_frequency_hz
         time_delta_us = int(1_000_000 / frequency_hz)
         time_step = 1.0 / frequency_hz
 
         # Apply trajectory optimization in rig frame if enabled
-        optimized_vam_trajectory = vam_trajectory
-        if self._trajectory_optimizer is not None and len(vam_trajectory) >= 2:
+        optimized_trajectory = model_trajectory
+        if self._trajectory_optimizer is not None and len(model_trajectory) >= 2:
             # Add heading to create [N, 3] trajectory for optimizer
-            rig_trajectory = add_heading_to_trajectory(vam_trajectory)
+            rig_trajectory = add_heading_to_trajectory(model_trajectory)
 
             # Run optimization
             opt_cfg = self._cfg.trajectory_optimizer
@@ -1019,7 +979,7 @@ class VAMPolicyService(EgodriverServiceServicer):
 
             if result.success:
                 # Extract x,y from optimized trajectory
-                optimized_vam_trajectory = result.trajectory[:, :2]
+                optimized_trajectory = result.trajectory[:, :2]
                 logger.debug(
                     "Trajectory optimization succeeded: iterations=%s, cost=%.4f",
                     result.iterations,
@@ -1030,59 +990,35 @@ class VAMPolicyService(EgodriverServiceServicer):
 
         # Convert rig offsets to local frame positions
         local_positions = _rig_est_offsets_to_local_positions(
-            current_pose, optimized_vam_trajectory
+            current_pose, optimized_trajectory
         )
         num_positions = local_positions.shape[0]
 
         if num_positions == 0:
             return trajectory
 
-        # Pre-compute timestamps and XY deltas between consecutive positions.
+        # Pre-compute timestamps
         steps = np.arange(1, num_positions + 1, dtype=np.int64)
         timestamps_us = (time_now_us + steps * time_delta_us).tolist()
 
-        previous_positions = np.vstack(
-            (
-                np.array(
-                    [current_pose.pose.vec.x, current_pose.pose.vec.y], dtype=float
-                ),
-                local_positions[:-1],
-            )
-        )
-        deltas = local_positions - previous_positions
-        distances = np.hypot(deltas[:, 0], deltas[:, 1])
-        yaws = np.arctan2(deltas[:, 1], deltas[:, 0])
+        # Transform model headings from rig frame to local frame
+        current_yaw = _quat_to_yaw(current_pose.pose.quat)
+        local_yaws = prediction.headings + current_yaw
 
-        prev_quat = Quat()
-        prev_quat.CopyFrom(current_pose.pose.quat)
-
-        for local_xy, distance, yaw, timestamp_us in zip(
-            local_positions,
-            distances,
-            yaws,
-            timestamps_us,
-            strict=True,
+        for local_xy, yaw, timestamp_us in zip(
+            local_positions, local_yaws, timestamps_us, strict=True
         ):
             local_x, local_y = map(float, local_xy)
-            local_z = curr_z
-
-            if distance > 1e-4:
-                quat = _yaw_to_quat(float(yaw))
-            else:
-                quat = Quat()
-                quat.CopyFrom(prev_quat)
 
             trajectory.poses.append(
                 PoseAtTime(
                     pose=Pose(
-                        vec=Vec3(x=local_x, y=local_y, z=local_z),
-                        quat=quat,
+                        vec=Vec3(x=local_x, y=local_y, z=curr_z),
+                        quat=_yaw_to_quat(float(yaw)),
                     ),
                     timestamp_us=timestamp_us,
                 )
             )
-
-            prev_quat = quat
 
         return trajectory
 
@@ -1108,19 +1044,15 @@ class VAMPolicyService(EgodriverServiceServicer):
         await self.stop_worker()
 
 
-async def serve(cfg: VAMDriverConfig) -> None:
+async def serve(cfg: DriverConfig) -> None:
+    """Start the gRPC server with the driver service."""
     server = grpc.aio.server()
     loop = asyncio.get_running_loop()
 
-    device = torch.device(cfg.model.device if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if cfg.model.dtype == "float16" else torch.float32
-
-    service = VAMPolicyService(
+    service = EgoDriverService(
         cfg=cfg,
         loop=loop,
         grpc_server=server,
-        device=device,
-        dtype=dtype,
     )
     add_EgodriverServiceServicer_to_server(service, server)
 
@@ -1128,7 +1060,11 @@ async def serve(cfg: VAMDriverConfig) -> None:
     server.add_insecure_port(address)
 
     await server.start()
-    logger.info("Starting VAM driver on %s", address)
+    logger.info(
+        "Starting %s driver on %s",
+        cfg.model.model_type.value,
+        address,
+    )
 
     try:
         await server.wait_for_termination()
@@ -1139,11 +1075,12 @@ async def serve(cfg: VAMDriverConfig) -> None:
 @hydra.main(
     version_base=None,
     config_path="../../configs",
-    config_name="vam_driver",
+    config_name="driver",
 )
-def main(cfg: VAMDriverConfig) -> None:
-    schema = OmegaConf.structured(VAMDriverConfig)
-    cfg: VAMDriverConfig = cast(VAMDriverConfig, OmegaConf.merge(schema, cfg))
+def main(hydra_cfg: DriverConfig) -> None:
+    """Main entry point for the driver service."""
+    schema = OmegaConf.structured(DriverConfig)
+    cfg = cast(DriverConfig, OmegaConf.merge(schema, hydra_cfg))
 
     logging.basicConfig(
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
@@ -1153,9 +1090,8 @@ def main(cfg: VAMDriverConfig) -> None:
 
     if cfg.output_dir:
         os.makedirs(cfg.output_dir, exist_ok=True)
-        OmegaConf.save(
-            cfg, os.path.join(cfg.output_dir, "vam-driver.yaml"), resolve=True
-        )
+        config_filename = f"{cfg.model.model_type.value}-driver.yaml"
+        OmegaConf.save(cfg, os.path.join(cfg.output_dir, config_filename), resolve=True)
 
     asyncio.run(serve(cfg))
 

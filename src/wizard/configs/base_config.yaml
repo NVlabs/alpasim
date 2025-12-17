@@ -16,7 +16,8 @@ defines:
   driver_model: ???
 
   # defaults will work out of the box \/
-  vavam_driver: "${defines.filesystem}/vavam-driver"
+  alpackages: "${defines.filesystem}/alpackages"
+  drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
 
   helper: scripts
@@ -145,7 +146,7 @@ services:
   driver:
     image: ???
     volumes:
-      - "${defines.vavam_driver}:/mnt/vavam_driver" # alpackage location
+      - "${defines.drivers}:/mnt/drivers"
       - "${wizard.log_dir}:/mnt/output" # optional output like the debug images
       - "${repo-relative:'src'}:/repo/src"
     command:

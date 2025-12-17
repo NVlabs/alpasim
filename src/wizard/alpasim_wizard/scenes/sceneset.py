@@ -457,7 +457,9 @@ class USDZManager:
         Note: this should not be used for local USDZ directory configurations.
         """
         if not uuids:
-            raise ValueError("At least one uuid must be provided to create a sceneset.")
+            # Might be encountered if doing a build-only run of the wizard
+            logger.warning("No scene ids provided--a sceneset dir is not created.")
+            return self.scenesets_dir
 
         asyncio.get_event_loop().run_until_complete(self._download_artifacts(uuids))
 

@@ -1,31 +1,41 @@
-"""Configuration schema for VAM driver."""
+"""Configuration schema for driver service supporting multiple model backends."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 from omegaconf import MISSING
 
 
+class ModelType(str, Enum):
+    """Supported model types."""
+
+    VAM = "vam"
+    TRANSFUSER = "transfuser"
+
+
 @dataclass
 class ModelConfig:
-    """VAM model configuration."""
+    """Unified model configuration for all model types.
 
-    checkpoint_path: str = MISSING  # Path to VAM checkpoint
+    Note: dtype is not exposed in config - each model hardcodes its expected dtype.
+    VAM uses float16, Transfuser uses its TrainingConfig's torch_float_type.
+    """
+
+    model_type: ModelType = MISSING  # Type of model to use (VAM or TRANSFUSER)
+    checkpoint_path: str = MISSING  # Path to model checkpoint (.pt/.pth)
     device: str = MISSING  # Device to run inference on (cuda/cpu)
-    dtype: str = MISSING  # Data type for inference (float16/float32)
-    tokenizer_path: str = MISSING  # Path to JIT compiled VQ tokenizer
+    tokenizer_path: Optional[str] = None  # Only required for VAM
 
 
 @dataclass
 class InferenceConfig:
     """Inference configuration."""
 
-    context_length: int = MISSING  # Number of temporal frames to use as context
-    image_height: int = MISSING  # Expected image height (VAM scales frames to 288 px)
-    image_width: int = MISSING  # Expected image width (VAM scales frames to 512 px)
-    use_cameras: list[str] = MISSING  # List of cameras to use
+    use_cameras: list[str] = MISSING
     max_batch_size: int = MISSING  # Maximum batch size for inference
     subsample_factor: int = 1
+    context_length: Optional[int] = None  # Override model's default context length
 
 
 @dataclass
@@ -40,14 +50,6 @@ class RouteConfig:
     min_lookahead_distance: float = (
         5.0  # Minimum distance to look ahead for waypoints (meters)
     )
-
-
-@dataclass
-class TrajectoryConfig:
-    """Trajectory generation configuration."""
-
-    prediction_horizon: int = MISSING  # Number of future points to predict (@ 2Hz)
-    frequency_hz: int = MISSING  # Output frequency in Hz
 
 
 @dataclass
@@ -99,8 +101,8 @@ class RectificationTargetConfig:
 
 
 @dataclass
-class VAMDriverConfig:
-    """Main VAM driver configuration."""
+class DriverConfig:
+    """Main driver configuration supporting multiple model backends."""
 
     # Logging level (DEBUG, INFO, WARNING, ERROR)
     log_level: str = "INFO"
@@ -116,9 +118,6 @@ class VAMDriverConfig:
     inference: InferenceConfig = MISSING
 
     route: RouteConfig = field(default_factory=RouteConfig)
-
-    # Trajectory configuration
-    trajectory: TrajectoryConfig = MISSING
 
     trajectory_optimizer: TrajectoryOptimizerConfig = field(
         default_factory=TrajectoryOptimizerConfig

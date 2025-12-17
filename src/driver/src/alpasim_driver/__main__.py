@@ -1,4 +1,4 @@
-"""Module entrypoint to run the VAM driver via `python -m alpasim_driver`."""
+"""Module entrypoint to run the driver service via `python -m alpasim_driver`."""
 
 from .main import main
 

@@ -1,0 +1,66 @@
+# @package _global_
+
+# Runtime configuration for Transfuser driver (4 cameras)
+# Cameras are rendered at 900x1600 and resized by the model to 270x480 per camera
+
+runtime:
+  default_scenario_parameters:
+    force_gt_duration_us: 3_000_000
+    n_sim_steps: 100
+    n_rollouts: 1
+    egopose_interval_us: 250_000
+    control_timestep_us: 250_000
+    time_start_offset_us: 250_000
+    ego_mask_rig_config_id: null
+
+    # Transfuser uses 4 cameras - render at full resolution, model handles resize
+    cameras:
+      - height: 900
+        width: 1600
+        logical_id: camera_cross_left_120fov
+        frame_interval_us: 250_000
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+      - height: 900
+        width: 1600
+        logical_id: camera_front_wide_120fov
+        frame_interval_us: 250_000
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+      - height: 900
+        width: 1600
+        logical_id: camera_cross_right_120fov
+        frame_interval_us: 250_000
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+      - height: 900
+        width: 1600
+        # used as nuplan B0, see extrinsics below.
+        logical_id: camera_rear_left_70fov
+        frame_interval_us: 250_000
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+
+  extra_cameras:
+    # Camera positions - calibrated extrinsics for Transfuser's 4-camera setup
+    # Intrinsics are defined in transfuser.yaml under rectification
+    # L0 - cross left camera
+    - logical_id: camera_cross_left_120fov
+      rig_to_camera:
+        translation_m: [1.646354, 0.143369, 1.521469]
+        rotation_xyzw: [0.679354, -0.207915, 0.215233, -0.670018]
+    # F0 - front wide camera
+    - logical_id: camera_front_wide_120fov
+      rig_to_camera:
+        translation_m: [1.670100, -0.025875, 1.522623]
+        rotation_xyzw: [0.509222, -0.503331, 0.495086, -0.492180]
+    # R0 - cross right camera
+    - logical_id: camera_cross_right_120fov
+      rig_to_camera:
+        translation_m: [1.626168, -0.161517, 1.526269]
+        rotation_xyzw: [0.205424, -0.674057, 0.676355, -0.214458]
+    # B0 - rear camera
+    - logical_id: camera_rear_left_70fov
+      rig_to_camera:
+        translation_m: [-0.486641, -0.000595, 1.486321]
+        rotation_xyzw: [0.503851, 0.497823, -0.499723, -0.498582]

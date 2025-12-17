@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - /driver: vavam # Driver config
+  - /driver: [vavam, vavam_runtime_configs] # Driver and runtime configs
   - _self_
 # Set of 'stable' image (images which have been tested to work together)
 # and relevant dependencies which describe the conditions those images

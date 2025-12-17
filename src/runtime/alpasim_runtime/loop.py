@@ -19,7 +19,7 @@ from types import TracebackType
 from typing import Optional, Self, Type
 
 import numpy as np
-from alpasim_grpc.v0.common_pb2 import DynamicState, PoseAtTime
+from alpasim_grpc.v0.common_pb2 import DynamicState, PoseAtTime, Vec3
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.autoresume import mark_rollout_complete
@@ -356,8 +356,31 @@ class BoundRollout:
                 np.array([prerun_start_us, prerun_end_us], dtype=np.uint64)
             )
         )
-        # Initialize estimated dynamic state with default/empty values
-        self.dynamic_state_estimated = DynamicState()
+        # Initialize estimated dynamic state
+
+        linear_velocities = self.unbound.gt_ego_trajectory.velocities()
+        yaw_rates = self.unbound.gt_ego_trajectory.yaw_rates()
+
+        v_interp = np.array(
+            [
+                np.interp(
+                    prerun_start_us,
+                    self.unbound.gt_ego_trajectory.timestamps_us,
+                    linear_velocities[:, i],
+                )
+                for i in range(3)
+            ]
+        )
+        v_grpc = Vec3(x=v_interp[0], y=v_interp[1], z=v_interp[2])
+        yaw_rate_grpc = Vec3(
+            z=np.interp(
+                prerun_start_us, self.unbound.gt_ego_trajectory.timestamps_us, yaw_rates
+            )
+        )
+        self.dynamic_state_estimated = DynamicState(
+            angular_velocity=yaw_rate_grpc,
+            linear_velocity=v_grpc,
+        )
 
         self.planner_delay_buffer = DelayBuffer(self.unbound.planner_delay_us)
         self.egomotion_noise_model = EgomotionNoiseModel.from_config(
