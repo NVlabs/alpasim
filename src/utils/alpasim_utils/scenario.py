@@ -214,7 +214,8 @@ class TrafficObjects(dict[str, TrafficObject]):
                     timestamps_us=np.array(timestamps_us, dtype=np.uint64),
                     poses=poses_qvec,
                 )
-                if smooth:
+                if smooth and len(trajectory) >= 2:
+                    # at least 2 points are needed for csaps
                     css = csaps.CubicSmoothingSpline(
                         trajectory.timestamps_us / 1e6,
                         trajectory.poses.vec3.T,  # Expects time in last dimension
@@ -230,6 +231,11 @@ class TrafficObjects(dict[str, TrafficObject]):
                             f"Max error in cubic spline approximation: {max_error:.6f} m for {track_id=}"
                         )
                     trajectory.poses.vec3 = filtered_positions
+                elif smooth and len(trajectory) < 2:
+                    logger.warning(
+                        f"Skipping smoothing for {track_id=} with only {len(trajectory)} data point(s). "
+                        "Smoothing requires at least 2 data points."
+                    )
 
                 trajectories[track_id] = TrafficObject(
                     track_id, AABB(*aabb_xyz), trajectory, is_static, track_label

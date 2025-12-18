@@ -227,7 +227,8 @@ async def _run_inline_worker(
         result_queue=result_queue,
         allocations=allocations,
         user_config_path=args.user_config,
-        usdz_glob=args.usdz_glob,
+        usdz_glob=getattr(args, 'usdz_glob', None),
+        trajdata_config_path=getattr(args, 'trajdata_config', None),
         log_dir=log_dir,
         parent_pid=None,  # Disable orphan detection for inline mode
     )
@@ -300,7 +301,8 @@ async def _run_subprocess_workers(
             result_queue=result_queue,
             allocations=all_allocations[worker_id],
             user_config_path=args.user_config,
-            usdz_glob=args.usdz_glob,
+            usdz_glob=getattr(args, 'usdz_glob', None),
+            trajdata_config_path=getattr(args, 'trajdata_config', None),
             parent_pid=parent_pid,
             log_dir=log_dir,
             shared_rpc_tracking=shared_rpc_tracking,
