@@ -5,8 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
-from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Quat
+from alpasim_grpc.v0.common_pb2 import DynamicState, Pose, PoseAtTime, Quat
 from alpasim_grpc.v0.common_pb2 import Trajectory as TrajectoryMsg
 from alpasim_grpc.v0.common_pb2 import Vec3
 from alpasim_grpc.v0.egodriver_pb2 import (
@@ -24,7 +23,8 @@ from PIL import Image
 import grpc.aio
 
 from ..frame_cache import FrameCache
-from ..main import VAMPolicyService
+from ..main import EgoDriverService
+from ..schema import DriverConfig
 
 
 def _get_repo_root() -> Path:
@@ -42,7 +42,7 @@ def _config_overrides(cfg: DictConfig, tmp_path: Path, assets_dir: Path) -> Dict
 
 def _ensure_vavam_assets() -> Path:
     repo_root = _get_repo_root()
-    assets_dir = repo_root / "data" / "vavam-driver"
+    assets_dir = repo_root / "data" / "drivers"
     required_files = [
         assets_dir / "VAM_width_768_pretrained_139k.pt",
         assets_dir / "VQ_ds16_16384_llamagen_encoder.jit",
@@ -74,22 +74,25 @@ def _ensure_vavam_assets() -> Path:
 async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     repo_root = _get_repo_root()
     cfg_path = repo_root / "src" / "wizard" / "configs" / "driver" / "vavam.yaml"
-    cfg = OmegaConf.load(cfg_path)
+    raw_cfg = OmegaConf.load(cfg_path)
+
+    # Remove Hydra-specific keys that aren't part of DriverConfig
+    if "defaults" in raw_cfg:
+        del raw_cfg["defaults"]
 
     assets_dir = _ensure_vavam_assets()
-    cfg = _config_overrides(cfg, tmp_path, assets_dir)
+    raw_cfg = _config_overrides(raw_cfg, tmp_path, assets_dir)
 
-    device = torch.device(cfg.model.device if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if cfg.model.dtype == "float16" else torch.float32
+    # Merge with schema to properly convert enums (e.g., model_type string -> ModelType enum)
+    schema = OmegaConf.structured(DriverConfig)
+    cfg = OmegaConf.merge(schema, raw_cfg)
 
     loop = asyncio.get_running_loop()
     server = grpc.aio.server()
-    service = VAMPolicyService(
+    service = EgoDriverService(
         cfg=cfg,
         loop=loop,
         grpc_server=server,
-        device=device,
-        dtype=dtype,
     )
 
     session_uuid = "test-session"
@@ -99,12 +102,15 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     ), "Only one camera is supported for testing"
     desired_camera_name = cfg.inference.use_cameras[0]
     camera_def = rollout_spec.vehicle.available_cameras.add()
+    # Test image dimensions (models handle internal resizing)
+    test_image_height = 900
+    test_image_width = 1600
     camera_def.logical_id = desired_camera_name
-    camera_def.intrinsics.resolution_h = cfg.inference.image_height
-    camera_def.intrinsics.resolution_w = cfg.inference.image_width
+    camera_def.intrinsics.resolution_h = test_image_height
+    camera_def.intrinsics.resolution_w = test_image_width
     ftheta = camera_def.intrinsics.ftheta_param
-    ftheta.principal_point_x = cfg.inference.image_width / 2.0
-    ftheta.principal_point_y = cfg.inference.image_height / 2.0
+    ftheta.principal_point_x = test_image_width / 2.0
+    ftheta.principal_point_y = test_image_height / 2.0
     ftheta.angle_to_pixeldist_poly.extend([0.0, 1.0])
     ftheta.pixeldist_to_angle_poly.extend([0.0, 1.0])
     start_request = DriveSessionRequest(
@@ -128,6 +134,8 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
         dt = 100_000
 
         # Submit egomotion observations one pose at a time (driver expects single pose per call)
+        # Ego moves 1 meter per dt (100ms), so speed is 10 m/s in x direction
+        speed_m_s = 1.0 / (dt / 1_000_000)  # 10 m/s
         for i in range(context + 1):
             traj_msg = TrajectoryMsg()
             pose_at_time = PoseAtTime(
@@ -139,16 +147,25 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
             )
             traj_msg.poses.append(pose_at_time)
 
+            # Include dynamic state (velocities and accelerations in rig frame)
+            dynamic_state = DynamicState(
+                linear_velocity=Vec3(x=speed_m_s, y=0.0, z=0.0),
+                angular_velocity=Vec3(x=0.0, y=0.0, z=0.0),
+                linear_acceleration=Vec3(x=0.0, y=0.0, z=0.0),
+                angular_acceleration=Vec3(x=0.0, y=0.0, z=0.0),
+            )
+
             egomotion_request = RolloutEgoTrajectory(
                 session_uuid=session_uuid,
                 trajectory=traj_msg,
+                dynamic_state=dynamic_state,
             )
             await service.submit_egomotion_observation(egomotion_request, None)
 
-        height = cfg.inference.image_height
-        width = cfg.inference.image_width
         for i in range(context):
-            image_array = (np.random.rand(height, width, 3) * 255).astype(np.uint8)
+            image_array = (
+                np.random.rand(test_image_height, test_image_width, 3) * 255
+            ).astype(np.uint8)
             pil_image = Image.fromarray(image_array)
             buffer = BytesIO()
             pil_image.save(buffer, format="PNG")

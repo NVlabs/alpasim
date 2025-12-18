@@ -3,7 +3,6 @@
 # Type validation happens at driver runtime via OmegaConf.structured merge
 
 defaults:
-  - vavam_runtime_configs   # Camera and simulation configs
   - _self_                  # YAML values override schema defaults
 
 # VAM Driver Configuration for Alpasim
@@ -13,12 +12,10 @@ log_level: ${wizard.log_level}
 
 # Model configuration
 model:
-  # checkpoint_path: "/mnt/vavam_driver/VAM_width_2048_pretrained_139k.pt" # Path to JIT compiled VQ tokenizer
-  checkpoint_path: "/mnt/vavam_driver/VAM_width_1024_pretrained_139k.pt" # Path to JIT compiled VQ tokenizer
-  # config_path: "${oc.env:VAM_CHECKPOINT_PATH,/mnt/alpackages/vam_driver.tar}" # Path to VAM checkpoint
-  device: "cuda" # Device to run inference on (cuda/cpu)
-  dtype: "float16" # Data type for inference (float16/float32)
-  tokenizer_path: "/mnt/vavam_driver/VQ_ds16_16384_llamagen_encoder.jit"
+  model_type: VAM  # Model type: VAM or TRANSFUSER
+  checkpoint_path: "/mnt/drivers/VAM_width_1024_pretrained_139k.pt"
+  device: "cuda"
+  tokenizer_path: "/mnt/drivers/VQ_ds16_16384_llamagen_encoder.jit"
 
 # Server configuration
 host: "0.0.0.0"
@@ -26,12 +23,10 @@ port: ???
 
 # Inference configuration
 inference:
-  context_length: 1 # Number of temporal frames to use as context
-  image_height: 900 # Expected image height from NeuroNCAP (VAM scales NeuroNCAP frames to 288)
-  image_width: 1600 # Expected image width from NeuroNCAP (VAM scales NeuroNCAP frames to 512)
-  use_cameras: ["camera_front_wide_120fov"] # Cameras to receive images for (VAM requires exactly one)
-  max_batch_size: 32 # Maximum batch size for inference
-  subsample_factor: 1 # Subsample every Nth frame (1 = no subsampling, 2 = every other)
+  use_cameras: ["camera_front_wide_120fov"]  # VAM requires exactly one camera
+  max_batch_size: 32
+  subsample_factor: 1
+  context_length: 1
 
 rectification:
   # Rectify camera_front_wide_120fov renders back to the NuScenes pinhole model.
@@ -44,14 +39,11 @@ rectification:
     # cropping the bottom 40px.
     principal_point: [960.0, 560.0]
     resolution_hw: [1080, 1920]
-    # radial: null
-    # tangential: null
-    # thin_prism: null
     radial: [-0.356123, 0.172545, -0.05231, 0.0, 0.0, 0.0]
     tangential: [-0.00213, 0.000464]
     thin_prism: [0.0, 0.0, 0.0, 0.0]
 
-    # We first apply rectification from f-theta to pinhole, then optionally appy
+    # We first apply rectification from f-theta to pinhole, then optionally apply
     # pinhole distortion correction to the pinhole frame.
     # To make sure the rectified image is large enough to cover the pinhole
     # camera's (after distortion correction) field of view, we overscan the
@@ -61,20 +53,15 @@ rectification:
 
 # Route configuration
 route:
-  default_command: 2 # Default command: 0=right, 1=left, 2=straight
-  use_waypoint_commands: true # Whether to interpret waypoints as commands
-  command_distance_threshold: 3.0 # Lateral displacement threshold in meters (from VAM)
-  min_lookahead_distance: 20.0 # Minimum distance to look ahead for waypoints in meters
+  default_command: 2  # Default command: 0=right, 1=left, 2=straight
+  use_waypoint_commands: true
+  command_distance_threshold: 3.0  # Lateral displacement threshold in meters
+  min_lookahead_distance: 20.0  # Minimum distance to look ahead for waypoints in meters
 
 # Output configuration
 output_dir: "/mnt/output/driver"
 
-# Trajectory configuration
-trajectory:
-  prediction_horizon: 6 # Number of future points to predict (@ 2Hz)
-  frequency_hz: 2 # Output frequency in Hz
-
-# Trajectory optimization (VaVam-Eco, but without GT information)
+# Trajectory optimization (VaVam-Eco, disabled by default)
 trajectory_optimizer:
   enabled: false
 

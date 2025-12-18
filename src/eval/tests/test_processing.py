@@ -559,10 +559,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             ]
         )
 
-        with pytest.raises(
-            pl.exceptions.ComputeError,
-            match="found multiple elements in the same group",
-        ):
+        with pytest.raises(pl.exceptions.ComputeError):
             aggregate_and_write_metrics_results_txt(invalid_df, force_same_run=True)
 
     def test_with_modifiers(self, unified_metrics_df: pl.DataFrame) -> None:

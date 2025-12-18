@@ -23,7 +23,7 @@ services:
   eval:
     volumes:
       - "${wizard.log_dir}:/mnt/log_dir"
-      - "${scenes.database.scene_cache}:/mnt/nre-data"
+      - "${scenes.scene_cache}:/mnt/nre-data"
       - "${wizard.log_dir}/src_copy:/mnt/src"
   post_eval_aggregation:
     volumes:

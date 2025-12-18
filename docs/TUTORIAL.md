@@ -26,9 +26,10 @@ Let's start by executing a run with default settings.
 been installed
 2. Set up your environment with:
     * `source setup_local_env.sh`
-    * This will compile protos, download an example driver model, download a sample scene from
-      Hugging Face, and install the `alpasim_wizard` command line tool.
-3. Run the wizard to create the necessary config files and run a simulation
+    * This will compile protos, download an example driver model, ensure you have a valid Hugging
+    Face token, and install the `alpasim_wizard` command line tool.
+3. Run the wizard to create the necessary config files, download the scene (if necessary), and run
+a simulation
     * `alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial`
     * This will create a `tutorial/` directory with all necessary config files and run the simulation
 
@@ -162,31 +163,12 @@ statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the 
 
 
 ### Scenes
-Additional scenes are stored on
+Publicly available scenes are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release)
-and, once downloaded, should be placed somewhere under `data/nre-artifacts/all-usdzs`.
-
-#### Downloading Scenes
-The Hugging Face cli can be used to download additional scenes. For instance:
-```bash
-hf download --repo-type=dataset \
-    --local-dir=data/nre-artifacts/all-usdzs \
-    nvidia/PhysicalAI-Autonomous-Vehicles-NuRec \
-    sample_set/25.07_release/Batch0001/02eadd92-02f1-46d8-86fe-a9e338fed0b6/02eadd92-02f1-46d8-86fe-a9e338fed0b6.usdz
-```
-
-#### Using Scene Suites
-Scene suites provide pre-validated collections of scenes for testing.
-
-> :information_source: **Prerequisite:** Scene suites assume you have already downloaded the required scenes from [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release) to your local `data/nre-artifacts/` directory. See the [Downloading Scenes](#downloading-scenes) section above for details.
-
-To use the public sceneset with 901 validated scenes:
-
-```bash
-alpasim_wizard +deploy=local +experiment/scenes=public_2507_all_ex19 wizard.log_dir=$PWD/tutorial_suite
-```
-
-This will run simulations across all 901 scenes in the `public_2507_all_ex19` suite, which excludes 19 problematic scenes from the full 25.07 release dataset.
+and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
+their uuid, rather than their filenames, to prevent versioning issues. The list of currently
+available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available
+suites exists in [scene suites](/data/scenes/sim_suites.csv).
 
 #### Selecting Individual Scenes
 For custom scene selection, you can specify scenes manually using `scenes.scene_ids`:
@@ -195,10 +177,27 @@ For custom scene selection, you can specify scenes manually using `scenes.scene_
 alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
 ```
 
-> :green_book: A scene id is typically (but not necessarily) `clipgt-<filename without .usdz>`
+If necessary, the scene will automatically be downloaded from Hugging Face to your local
+`data/nre-artifacts/all-usdzs` directory. If the download is necessary, ensure you have set your
+Hugging Face token in the `HF_TOKEN` environment variable as described in the onboarding
+instructions.
+
+> :green_book: Scene ids are defined/viewable in `data/scenes/sim_scenes.csv`
 > :warning: A scene id does not uniquely identify the `usdz` file as the scene id comes from
 the `metadata.yaml` file inside the `usdz` zip file. The proper artifact file will be chosen to
 satisfy the NRE version requirements.
+
+#### Using Scene Suites
+Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
+with 901 validated scenes (:warning: this will download all the scenes):
+
+```bash
+alpasim_wizard +deploy=local scenes.test_suite_id=public_2507_ex_failures wizard.log_dir=$PWD/tutorial_suite
+```
+
+This will run simulations across all 910 scenes in the `public_2507_ex_failures` suite, which
+excludes problematic scenes from the full 25.07 release dataset.
+
 
 ### Log replay
 You can set `runtime.endpoints.{physics,trafficsim,controller}.skip: true`,

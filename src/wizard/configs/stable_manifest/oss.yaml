@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - /driver: vavam # Driver config
+  - /driver: [vavam, vavam_runtime_configs] # Driver and runtime configs
   - _self_
 # Set of 'stable' image (images which have been tested to work together)
 # and relevant dependencies which describe the conditions those images
@@ -9,24 +9,22 @@ defaults:
 scenes:
   scene_ids:
     - clipgt-05bb8212-63e1-40a8-b4fc-3142c0e94646 # taken from huggingface
-  local:
-    directory: "all-usdzs" # relative to nre-artifacts directory
 services:
   sensorsim:
     image: docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0
     external_image: true
   driver:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   physics:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   runtime:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   controller:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   eval:
-    image: alpasim-base:0.1.1
+    image: alpasim-base:0.1.2
   trafficsim:
-    image: alpasim-base:0.1.1 # temporary stub
+    image: alpasim-base:0.1.2 # temporary stub
 runtime:
   default_scenario_parameters:
     # no latency

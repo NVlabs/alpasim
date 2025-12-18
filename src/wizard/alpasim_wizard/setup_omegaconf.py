@@ -52,9 +52,9 @@ def validate_config(cfg: AlpasimConfig) -> None:
     after the configuration is loaded but before it's used.
     """
     # Validate NRE version configuration
-    if cfg.scenes.database.nre_version_string is None and not cfg.services.sensorsim:
+    if cfg.scenes.nre_version_string is None and not cfg.services.sensorsim:
         raise RuntimeError(
-            "Either `scenes.database.nre_version_string` or `services.sensorsim.image` must be set "
+            "Either `scenes.nre_version_string` or `services.sensorsim.image` must be set "
             "to determine the NRE version."
         )
 
@@ -97,15 +97,15 @@ def update_scene_config(cfg: AlpasimConfig) -> None:
     """Remove scene_ids from the config if multiple scene sources are specified or
     add all available artifacts if source is set to local and scene_ids is None.
 
-    Only one of scene_ids or test_suite_id should be specified in
-    the config. However, we specify a default scene_ids in the
-    stable_manifest/oss.yaml, requiring users to explicitly set scene_ids to None if
-    they want to use a test_suite_id.
+    Only one of scene_ids or test_suite_id should be specified in the config.
+    However, we specify a default scene_ids in the stable_manifest/oss.yaml,
+    requiring users to explicitly set scene_ids to None if they want to use a
+    test_suite_id.
 
     This function removes this requirement by removing scene_ids from the config
     if:
-    - exactly one of scene_ids or test_suite_id is specified in
-        the command line arguments
+    - exactly one of scene_ids or test_suite_id is specified in the command line
+        arguments
     - scene_ids has exactly one element (which we assume to be the default one)
     """
     scene_config = cfg.scenes
@@ -120,10 +120,10 @@ def update_scene_config(cfg: AlpasimConfig) -> None:
     cmd_line_overrides_str = " ".join(cmd_line_overrides)
 
     # We specify a default scene_id in the config so simulations can run by default.
-    # However, when users specify test_suite_id or kratos_query on the command line,
-    # we need to clear the default scene_ids to avoid conflicts.
-    # Here, we check that exactly one scene source was specified via command line,
-    # scene_ids has only one element, and that both test_suite_id and kratos_query are not set at the same time.
+    # However, when users specify test_suite_id on the command line, we need to
+    # clear the default scene_ids to avoid conflicts.
+    # Here, we check that exactly one scene source was specified via command line
+    # and scene_ids has only one element (which we assume to be the default one).
     if (
         sum(key in cmd_line_overrides_str for key in scene_config_keys) == 1
         and scene_config.scene_ids is not None

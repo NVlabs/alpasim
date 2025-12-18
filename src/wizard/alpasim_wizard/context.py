@@ -5,155 +5,96 @@
 
 from __future__ import annotations
 
-import glob
 import logging
 import os
 import socket
 import subprocess
-import zipfile
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-import yaml
-
 from .compatibility import CompatibilityMatrix
-from .s3.sceneset import SceneIdAndUuid
+from .scenes import LOCAL_SUITE_ID, SceneIdAndUuid, USDZManager
 from .schema import AlpasimConfig
 from .utils import nre_image_to_nre_version
 
 logger = logging.getLogger(__name__)
 
 
-def _filesystem_search(
-    scene_ids: list[str] | None,
-    compatible_nre_versions: set[str],
-    scene_cache: str,
-) -> list[SceneIdAndUuid]:
-    """Search filesystem for scene artifacts.
-
-    It looks for all usdz files under {scene_cache}/**/*.usdz and returns the artifacts that are in
-    scene_ids list and are compatible with the given compatible_nre_versions.
-
-    Args:
-        scene_ids: List of scene ids to search for. If None, all artifacts under the scene cache
-            path will be considered.
-        compatible_nre_versions: Set of compatible NRE versions.
-        scene_cache: Path to the scene cache.
-
-    Returns:
-        List of matching artifacts (SceneIdAndUuid).
-    """
-    matching_artifacts: list[SceneIdAndUuid] = []
-    mismatched_version_artifacts: list[str] = []
-
-    if scene_ids is None:
-        scene_ids = []
-        find_all_scenes = True
-    else:
-        find_all_scenes = False
-
-    for usdz in glob.glob(f"{scene_cache}/**/*.usdz", recursive=True):
-        with zipfile.ZipFile(usdz, "r") as zf:
-            with zf.open("metadata.yaml") as f:
-                yaml_dict = yaml.safe_load(f)
-                if yaml_dict["scene_id"] not in scene_ids and not find_all_scenes:
-                    continue
-
-                if yaml_dict["version_string"] in compatible_nre_versions:
-                    matching_artifacts.append(
-                        SceneIdAndUuid(yaml_dict["scene_id"], yaml_dict["uuid"])
-                    )
-                else:
-                    mismatched_version_artifacts.append(
-                        yaml_dict["scene_id"] + "@" + yaml_dict["version_string"]
-                    )
-
-    artifact_counts = Counter([a.scene_id for a in matching_artifacts])
-    duplicate_artifacts = [
-        scene_id for scene_id, count in artifact_counts.items() if count > 1
-    ]
-    if duplicate_artifacts:
-        raise RuntimeError(f"Duplicate artifacts found: {duplicate_artifacts}")
-
-    missing_artifacts = sorted(
-        list(set(scene_ids) - {a.scene_id for a in matching_artifacts})
-    )
-    if missing_artifacts:
-        message = f"Failed to find all artifacts with required NRE versions, missing: {missing_artifacts}."
-        if mismatched_version_artifacts:
-            message += f" Some artifacts found with mismatched NRE versions: {mismatched_version_artifacts}."
-        raise FileNotFoundError(message)
-
-    return matching_artifacts
-
-
-def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str | None]:
-    """Fetch artifacts from database or filesystem."""
+def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
+    """Fetch artifacts using the scene manager."""
 
     compatibility_matrix = CompatibilityMatrix.from_config(
         cfg.scenes.artifact_compatibility_matrix
     )
+    Path(cfg.scenes.scene_cache).mkdir(parents=True, exist_ok=True)
 
-    # Create scene cache directory if needed
-    Path(cfg.scenes.database.scene_cache).mkdir(parents=True, exist_ok=True)
-
-    # Determine NRE version
-    if cfg.scenes.database.nre_version_string is not None:
-        nre_version_string = cfg.scenes.database.nre_version_string
+    # Get compatible NRE versions
+    if cfg.scenes.nre_version_string is not None:
+        nre_version = cfg.scenes.nre_version_string
     else:
         assert cfg.services.sensorsim is not None  # For mypy
-        nre_version_string = nre_image_to_nre_version(cfg.services.sensorsim.image)
-    compatible_nre_versions = compatibility_matrix.lookup(nre_version_string)
+        nre_version = nre_image_to_nre_version(cfg.services.sensorsim.image)
+    compatible_versions = list(compatibility_matrix.lookup(nre_version))
 
-    # Handle scene sources
-    if cfg.scenes.source == "local":
-        local_cfg = cfg.scenes.local
+    # Query scenes
+    manager = USDZManager.from_cfg(cfg.scenes)
 
-        # Determine which scenes to use
-        if cfg.scenes.test_suite_id:
-            if not local_cfg.suites:
-                raise RuntimeError(
-                    f"Suite '{cfg.scenes.test_suite_id}' specified but no suites defined in config."
-                )
-            try:
-                scene_ids = local_cfg.suites[cfg.scenes.test_suite_id]
-                logger.info(
-                    f"Using local suite '{cfg.scenes.test_suite_id}' with {len(scene_ids)} scenes"
-                )
-            except KeyError:
-                available = list(local_cfg.suites.keys())
-                raise RuntimeError(
-                    f"Suite '{cfg.scenes.test_suite_id}' not found. Available: {available}"
-                )
-        else:
-            if not cfg.scenes.scene_ids:
-                raise RuntimeError(
-                    "No scenes specified. Either specify scenes.scene_ids or scenes.test_suite_id."
-                )
-            scene_ids = cfg.scenes.scene_ids
+    # Determine which selection method to use
+    test_suite_id = cfg.scenes.test_suite_id
+    scene_ids = cfg.scenes.scene_ids
+    use_local_scenes = cfg.scenes.local_usdz_dir is not None
 
-        # Search for artifacts
-        sceneset_dir_relative_path = Path(local_cfg.directory)
-        search_directory = (
-            cfg.scenes.database.scene_cache + "/" + str(sceneset_dir_relative_path)
+    if test_suite_id is not None and scene_ids is not None:
+        raise ValueError(
+            "Both scene_ids and test_suite_id are set; only one can be set."
         )
-        if not os.path.isdir(search_directory):
-            raise FileNotFoundError(
-                f"Local directory {search_directory} not found. "
-                "Note: cfg.scenes.local.directory should be relative to the nre-artifacts directory."
+    elif use_local_scenes and test_suite_id not in (None, LOCAL_SUITE_ID):
+        raise ValueError(
+            "When using local_usdz_dir, test_suite_id must be None or 'local'."
+        )
+
+    # If local_usdz_dir is set and neither scene_ids nor test_suite_id is provided,
+    # default to using the "local" test suite (all scenes in the directory)
+    if use_local_scenes:
+        if test_suite_id is None and scene_ids is None:
+            test_suite_id = LOCAL_SUITE_ID
+            logger.info(
+                f"Using local USDZ directory: {cfg.scenes.local_usdz_dir}. "
+                f"Defaulting to test_suite_id='{test_suite_id}' (all scenes)."
             )
-        artifact_list = _filesystem_search(
-            scene_ids, compatible_nre_versions, search_directory
+
+    if test_suite_id is not None:
+        if scene_ids is not None:
+            logger.warning(
+                "Both scene_ids and test_suite_id are set; using test_suite_id=%s",
+                test_suite_id,
+            )
+        artifacts = manager.query_by_suite_id(test_suite_id, compatible_versions)
+    elif scene_ids is not None:
+        artifacts = manager.query_by_scene_ids(scene_ids, compatible_versions)
+    else:
+        raise ValueError("Either scene_ids or test_suite_id must be set")
+
+    # Create sceneset directory if not using local USDZ directory
+    if use_local_scenes:
+        sceneset_dir_abs_path = os.path.abspath(str(cfg.scenes.local_usdz_dir))
+        sceneset_dir_relative_path = "."
+        # Note: for local USDZ directories, override the scene cache directory for proper mounting
+        cfg.scenes.scene_cache = sceneset_dir_abs_path
+        logger.info(
+            f"Using local files--overriding scene_cache to: {sceneset_dir_abs_path}"
         )
     else:
-        raise ValueError(f"Unknown scene source: {cfg.scenes.source}")
+        sceneset_dir_abs_path = manager.create_sceneset_directory(
+            [a.uuid for a in artifacts]
+        )
+        sceneset_dir_relative_path = str(
+            Path(sceneset_dir_abs_path).relative_to(cfg.scenes.scene_cache)
+        )
+        logger.info(f"Relative sceneset path: {sceneset_dir_relative_path}")
 
-    # Return both artifact list and sceneset path
-    return artifact_list, (
-        str(sceneset_dir_relative_path) if sceneset_dir_relative_path else None
-    )
+    return artifacts, sceneset_dir_relative_path
 
 
 def detect_gpus() -> int:
