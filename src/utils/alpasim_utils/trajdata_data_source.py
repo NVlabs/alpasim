@@ -95,7 +95,7 @@ class TrajdataDataSource(SceneDataSource):
         scene_cache: Optional[EnvCache] = None,
         scene_id: Optional[str] = None,
         smooth_trajectories: bool = True,
-        base_timestamp_us: Optional[int] = None,
+        base_timestamp_us: int = 0,
     ) -> TrajdataDataSource:
         """
         从trajdata的Scene对象创建TrajdataDataSource。
@@ -329,11 +329,28 @@ class TrajdataDataSource(SceneDataSource):
         if len(ego_trajectory) > 0:
             translation = world_to_nre[:3, 3]
             local_positions = ego_trajectory.poses.vec3 + translation
+            
+            # Validate transform
+            first_pose_local = local_positions[0]
+            if np.linalg.norm(first_pose_local[:2]) > 1.0: 
+                logger.warning(
+                    f"First pose after transformation is not at origin: {first_pose_local}. "
+                    f"Expected [0, 0, ~z], got {first_pose_local}"
+                )
+            
             local_quat = ego_trajectory.poses.quat.copy()
             local_poses = QVec(vec3=local_positions, quat=local_quat)
             ego_trajectory = Trajectory(
                 timestamps_us=ego_trajectory.timestamps_us.copy(),
                 poses=local_poses,
+            )
+            
+            logger.info(
+                f"Transformed ego trajectory to local coordinates. "
+                f"First pose: {ego_trajectory.poses[0].vec3}, "
+                f"Range: X[{local_positions[:, 0].min():.2f}, {local_positions[:, 0].max():.2f}], "
+                f"Y[{local_positions[:, 1].min():.2f}, {local_positions[:, 1].max():.2f}], "
+                f"Z[{local_positions[:, 2].min():.2f}, {local_positions[:, 2].max():.2f}]"
             )
 
         # 提取相机信息（参考trajdata_artifact_converter.py）
@@ -584,11 +601,141 @@ class TrajdataDataSource(SceneDataSource):
             # trajdata的VectorMap应该可以直接使用
             self._map = vec_map
 
-            # 如果map需要finalize，调用它
+            # 重要：将地图转换到局部坐标系（NRE）
+            # 因为轨迹已经转换到局部坐标，地图也需要转换以匹配
+            # 这与 USDZ 格式的处理方式一致：地图和轨迹都需要转换到同一坐标系
+            if self._rig is None:
+                # 如果 rig 还没加载，先加载它（这会设置 world_to_nre）
+                _ = self.rig
+            
+            world_to_nre = self._rig.world_to_nre
+            
+            # 检查 world_to_nre 是否包含旋转
+            rotation_matrix = world_to_nre[:3, :3]
+            translation = world_to_nre[:3, 3]
+            has_rotation = not np.allclose(rotation_matrix, np.eye(3))
+            
+            if has_rotation:
+                logger.warning(
+                    f"world_to_nre contains rotation. Map transformation may need rotation handling. "
+                    f"Currently only applying translation."
+                )
+            
+            # 转换地图中的所有点（center.points, left_boundary.points, right_boundary.points 等）
+            # 注意：必须在 finalize 之前转换，因为 finalize 可能会重建某些数据结构
+            # 重要：只转换 X, Y 坐标，Z 坐标对齐到轨迹的 Z 基准
+            # 因为地图的 Z 通常表示相对于地面的高度（通常是 0），而轨迹的 Z 表示海拔高度
+            # 转换后，地图的 Z 应该与轨迹的 Z 对齐（都相对于第一个轨迹点的 Z，转换后通常是 0）
+            translation_xy = translation[:2]  # 只使用 X, Y 的平移
+            
+            # 获取轨迹第一个点的 Z 坐标（转换后的基准，通常是 0）
+            first_traj_z = self.rig.trajectory.poses[0].vec3[2] if len(self.rig.trajectory) > 0 else 0.0
+            
+            logger.info(
+                f"Map coordinate transformation: "
+                f"translation_xy={translation_xy}, "
+                f"first_traj_z={first_traj_z:.2f}m, "
+                f"map Z will be aligned to trajectory Z baseline"
+            )
+            
+            def transform_map_points(points: np.ndarray) -> np.ndarray:
+                """转换地图点：只转换 X, Y，Z 对齐到轨迹的 Z 基准"""
+                if points is None or len(points) == 0 or points.ndim != 2 or points.shape[1] < 3:
+                    return points
+                
+                points_copy = points.copy()
+                
+                # 转换 X, Y 坐标
+                if has_rotation:
+                    # 如果有旋转，需要旋转 X, Y
+                    xy_rotated = (points_copy[:, :2] @ rotation_matrix[:2, :2].T) + translation_xy
+                    points_copy[:, 0] = xy_rotated[:, 0]
+                    points_copy[:, 1] = xy_rotated[:, 1]
+                else:
+                    # 只平移 X, Y
+                    points_copy[:, 0] = points_copy[:, 0] + translation_xy[0]
+                    points_copy[:, 1] = points_copy[:, 1] + translation_xy[1]
+                
+                # Z 坐标对齐：将地图的 Z 对齐到轨迹的 Z 基准
+                # 地图的 Z 通常是相对于地面的高度（通常是 0），
+                # 转换后应该与轨迹的 Z 对齐（都相对于第一个轨迹点的 Z，转换后通常是 0）
+                # 所以：new_z = original_z + first_traj_z
+                # 如果地图 Z=0（地面），转换后就是 first_traj_z（通常是 0）
+                points_copy[:, 2] = points_copy[:, 2] + first_traj_z
+                
+                return points_copy
+            
+            if hasattr(self._map, "lanes"):
+                for lane_idx, lane in enumerate(self._map.lanes):
+                    # 转换 center.points
+                    if hasattr(lane, "center") and hasattr(lane.center, "points"):
+                        points = lane.center.points
+                        if points is not None and len(points) > 0:
+                            try:
+                                transformed_points = transform_map_points(points)
+                                lane.center.points = transformed_points
+                            except Exception as e:
+                                logger.warning(f"Failed to transform lane {lane_idx} center.points: {e}")
+                    
+                    # 转换 left_boundary.points
+                    if hasattr(lane, "left_boundary") and hasattr(lane.left_boundary, "points"):
+                        points = lane.left_boundary.points
+                        if points is not None and len(points) > 0:
+                            try:
+                                transformed_points = transform_map_points(points)
+                                lane.left_boundary.points = transformed_points
+                            except Exception as e:
+                                logger.warning(f"Failed to transform lane {lane_idx} left_boundary.points: {e}")
+                    
+                    # 转换 right_boundary.points
+                    if hasattr(lane, "right_boundary") and hasattr(lane.right_boundary, "points"):
+                        points = lane.right_boundary.points
+                        if points is not None and len(points) > 0:
+                            try:
+                                transformed_points = transform_map_points(points)
+                                lane.right_boundary.points = transformed_points
+                            except Exception as e:
+                                logger.warning(f"Failed to transform lane {lane_idx} right_boundary.points: {e}")
+                    
+                    # 转换其他可能的点属性（如果有）
+                    for attr_name in ['intersections', 'crosswalks', 'stop_lines']:
+                        if hasattr(lane, attr_name):
+                            attr_value = getattr(lane, attr_name)
+                            if isinstance(attr_value, list):
+                                for item in attr_value:
+                                    if hasattr(item, 'points'):
+                                        points = item.points
+                                        if points is not None and len(points) > 0:
+                                            try:
+                                                transformed_points = transform_map_points(points)
+                                                item.points = transformed_points
+                                            except Exception as e:
+                                                logger.debug(f"Failed to transform {attr_name} points: {e}")
+            
+            # 如果map需要finalize，调用它（在转换之后）
+            # 注意：finalize 可能会重建某些索引，但不会改变点的坐标
+            # 但为了安全，我们在 finalize 之后再次验证转换是否生效
             if hasattr(self._map, "__post_init__"):
                 self._map.__post_init__()
             if hasattr(self._map, "compute_search_indices"):
                 self._map.compute_search_indices()
+            
+            # 再次验证：finalize 后检查第一个点的坐标是否仍然正确
+            if hasattr(self._map, "lanes") and len(self._map.lanes) > 0:
+                first_lane = self._map.lanes[0]
+                if hasattr(first_lane, "center") and hasattr(first_lane.center, "points"):
+                    first_map_point_after_finalize = first_lane.center.points[0, :3] if len(first_lane.center.points) > 0 else None
+                    if first_map_point_after_finalize is not None:
+                        # 检查 Z 坐标是否与轨迹对齐（应该都是 first_traj_z，通常是 0）
+                        actual_z = first_map_point_after_finalize[2]
+                        if abs(actual_z - first_traj_z) > 1.0:  # 允许 1 米误差
+                            logger.warning(
+                                f"Map Z coordinate may have been reset after finalize. "
+                                f"Expected Z≈{first_traj_z:.2f}m (aligned to trajectory Z baseline), "
+                                f"got Z={actual_z:.2f}m. "
+                                f"This may cause coordinate misalignment."
+                            )
+                        # 如果对齐正确，不需要记录日志（减少噪音）
 
             # 修复数据类型（如果需要）
             if hasattr(self._map, "lanes"):
@@ -605,8 +752,39 @@ class TrajdataDataSource(SceneDataSource):
                         lane.adj_lanes_left, list
                     ):
                         lane.adj_lanes_left = set(lane.adj_lanes_left)
+            
+            # 验证地图转换：检查第一个 lane 的第一个点是否在合理范围内
+            if hasattr(self._map, "lanes") and len(self._map.lanes) > 0:
+                first_lane = self._map.lanes[0]
+                if hasattr(first_lane, "center") and hasattr(first_lane.center, "points"):
+                    first_map_point = first_lane.center.points[0, :3] if len(first_lane.center.points) > 0 else None
+                    if first_map_point is not None:
+                        # 地图点应该在轨迹附近（几百米范围内）
+                        distance_from_origin_xy = np.linalg.norm(first_map_point[:2])  # 只检查 X, Y
+                        distance_from_origin_xyz = np.linalg.norm(first_map_point)  # 检查 X, Y, Z
+                        
+                        # 获取轨迹第一个点用于对比
+                        first_traj_point = self.rig.trajectory.poses[0].vec3
+                        
+                        logger.info(
+                            f"Map transformation verification: "
+                            f"first lane center point: {first_map_point}, "
+                            f"first trajectory point: {first_traj_point}, "
+                            f"distance (X,Y): {distance_from_origin_xy:.2f}m, "
+                            f"distance (X,Y,Z): {distance_from_origin_xyz:.2f}m, "
+                            f"Z difference: {abs(first_map_point[2] - first_traj_point[2]):.2f}m"
+                        )
+                        
+                        # 如果 Z 坐标距离轨迹 Z 太远，发出警告
+                        z_diff = abs(first_map_point[2] - first_traj_point[2])
+                        if z_diff > 10.0:  # Z 坐标差值超过 10 米
+                            logger.warning(
+                                f"Map Z coordinate may not be correctly aligned with trajectory. "
+                                f"Map Z={first_map_point[2]:.2f}m, Trajectory Z={first_traj_point[2]:.2f}m, "
+                                f"difference={z_diff:.2f}m. This may cause route generation to fail."
+                            )
 
-            logger.info(f"成功加载地图: {map_name}")
+            logger.info(f"成功加载地图: {map_name} (已转换到局部坐标系)")
             return self._map
         except Exception as e:
             logger.error(f"加载地图时出错: {e}", exc_info=True)
@@ -633,7 +811,7 @@ class TrajdataDataSource(SceneDataSource):
         if self._scene is not None:
             dt = self._scene.dt
             length_timesteps = self._scene.length_timesteps
-            base_timestamp_us = getattr(self, "_base_timestamp_us", 0)
+            base_timestamp_us = getattr(self, "_base_timestamp_us", 0.0)
             time_range_start = float(base_timestamp_us) / 1e6
             time_range_end = float(base_timestamp_us + length_timesteps * dt * 1e6) / 1e6
         else:
@@ -669,7 +847,7 @@ def discover_from_trajdata_dataset(
     dataset: UnifiedDataset,
     scene_indices: Optional[list[int]] = None,
     smooth_trajectories: bool = True,
-    base_timestamp_us: Optional[int] = None,
+    base_timestamp_us: int = 0,
 ) -> dict[str, TrajdataDataSource]:
     """
     从trajdata UnifiedDataset创建TrajdataDataSource字典。
