@@ -2,6 +2,9 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## AR1 (1.5.25)
+AR1 support has been added to Alpasim. Users can now run AR1 as described in the tutorial.
+
 ## Update to OSS tutorial definitions / Driver Abstraction (12.17.25)
 The tutorials have been updated to reflect the changed scene storage model. Manual downloadds are
 no longer required, although users must provide the `HF_TOKEN` env var to support automatic
