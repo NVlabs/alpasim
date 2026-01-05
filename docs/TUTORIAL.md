@@ -6,8 +6,7 @@ This tutorial makes three assumptions
 reflected in subdivision into three levels of complexity.
 
 # Level 1
-In level 1 we focus we run a default simulation, learn how to interpret the results, and perform
-basic debugging.
+In level 1 we focus we run a default simulation with the VaVAM driver policy, learn how to interpret the results, and perform basic debugging.
 
 ## Architecture of AlpaSim
 AlpaSim consists of multiple networked microservices (renderer, physics simulation, runtime,
@@ -120,17 +119,9 @@ best to consult that log to see where the first errors occurred. The microservic
 additional logs that can be useful for debugging, but that is not covered here.
 
 # Level 2
-In level 2 we learn to customize the simulation (i.e. run our own code, change simulated scenes,
-change the driver model, etc.) and understand the architecture in more depth.
+In level 2 we learn to customize the simulation (i.e. change the driver policy, change simulated scenes, etc.) and understand the architecture in more depth.
 
 ## AlpaSim Wizard Configuration
-At *level 1* the wizard was run using some default arguments, but here we learn to interact with
-it to:
-* Change scenario configuration parameters
-* Make changes to the code
-* Scale the simulator (i.e. replicate services under heavy load)
-
-## Wizard config files
 AlpaSim wizard is configured via [hydra](https://hydra.cc/docs/intro/) and takes in a `.yaml`
 configuration file and arbitrary command line overrides. Example config files are in
 `src/wizard/configs/`. We suggest reading
@@ -155,29 +146,62 @@ by running the wizard as follows:
 alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.default_scenario_parameters.n_rollouts=8
 ```
 
-### Run with the Alpamayo R1 Driver Model
-To run with the Alpamayo R1 driver model, one must apply two additional configuration changes: one
-for the driver, and one for the runtime. The driver service will automatiocally download the model
-weights if they do not exist locally.
-> :warning: The Alpamayo R1 model is large--please ensure that your GPU has the capacity to run it.
-> :warning: The Alpamayo R1 model is large--the download may timeout, requiring you to re-run.
+## Driver
+The driver in AlpaSim is a policy for the ego vechicle that takes in sensor inputs and optional navigation commands, and outputs a
+trajectory for the ego vehicle to follow, along with other optional outputs, such as chain-of-causation reasoning text.
 
+The driver is specfied by a pair of config files under `src/wizard/configs/`, one for the driver service itself, and one for the runtime (so that it provides the inputs required for the specific driver).
+
+### VaVAM
+To run with the default [VaVAM](https://github.com/valeoai/VideoActionModel) policy use `driver=[vavam,vavam_runtime_configs]`. For example, run the wizard with the following command:
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam,vavam_runtime_configs]
+```
+
+### Alpamayo-R1
+To run with the [Alpamayo-R1](https://github.com/NVlabs/alpamayo) model use `driver=[ar1,ar1_runtime_configs]`.
+
+First, one may download the model weights from HuggingFace:
+```bash
+huggingface-cli download nvidia/Alpamayo-R1-10B
+```
+The wizard will use the `HF_HOME` environment variable to find the system HuggingFace cache (`~/.cache/huggingface` by default). If the model weights do not exists locally, the driver service will automatiocally download them, but the download may timeout, requiring you to re-run. Alternatively, you can specify the path to the model directory by setting the `model.checkpoint_path` configuration field.
+
+Then run the wizard with the following command:
 ```bash
 alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs]
 ```
+> :warning: The Alpamayo R1 model is large (10b parameters)--please ensure that your GPU has the capacity to run it.
 
-If you have already downloaded the Alpamayo R1 model weights, you can specify the path to the model
-directory by setting the `model.checkpoint_path` configuration field.
-
-### Code Changes
-Code changes in the repo are automatically mounted into the docker containers at runtime, with the
-exception that the virtual environment of the container is not synced, so changes that rely on new
-dependencies will require rebuilding the container image. To try this out, one can add some logging
-statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the wizard.
+To visualize the predicted chain-of-causation reaoning you can change the generated video layout with `eval.video.video_layouts=[reasoning_overlay]`.
 
 
-### Scenes
-Publicly available scenes are stored on
+### Transfuser (provisional)
+As an example for how to integrate a different driver model, we provide a provisional integration for the [Transfuser](https://github.com/autonomousvision/transfuser) model.
+
+To run with the [Transfuser](https://huggingface.co/ln2697/tfv6_navsim) model use `driver=[transfuser,transfuser_runtime_configs]`.
+
+First, one must download the Transfuser model weights/config from HuggingFace:
+```bash
+huggingface-cli download longpollehn/tfv6_navsim model_0060.pth --local-dir=data/drivers/transfuser/
+huggingface-cli download longpollehn/tfv6_navsim config.json --local-dir=data/drivers/transfuser/
+```
+
+Then, run the wizard with the following command:
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[transfuser,transfuser_runtime_configs]
+```
+
+### Log replay driver
+If you would like to force the ego vehicle to follow its recorded trajectory, instead of following the predictions of a policy, you can set `runtime.endpoints.{physics,trafficsim,controller}.skip: true`,
+`runtime.default_scenario_parameters.physics_update_mode: NONE` and
+`runtime.default_scenario_parameters.force_gt_duration_us` to a very high value (20s+).
+
+
+## Scenes
+The scene in AlpaSim is a NuRec reconstruction of a real-world driving log.
+
+Publicly available NuRec scenes are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release)
 and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
 their uuid, rather than their filenames, to prevent versioning issues. The list of currently
@@ -213,13 +237,15 @@ This will run simulations across all 910 scenes in the `public_2507_ex_failures`
 excludes problematic scenes from the full 25.07 release dataset.
 
 
-### Log replay
-You can set `runtime.endpoints.{physics,trafficsim,controller}.skip: true`,
-`runtime.default_scenario_parameters.physics_update_mode: NONE` and
-`runtime.default_scenario_parameters.force_gt_duration_us` to a very high value (20s+) to obtain
-log-replay behavior (with NRE-rendered images).
+## Custom components
 
-## Custom container images
+### Code changes
+Code changes in the repo are automatically mounted into the docker containers at runtime, with the
+exception that the virtual environment of the container is not synced, so changes that rely on new
+dependencies will require rebuilding the container image. To try this out, one can add some logging
+statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the wizard.
+
+### Custom container images
 The simulation is split into multiple microservices, each running in its own docker container. The
 primary requirement for a custom container image is that it exposes a gRPC endpoint compatible with
 the expected service interface. The default images used for each service are specified in

@@ -37,6 +37,15 @@ Suitable use cases include:
 To learn more about the design principles and architecture, check out the [system design docs](docs/DESIGN.md).
 
 
+## Driving Policies
+AlpaSim currently supports the following driver policies:
+* [Alpamayo-R1](https://github.com/NVlabs/alpamayo) - NVIDIA Alpamayo, a VLA driving policy with chain-of-causation reasoning
+* [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving policy
+* [Transfuser](https://huggingface.co/ln2697/tfv6_navsim) - transformer-based policy trained for [NAVSIM](https://github.com/autonomousvision/navsim/blob/main/docs/agents.md#latenttransfuseragent) (provisional)
+
+Stay tuned for additional model support. [Contributions](#contributing) from the community are appreciated.
+
+
 ## Documentation & Resources
 
 - **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions

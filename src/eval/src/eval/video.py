@@ -55,7 +55,7 @@ def render_and_save_video_for_eval_container(
                 batch_id=batch_id,
                 rollout_id=rollout_id,
                 camera_id=cfg.video.camera_id_to_render,
-                layout_id=video_layout.index,
+                layout_id=video_layout,
             ),
         )
 

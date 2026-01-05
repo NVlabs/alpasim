@@ -167,9 +167,7 @@ def _aggregate_eval_videos(
         os.makedirs(condition_folder, exist_ok=True)
         for row in filtered_df.iter_rows(named=True):
             layout_id = (
-                cfg.video.video_layouts[0].index
-                if len(cfg.video.video_layouts) > 0
-                else 0
+                cfg.video.video_layouts[0] if len(cfg.video.video_layouts) > 0 else 0
             )
             video_file_name = VIDEO_FILE_NAME_FORMAT.format(
                 clipgt_id=row["clipgt_id"],
