@@ -5,8 +5,7 @@ This module contains utility functions for Alpamayo Sim that are shared across m
 ## Components
 
 - **artifact.py**: Artifact management and loading utilities
-- **trajectory.py**/**qvec.py**: Trajectory data structures and operations (QVec, Trajectory,
-  DynamicState)
+- **trajectory.py**/**qvec.py**: Trajectory data structures and operations (QVec, Trajectory, DynamicState)
 - **logs.py**: ASL log reading and writing utilities
 - **scenario.py**: Scenario data structures (AABB, TrafficObjects, Rig, VehicleConfig, CameraId)
 - **asl_to_frames/**: Command-line tool for extracting frames from ASL logs
@@ -14,8 +13,7 @@ This module contains utility functions for Alpamayo Sim that are shared across m
 
 ## Installation
 
-This module is typically installed as a dependency by other Alpasim services. It requires
-`alpasim_grpc` for protobuf message definitions.
+This module is typically installed as a dependency by other Alpasim services. It requires `alpasim_grpc` for protobuf message definitions.
 
 ## Usage
 
@@ -36,10 +34,9 @@ Within `alpasim_utils`, there are tools for reading/writing alpasim logs (`.asl`
 gRPC trajectory messages into python objects with useful methods.
 
 There are also two executables that take advantage of these utilities:
-
-- `uv run -m alpasim_utils.print_asl <args>` is useful for dumping the content of an `.asl` file in
-  human-readable string format for debugging purposes
-- `uv run -m alpasim_utils.asl_to_frames` allows for dumping raw frames or `.mp4` videos which were
-  provided to the egodriver in the course of the simulation
+* `uv run -m alpasim_utils.print_asl <args>` is useful for dumping the content of an `.asl` file
+in human-readable string format for debugging purposes
+* `uv run -m alpasim_utils.asl_to_frames` allows for dumping raw frames or `.mp4` videos which were
+provided to the egodriver in the course of the simulation
 
 In both cases use `--help` to learn about the command line arguments.
