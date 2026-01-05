@@ -9,8 +9,8 @@ This tutorial makes three assumptions
 
 # Level 1
 
-In level 1 we focus we run a default simulation with the VaVAM driver policy, learn how to interpret
-the results, and perform basic debugging.
+In level 1 we run a default simulation with the VaVAM driver policy, learn how to interpret the
+results, and perform basic debugging.
 
 ## Architecture of AlpaSim
 
@@ -177,8 +177,8 @@ driver).
 
 ### VaVAM
 
-To run with the default [VaVAM](https://github.com/valeoai/VideoActionModel) policy use
-`driver=[vavam,vavam_runtime_configs]`. For example, run the wizard with the following command:
+The wizard uses [VaVAM](https://github.com/valeoai/VideoActionModel) as the default driver. To
+explicitly define the driver config, one can use:
 
 ```bash
 alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam,vavam_runtime_configs]
