@@ -163,7 +163,7 @@ weights if they do not exist locally.
 > :warning: The Alpamayo R1 model is large--the download may timeout, requiring you to re-run.
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1.yaml,ar1_runtime_configs.yaml]
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs]
 ```
 
 If you have already downloaded the Alpamayo R1 model weights, you can specify the path to the model
