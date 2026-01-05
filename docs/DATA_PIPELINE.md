@@ -1,27 +1,32 @@
 # Alpasim data
-This document is meant to describe data handling in Alpasim to help test and data engineers build the test cases they want and troubleshoot issues.
+
+This document is meant to describe data handling in Alpasim to help test and data engineers build
+the test cases they want and troubleshoot issues.
 
 ## asl files
+
 The output of simulation in alpasim are `asl` files (it stands for AlpaSim Log). These are a
 size-delimited protobuf stream with a custom schema defined
 [here](/src/grpc/alpasim_grpc/v0/logging.proto). Each rollout will create its own `asl` file with
 three types of messages:
-* A metadata header (see `RolloutMetadata`) aiming to help with reproducibility and book keeping
-* Actor poses (see `ActorPoses`) messages which inform about the location of all actors (including
-`'EGO'`) in global coordinate space
-* Microservice requests and responses (see `*_request`/`*_return` messages) which enable
-reproducing behavior of a given service in replay mode without starting up the entire simulator
 
-> :green_book: `RolloutCameraImage` requests  allow for assembling an `.mp4` video out of an `.asl`
-log.
+- A metadata header (see `RolloutMetadata`) aiming to help with reproducibility and book keeping
+- Actor poses (see `ActorPoses`) messages which inform about the location of all actors (including
+  `'EGO'`) in global coordinate space
+- Microservice requests and responses (see `*_request`/`*_return` messages) which enable reproducing
+  behavior of a given service in replay mode without starting up the entire simulator
+
+> :green_book: `RolloutCameraImage` requests allow for assembling an `.mp4` video out of an `.asl`
+> log.
 
 > :warning: The simulation header doesn't specify the `usdz` file uuid.
 
 ### Reading asl logs
+
 `alpasim-grpc` provides [async_read_pb_log](//src/utils/alpasim_utils/logs.py) for reading `asl`
-logs as a stream of messages.
-An example usage to print the first 20 messages in a log (since `async_read_pb_log` is an async
-function it needs to be executed from a jupyter notebook or submitted to an async runtime loop):
+logs as a stream of messages. An example usage to print the first 20 messages in a log (since
+`async_read_pb_log` is an async function it needs to be executed from a jupyter notebook or
+submitted to an async runtime loop):
 
 ```python
 from alpasim_grpc.utils.logs import async_read_pb_log

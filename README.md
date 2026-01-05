@@ -1,8 +1,8 @@
 # AlpaSim: A modular, lightweight, and data-driven research simulator for autonomous driving
+
 <div align="center">
   <img src="docs/assets/images/thumbnail.gif" alt="AlpaSim Simulation Demo" width="600">
 </div>
-
 
 ## What is AlpaSim?
 
@@ -18,33 +18,42 @@ Suitable use cases include:
 - **Performance Benchmarking/Regression Testing**: Compare different models and configurations
 - **Debugging**: Understand and debug complex autonomous driving behaviors
 
-
 ### **Sensor Fidelity**
+
 - Neural Rendering (NuRec) integration for photorealistic sensor simulation of novel views
 - High-fidelity camera feeds with configurable field-of-view, resolution, and frame rates
 - Realistic sensor noise and environmental conditions
 
 ### **Research Hackability**
+
 - Python-based implementation built for rapid prototyping and experimentation
-- Modular grpc interface design allows researchers to swap out components with custom implementations
+- Modular grpc interface design allows researchers to swap out components with custom
+  implementations
 - Extensive configuration options and debugging tools
 
 ### **Horizontal Scalability**
+
 - Microservices architecture enabling distributed computing
 - Scale individual components for optimal load balancing
 - Support for multi-node deployments
 
-To learn more about the design principles and architecture, check out the [system design docs](docs/DESIGN.md).
-
+To learn more about the design principles and architecture, check out the
+[system design docs](docs/DESIGN.md).
 
 ## Driving Policies
+
 AlpaSim currently supports the following driver policies:
-* [Alpamayo-R1](https://github.com/NVlabs/alpamayo) - NVIDIA Alpamayo, a VLA driving policy with chain-of-causation reasoning
-* [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving policy
-* [Transfuser](https://huggingface.co/ln2697/tfv6_navsim) - transformer-based policy trained for [NAVSIM](https://github.com/autonomousvision/navsim/blob/main/docs/agents.md#latenttransfuseragent) (provisional)
 
-Stay tuned for additional model support. [Contributions](#contributing) from the community are appreciated.
+- [Alpamayo-R1](https://github.com/NVlabs/alpamayo) - NVIDIA Alpamayo, a VLA driving policy with
+  chain-of-causation reasoning
+- [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving
+  policy
+- [Transfuser](https://huggingface.co/ln2697/tfv6_navsim) - transformer-based policy trained for
+  [NAVSIM](https://github.com/autonomousvision/navsim/blob/main/docs/agents.md#latenttransfuseragent)
+  (provisional)
 
+Stay tuned for additional model support. [Contributions](#contributing) from the community are
+appreciated.
 
 ## Documentation & Resources
 
@@ -55,25 +64,27 @@ Stay tuned for additional model support. [Contributions](#contributing) from the
 - **[API Reference](src/grpc/)**: gRPC API documentation
 
 ### **Sample Data**
-- **Hugging Face Dataset**: [PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
-- **Sample Artifacts**: Included in the repository via Git LFS
 
+- **Hugging Face Dataset**:
+  [PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
+- **Sample Artifacts**: Included in the repository via Git LFS
 
 ## Contributing
 
-We welcome contributions from the research community! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
+We welcome contributions from the research community! Please see our
+[Contributing Guide](CONTRIBUTING.md) for details on:
 
 - Code style and conventions
 - Testing requirements
 - Pull request process
 - Development setup
 
-
 ## License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
 
 ## Citation
+
 If you use this software, please cite it as follows:
 
 ```
@@ -105,6 +116,7 @@ If you use this software, please cite it as follows:
 ```
 
 ## Project Contributors:
+
 Contributors in each topic in alphabetical order
 
 **Project Lead:** Maximilian Igl
@@ -113,9 +125,11 @@ Contributors in each topic in alphabetical order
 
 **Architecture Design & Networking:** Michal Tyszkiewicz
 
-**Open Sourcing:** Guillermo Garcia Cobo, Maximilian Igl, Peter Karkus, Ellie Tanimura, Michael Watson
+**Open Sourcing:** Guillermo Garcia Cobo, Maximilian Igl, Peter Karkus, Ellie Tanimura, Michael
+Watson
 
-**Infrastructure & Wizard:** Maximilian Igl, Aaron Smith, Michal Tyszkiewicz, Michael Watson, Qi Wu (SLURM deployment), Le Zhang (Data management)
+**Infrastructure & Wizard:** Maximilian Igl, Aaron Smith, Michal Tyszkiewicz, Michael Watson, Qi Wu
+(SLURM deployment), Le Zhang (Data management)
 
 **Runtime:** Maximilian Igl, Aaron Smith, Ellie Tanimura, Michal Tyszkiewicz, Michael Watson
 
@@ -128,15 +142,17 @@ Contributors in each topic in alphabetical order
 **Testing & debugging:** Guillermo Garcia Cobo, Peter Karkus, Ellie Tanimura
 
 **Service Modules:**
-* Driver integration: Maximilian Igl, Peter Karkus, Michal Tyszkiewicz
-* Evaluation: Yulong Cao, Maximilian Igl
-* Controller: Michael Watson
-* Physics: Riccardo de Lutio
-* Trafficsim: Maximilian Igl, Boris Ivanovic
+
+- Driver integration: Maximilian Igl, Peter Karkus, Michal Tyszkiewicz
+- Evaluation: Yulong Cao, Maximilian Igl
+- Controller: Michael Watson
+- Physics: Riccardo de Lutio
+- Trafficsim: Maximilian Igl, Boris Ivanovic
 
 **Senior Mgmt:** Sanja Fidler, Zan Gojcic, Boris Ivanovic, Marco Pavone
 
-**Acknowledgements for additional contributions:** Fabian Barajas, Kashyap Chitta, Ankit Gupta, Laura Leal-Taixe, Nicole Yang
+**Acknowledgements for additional contributions:** Fabian Barajas, Kashyap Chitta, Ankit Gupta,
+Laura Leal-Taixe, Nicole Yang
 
 <div align="center">
   <strong>Built for researchers, by researchers</strong><br>
