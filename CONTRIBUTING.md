@@ -21,8 +21,8 @@ also includes rebuilding the docker container and uploading the corresponding sq
 After a merge request is merged, the pipeline on main will check the following, for each package:
 
 1. Was the code in this package changed in this commit?
-2. If so, does a git tag already exist for this package with the same version number?
-3. If not, this indicates a new tag will be created and the new version of the package should be
+1. If so, does a git tag already exist for this package with the same version number?
+1. If not, this indicates a new tag will be created and the new version of the package should be
    published.
 
 ### Common challenges
@@ -64,14 +64,14 @@ There are four primary coordinate systems that are used in simulations:
 
 1. The `local` frame: an inertial frame, fixed on a per-scenario basis, which represents an ENU
    frame defined by NRE.
-2. The `rig` frame: a body-fixed frame which has the following properties:
+1. The `rig` frame: a body-fixed frame which has the following properties:
    - The x-axis points forward
    - The y-axis points to the left when looking forward
    - The z-axis points up
    - The origin is at the center of the rear axle, projected onto the ground plane
-3. The `aabb` (Axis-Aligned Bounding Box) frame: a body-fixed frame, defined with the same
+1. The `aabb` (Axis-Aligned Bounding Box) frame: a body-fixed frame, defined with the same
    orientation as the rig definition, but the origin at the center of the object bounding box.
-4. The `ecef` (Earth-Centered, Earth-Fixed) frame: an inertial global frame, based on WGS84.
+1. The `ecef` (Earth-Centered, Earth-Fixed) frame: an inertial global frame, based on WGS84.
 
 Additionally, to mimic proprioceptive noise, the ego-position sent to the driver is in a `noised`,
 or "estimated" frame (can either be thought of as a `local -> rig_est` transformation or,
@@ -164,6 +164,7 @@ position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
 #### Overview over which coordinate frames are used for communiation with services:
 
 - **Driver service**
+
   - `submit_trajectory`: sends the noised history in the `local` frame (i.e. the noisy rig location
     in the local coordinate frame)
   - `submit_route`: sends waypoints in the `noisy rig` frame.

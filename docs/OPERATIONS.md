@@ -32,7 +32,7 @@ Example:
 
 - `gpus: [0, 1, 2, 3]` --> 4 containers (one per GPU)
 - `replicas_per_container: 4` --> 4 replicas per container
-- **Total**: 4 \* 4 = 16 service replicas
+- **Total**: 4 * 4 = 16 service replicas
 
 #### Balancing Replicas and Concurrent Rollouts
 
@@ -118,9 +118,9 @@ Changing inference frequency is complex and requires coordinating multiple timin
 The simulator has multiple synchronized "clocks":
 
 1. **Driver inference** (`control_timestep_us`) - How often the model makes decisions
-2. **Camera frames** (`frame_interval_us`) - How often cameras capture images
-3. **GPS/Pose updates** (`egopose_interval_us`) - How often position is updated
-4. **Simulation start** (`time_start_offset_us`) - Initial offset to avoid artifacts
+1. **Camera frames** (`frame_interval_us`) - How often cameras capture images
+1. **GPS/Pose updates** (`egopose_interval_us`) - How often position is updated
+1. **Simulation start** (`time_start_offset_us`) - Initial offset to avoid artifacts
 
 For correct operation, these must be mathematically aligned.
 
@@ -136,19 +136,19 @@ To change to 5Hz inference (200ms between decisions):
    runtime.default_scenario_parameters.control_timestep_us=200000  # 200ms = 5Hz
    ```
 
-2. **Match GPS update rate** (`egopose_interval_us` must equal `control_timestep_us`):
+1. **Match GPS update rate** (`egopose_interval_us` must equal `control_timestep_us`):
 
    ```bash
    runtime.default_scenario_parameters.egopose_interval_us=200000
    ```
 
-3. **Set time offset** (must be a multiple of `control_timestep_us`):
+1. **Set time offset** (must be a multiple of `control_timestep_us`):
 
    ```bash
    runtime.default_scenario_parameters.time_start_offset_us=600000  # 3 * 200ms
    ```
 
-4. **Match camera frame rate** (VaVam default has 1 camera):
+1. **Match camera frame rate** (VaVam default has 1 camera):
 
    ```bash
    runtime.default_scenario_parameters.cameras.0.frame_interval_us=200000
@@ -178,10 +178,10 @@ Note: Add `cameras.1.frame_interval_us=200000` if using 2-camera configs
 To use 30Hz cameras (33.3ms) but 10Hz inference (100ms):
 
 1. **Camera captures at 30Hz**: `frame_interval_us=33334` (33.3ms)
-2. **Inference runs at 10Hz**: `control_timestep_us=100002` (must be 3 × 33334)
-3. **Subsample frames**: `driver.inference.Cframes_subsample=3` (use every 3rd frame)
-4. **Egopose matches inference**: `egopose_interval_us=100002`
-5. **Time offset aligns**: `time_start_offset_us=300006` (3 × 100002)
+1. **Inference runs at 10Hz**: `control_timestep_us=100002` (must be 3 × 33334)
+1. **Subsample frames**: `driver.inference.Cframes_subsample=3` (use every 3rd frame)
+1. **Egopose matches inference**: `egopose_interval_us=100002`
+1. **Time offset aligns**: `time_start_offset_us=300006` (3 × 100002)
 
 **Full command** (based on `sim/20s_at_30Hz.yaml`):
 
@@ -284,7 +284,7 @@ The simulation evaluates driving quality across multiple dimensions. Results are
   - Aggregated using MAX over time (worst deviation during the drive)
 - **`duration_frac_20s`**: Fraction of 20s drive completed before any failure
   - 1.0 = completed full 20s without issues
-  - <1.0 = failed early (collision, off-road, or excessive deviation)
+  - \<1.0 = failed early (collision, off-road, or excessive deviation)
 
 **Distance Between Incidents**:
 
@@ -348,13 +348,13 @@ This 3×3 grid plot includes:
 
 - **High queue depth** on a service → Increase replicas_per_container or n_concurrent_rollouts
 - **High RPC duration** → Service is slow, consider optimization or scaling
-- **Low GPU utilization** (<50%) → Underutilized, can increase load
+- **Low GPU utilization** (\<50%) → Underutilized, can increase load
 - **High GPU utilization** (>90%) → May be saturated, check for throttling
 - **Unbalanced service config** → Total capacity should match across all services
 
 **Performance Indicators**:
 
-- **Low idle percentage** (<20%) → Runtime is busy, good utilization
+- **Low idle percentage** (\<20%) → Runtime is busy, good utilization
 - **High idle percentage** (>80%) → Lots of waiting, check for bottlenecks
 - **Consistent rollout times** → Good stability
 - **Wide rollout time variance** → Investigate outliers in logs

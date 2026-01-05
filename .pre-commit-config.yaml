@@ -17,11 +17,14 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
         args: ["--maxkb=1024"]
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.21
     hooks:
-      - id: prettier
-        types: [markdown]
+      - id: mdformat
+        args: ["--wrap", "100"]
+        additional_dependencies:
+          - mdformat-gfm  # GitHub Flavored Markdown support
+          - mdformat-myst  # Handle math blocks and front matter
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:

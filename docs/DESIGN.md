@@ -3,8 +3,8 @@
 Alpasim is an AV simulator focused on three principles:
 
 1. Sensor fidelity
-2. Horizontal scalability
-3. Hackability for research
+1. Horizontal scalability
+1. Hackability for research
 
 Real-time and very precise physics are non-goals.
 

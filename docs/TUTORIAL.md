@@ -3,8 +3,8 @@
 This tutorial makes three assumptions
 
 1. It targets an AlpaSim user rather than an AlpaSim developer
-2. It treats docker compose` as the primary execution environment.
-3. It focuses on letting the user do simple things quick and leaves detail for later. This is
+1. It treats docker compose\` as the primary execution environment.
+1. It focuses on letting the user do simple things quick and leaves detail for later. This is
    reflected in subdivision into three levels of complexity.
 
 # Level 1
@@ -30,11 +30,11 @@ Let's start by executing a run with default settings.
 
 1. Follow [instructions in onboarding](/docs/ONBOARDING.md) to ensure necessary dependencies have
    been installed
-2. Set up your environment with:
+1. Set up your environment with:
    - `source setup_local_env.sh`
    - This will compile protos, download an example driver model, ensure you have a valid Hugging
      Face token, and install the `alpasim_wizard` command line tool.
-3. Run the wizard to create the necessary config files, download the scene (if necessary), and run a
+1. Run the wizard to create the necessary config files, download the scene (if necessary), and run a
    simulation _ `alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial` _ This will create a
    `tutorial/` directory with all necessary config files and run the simulation
 
@@ -325,31 +325,35 @@ idea behind the approach is to:
 The following steps might be used to show how to debug the controller component with breakpoints in
 the context of a full simulation.
 
-1.  (Terminal 1) Run the wizard to generate config files without running the simulation:
-    ```bash
-    alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
-    ```
-2.  (Terminal 1) `cd` to the generated directory (`tutorial_dbg`) and note the command/port of the
-    component to be replaced in `docker-compose.yaml`. For the simulation case, we are looking for
-    components in the `sim` profile, which includes `controller-0`, `driver-0`, `physics-0`,
-    `runtime-0`, and `sensorsim-0`. Here we will replace `controller-0`, which in this case has been
-    allocated port 6003.
-3.  (Terminal 2) `cd` into the the controller src directory (`<repo_root>/src/controller/`) and
-    prepare to start the controller. Note that there are various ways to accomplish this, including
-    through an IDE. Add breakpoints as desired in the controller code and then start the controller
-    with:
+1. (Terminal 1) Run the wizard to generate config files without running the simulation:
 
-        ```bash
-        cd <repo_root>/src/controller/
-        mkdir my_controller_log_dir
-        # Note: port (6003 in this case) must match the port allocated in docker-compose.yaml
-        uv run python -m alpasim_controller.server --port=6003 --log_dir=my_controller_log_dir --log-level=INFO
-        ```
+   ```bash
+   alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
+   ```
 
-4.  (Terminal 1) Start the rest of the simulation with docker compose:
-    ```bash
-    docker compose -f docker-compose.yaml --profile sim up runtime-0 driver-0 physics-0 sensorsim-0
-    ```
+1. (Terminal 1) `cd` to the generated directory (`tutorial_dbg`) and note the command/port of the
+   component to be replaced in `docker-compose.yaml`. For the simulation case, we are looking for
+   components in the `sim` profile, which includes `controller-0`, `driver-0`, `physics-0`,
+   `runtime-0`, and `sensorsim-0`. Here we will replace `controller-0`, which in this case has been
+   allocated port 6003.
+
+1. (Terminal 2) `cd` into the the controller src directory (`<repo_root>/src/controller/`) and
+   prepare to start the controller. Note that there are various ways to accomplish this, including
+   through an IDE. Add breakpoints as desired in the controller code and then start the controller
+   with:
+
+   ```bash
+   cd <repo_root>/src/controller/
+   mkdir my_controller_log_dir
+   # Note: port (6003 in this case) must match the port allocated in docker-compose.yaml
+   uv run python -m alpasim_controller.server --port=6003 --log_dir=my_controller_log_dir --log-level=INFO
+   ```
+
+1. (Terminal 1) Start the rest of the simulation with docker compose:
+
+   ```bash
+   docker compose -f docker-compose.yaml --profile sim up runtime-0 driver-0 physics-0 sensorsim-0
+   ```
 
 ### Using VSCode Debugger (Optional)
 
@@ -377,8 +381,8 @@ built-in debugger:
 ```
 
 2. Set breakpoints in the controller code
-3. Press F5 (or go to Run and Debug → "Debug Controller")
-4. Your breakpoints will hit as the simulation runs!
+1. Press F5 (or go to Run and Debug → "Debug Controller")
+1. Your breakpoints will hit as the simulation runs!
 
 **Note:** Make sure the `--port` argument matches the port allocated in `docker-compose.yaml`.
 
@@ -398,10 +402,10 @@ from shutting down the docker containers after each simulation by setting
    wizard.debug_flags.use_localhost=True \
    runtime.endpoints.do_shutdown=False
    ```
-2. (Terminal 1) `cd` to the generated directory (`tutorial_dbg_runtime`) and start the non-runtime
+1. (Terminal 1) `cd` to the generated directory (`tutorial_dbg_runtime`) and start the non-runtime
    services:
    `bash     docker compose -f docker-compose.yaml --profile sim up driver-0 controller-0 physics-0 sensorsim-0     `
-3. (Terminal 2) `cd` into the the runtime src directory (`<repo_root>/src/runtime/`) and prepare to
+1. (Terminal 2) `cd` into the the runtime src directory (`<repo_root>/src/runtime/`) and prepare to
    start the runtime. The exact command paths will vary, but, to use the configuration generated
    from the earlier steps, an example command would be:
    `bash     cd <repo_root>/src/runtime/     # Following command is based on the docker-compose.yaml generated by the wizard     uv run python -m alpasim_runtime.simulate \     --usdz-glob=../../data/nre-artifacts/all-usdzs/**/*.usdz \     --user-config=../../tutorial_dbg_runtime/generated-user-config-0.yaml \     --network-config=../../tutorial_dbg_runtime/generated-network-config.yaml \     --log-dir=../../tutorial_dbg_runtime \     --log-level=INFO     `
@@ -433,5 +437,5 @@ built-in debugger:
 ```
 
 2. Set breakpoints in the runtime code
-3. Press F5 (or go to Run and Debug → "Debug Runtime")
-4. Your breakpoints will hit as the simulation runs!
+1. Press F5 (or go to Run and Debug → "Debug Runtime")
+1. Your breakpoints will hit as the simulation runs!
