@@ -4,7 +4,9 @@
 
 Explain the new feature or capability.
 
-**Issue:** Closes #...
+**Issue:**
+
+Closes #...
 
 **Motivation:**
 

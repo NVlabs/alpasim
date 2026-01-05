@@ -1,10 +1,16 @@
 # Bug Fix
 
-**Issue:** Closes #...
+**Issue:**
 
-**Root Cause:** Describe what caused the bug.
+Closes #...
 
-**Fix Summary:** Explain what was changed to resolve it.
+**Root Cause:**
+
+Describe what caused the bug.
+
+**Fix Summary:**
+
+Explain what was changed to resolve it.
 
 **Tests:**
 
