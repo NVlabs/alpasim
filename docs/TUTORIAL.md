@@ -169,6 +169,19 @@ alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,a
 If you have already downloaded the Alpamayo R1 model weights, you can specify the path to the model
 directory by setting the `model.checkpoint_path` configuration field.
 
+### Run with the Transfuser Model (provisional)
+Another example showing how to use a different driver model exists for the Transfuser model. To run,
+first, one must download the Transfuser model weights/config from HuggingFace:
+```bash
+hf download  longpollehn/tfv6_navsim model_0060.pth --local-dir=data/drivers/transfuser/
+hf download  longpollehn/tfv6_navsim config.json --local-dir=data/drivers/transfuser/
+```
+
+Then, run the wizard with the following command:
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[transfuser,transfuser_runtime_configs]
+```
+
 ### Code Changes
 Code changes in the repo are automatically mounted into the docker containers at runtime, with the
 exception that the virtual environment of the container is not synced, so changes that rely on new
