@@ -17,6 +17,13 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
         args: ["--maxkb=1024"]
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 0.7.21
+    hooks:
+      - id: mdformat
+        additional_dependencies:
+          - mdformat-gfm  # GitHub Flavored Markdown support
+          - mdformat-tables  # Better table formatting
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:

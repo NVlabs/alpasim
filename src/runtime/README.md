@@ -1,10 +1,19 @@
 # Alpasim runtime
 
-Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md#coordinate-systems) for the coordinate frame conventions used by the runtime services.
+Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md#coordinate-systems) for the coordinate frame
+conventions used by the runtime services.
 
 ## Configuration
+
 ### Zero delay mode
-The simulator has multiple "clocks" ticking under the hood, triggering events for each camera, egopose information (GPS) and policy decision-making. In general a policy decision may be requested "out of sync" with the input information, requiring the policy to extrapolate to the current state (pose) in order to make decisions for the future. This is challenging and may be desirable to turn off to simplify debugging. The example config below explains how to do that. The flag `scenarios[i].assert_zero_decision_delay` enables an assertion to warn the user if they have misconfigured the remaining parameters.
+
+The simulator has multiple "clocks" ticking under the hood, triggering events for each camera,
+egopose information (GPS) and policy decision-making. In general a policy decision may be requested
+"out of sync" with the input information, requiring the policy to extrapolate to the current state
+(pose) in order to make decisions for the future. This is challenging and may be desirable to turn
+off to simplify debugging. The example config below explains how to do that. The flag
+`scenarios[i].assert_zero_decision_delay` enables an assertion to warn the user if they have
+misconfigured the remaining parameters.
 
 ```yaml
 scenarios:
