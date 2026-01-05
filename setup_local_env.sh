@@ -57,4 +57,19 @@ if [[ -z "${HF_TOKEN}" ]]; then
     return 1
 fi
 
+# Ensure that the hugging face cache is available
+if [[ -z "${HF_HOME}" ]]; then
+    echo "Note: Hugging Face cache directory (HF_HOME) not found in environment."
+    FALLBACK_HF_HOME="$HOME/.cache/huggingface"
+    echo "Falling back to default cache directory at $FALLBACK_HF_HOME"
+    if [[ ! -d "$FALLBACK_HF_HOME" ]]; then
+        echo "Creating Hugging Face cache directory at $FALLBACK_HF_HOME"
+        mkdir -p "$FALLBACK_HF_HOME"
+        if [[ $? -ne 0 ]]; then
+            echo "❌ Failed to create Hugging Face cache directory at $FALLBACK_HF_HOME"
+            return 1
+        fi
+    fi
+fi
+
 echo "Setup complete"

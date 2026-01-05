@@ -16,7 +16,6 @@ defines:
   driver_model: ???
 
   # defaults will work out of the box \/
-  alpackages: "${defines.filesystem}/alpackages"
   drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
 
@@ -149,6 +148,7 @@ services:
       - "${defines.drivers}:/mnt/drivers"
       - "${wizard.log_dir}:/mnt/output" # optional output like the debug images
       - "${repo-relative:'src'}:/repo/src"
+      - "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}:/root/.cache/huggingface"
     command:
       - "uv run -m alpasim_driver.main"
       - "--config-path=/mnt/output"
@@ -377,7 +377,7 @@ eval:
 
   video:
     render_video: True
-    video_layouts: ["default"]  # ["default", "reasoning_overlay"]
+    video_layouts: ["DEFAULT"]  # ["DEFAULT", "REASONING_OVERLAY"]
     camera_id_to_render: camera_front_wide_120fov
     reasoning_text_refresh_interval_s: 1.0  # for reasoning overlay layout only
     overlay_plans_on_camera: True

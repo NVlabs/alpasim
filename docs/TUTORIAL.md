@@ -120,8 +120,8 @@ best to consult that log to see where the first errors occurred. The microservic
 additional logs that can be useful for debugging, but that is not covered here.
 
 # Level 2
-In level 2 we learn to customize the simulation (i.e. run our own code, change simulated scenes)
-and understand the architecture in more depth.
+In level 2 we learn to customize the simulation (i.e. run our own code, change simulated scenes,
+change the driver model, etc.) and understand the architecture in more depth.
 
 ## AlpaSim Wizard Configuration
 At *level 1* the wizard was run using some default arguments, but here we learn to interact with
@@ -154,6 +154,20 @@ by running the wizard as follows:
 ```bash
 alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.default_scenario_parameters.n_rollouts=8
 ```
+
+### Run with the Alpamayo R1 Driver Model
+To run with the Alpamayo R1 driver model, one must apply two additional configuration changes: one
+for the driver, and one for the runtime. The driver service will automatiocally download the model
+weights if they do not exist locally.
+> :warning: The Alpamayo R1 model is large--please ensure that your GPU has the capacity to run it.
+> :warning: The Alpamayo R1 model is large--the download may timeout, requiring you to re-run.
+
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1.yaml,ar1_runtime_configs.yaml]
+```
+
+If you have already downloaded the Alpamayo R1 model weights, you can specify the path to the model
+directory by setting the `model.checkpoint_path` configuration field.
 
 ### Code Changes
 Code changes in the repo are automatically mounted into the docker containers at runtime, with the
