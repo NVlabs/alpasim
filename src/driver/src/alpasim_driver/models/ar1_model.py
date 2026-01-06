@@ -178,28 +178,32 @@ class AR1Model(BaseTrajectoryModel):
             [(p.timestamp_us, p.pose) for p in poses], key=lambda x: x[0]
         )
         timestamps_us = np.array([t for t, _ in pose_data], dtype=np.float64)
-        ego_history_local_xyz = np.array(
+        ego_history_xyz_in_local = np.array(
             [[p.vec.x, p.vec.y, p.vec.z] for _, p in pose_data]
         )
-        ego_history_local_quats = np.array(
+        ego_history_quat_rig_to_local = np.array(
             [[p.quat.x, p.quat.y, p.quat.z, p.quat.w] for _, p in pose_data]
         )
 
         # 2. Normalize and adjust quaternions for consistent interpolation
-        ego_history_local_quats = ego_history_local_quats / np.linalg.norm(
-            ego_history_local_quats, axis=1, keepdims=True
+        ego_history_quat_rig_to_local = ego_history_quat_rig_to_local / np.linalg.norm(
+            ego_history_quat_rig_to_local, axis=1, keepdims=True
         )
-        ego_history_local_quats = _adjust_orientation(ego_history_local_quats)
+        ego_history_quat_rig_to_local = _adjust_orientation(
+            ego_history_quat_rig_to_local
+        )
 
         # 3. Create interpolators
         xyz_interp = interp1d(
             timestamps_us,
-            ego_history_local_xyz,
+            ego_history_xyz_in_local,
             axis=0,
             kind="linear",
             fill_value="extrapolate",
         )
-        rot_interp = Slerp(timestamps_us, Rotation.from_quat(ego_history_local_quats))
+        rot_interp = Slerp(
+            timestamps_us, Rotation.from_quat(ego_history_quat_rig_to_local)
+        )
 
         # 4. Calculate target history timestamps (going backward from t0)
         history_timestamps_us = np.array(
@@ -222,31 +226,39 @@ class AR1Model(BaseTrajectoryModel):
             )
 
         # 5. Interpolate positions and rotations at target timestamps
-        ego_history_local_xyz = xyz_interp(history_timestamps_us)
-        ego_history_local_rot = rot_interp(history_timestamps_us)
-        ego_history_local_quat = ego_history_local_rot.as_quat()
+        ego_history_xyz_in_local = xyz_interp(history_timestamps_us)
+        ego_history_rot_rig_to_local = rot_interp(history_timestamps_us)
+        ego_history_quat_rig_to_local = ego_history_rot_rig_to_local.as_quat()
 
-        # 6. Transform to local frame relative to t0 (last history step)
-        ego_t0_local_xyz = ego_history_local_xyz[-1].copy()
-        ego_t0_local_quat = ego_history_local_quat[-1].copy()
-        ego_t0_local_rot = Rotation.from_quat(ego_t0_local_quat)
-        ego_t0_local_rot_inv = ego_t0_local_rot.inv()
+        # 6. Transform to rig frame relative to t0 (last history step)
+        ego_xyz_rig_t0_in_local = ego_history_xyz_in_local[-1].copy()
+        ego_quat_rig_t0_to_local = ego_history_quat_rig_to_local[-1].copy()
+        ego_rot_rig_t0_to_local = Rotation.from_quat(ego_quat_rig_t0_to_local)
+        ego_rot_local_to_rig_t0 = ego_rot_rig_t0_to_local.inv()
 
-        # Transform positions and rotations to rig frame
-        ego_history_rig_xyz = ego_t0_local_rot_inv.apply(
-            ego_history_local_xyz - ego_t0_local_xyz
+        # Transform positions and rotations to rig_t0 frame
+        ego_history_xyz_in_rig_t0 = ego_rot_local_to_rig_t0.apply(
+            ego_history_xyz_in_local - ego_xyz_rig_t0_in_local
         )
-        ego_history_rig_rot = (ego_t0_local_rot_inv * ego_history_local_rot).as_matrix()
+        ego_history_rot_rig_to_rig_t0 = (
+            ego_rot_local_to_rig_t0 * ego_history_rot_rig_to_local
+        ).as_matrix()
 
         # 7. Convert to torch tensors with batch dimensions: (B=1, n_traj_group=1, T, ...)
-        ego_history_rig_xyz_tensor = (
-            torch.from_numpy(ego_history_rig_xyz).float().unsqueeze(0).unsqueeze(0)
+        ego_history_xyz_in_rig_t0_tensor = (
+            torch.from_numpy(ego_history_xyz_in_rig_t0)
+            .float()
+            .unsqueeze(0)
+            .unsqueeze(0)
         )
-        ego_history_rig_rot_tensor = (
-            torch.from_numpy(ego_history_rig_rot).float().unsqueeze(0).unsqueeze(0)
+        ego_history_rot_rig_to_rig_t0_tensor = (
+            torch.from_numpy(ego_history_rot_rig_to_rig_t0)
+            .float()
+            .unsqueeze(0)
+            .unsqueeze(0)
         )
 
-        return ego_history_rig_xyz_tensor, ego_history_rig_rot_tensor
+        return ego_history_xyz_in_rig_t0_tensor, ego_history_rot_rig_to_rig_t0_tensor
 
     def _preprocess_images(
         self, camera_images: dict[str, list[tuple[int, np.ndarray]]]
