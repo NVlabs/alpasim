@@ -48,7 +48,7 @@ fi
 
 # Install Wizard in development mode
 echo "Installing Wizard in development mode..."
-uv tool install -e "${REPO_ROOT}/src/wizard"
+uv tool install --python 3.12 -e "${REPO_ROOT}/src/wizard"
 
 # Ensure Hugging Face token is available (needed to download files)
 if [[ -z "${HF_TOKEN}" ]]; then
