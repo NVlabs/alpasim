@@ -146,11 +146,18 @@ class USDZManager:
 
     sim_scenes: pl.DataFrame
     sim_suites: pl.DataFrame
-    s3: S3Connection
     cache_dir: str
+    _s3: S3Connection | None = None
 
     ALL_USDZ_DIR_NAME: ClassVar[str] = "all-usdzs"
     SCENESETS_DIR_NAME: ClassVar[str] = "scenesets"
+
+    @property
+    def s3(self) -> S3Connection:
+        """Lazily create S3 connection only when needed for Swiftstack downloads."""
+        if self._s3 is None:
+            self._s3 = S3Connection.from_env_vars()
+        return self._s3
 
     @property
     def scenesets_dir(self) -> str:
@@ -185,7 +192,6 @@ class USDZManager:
         manager = cls(
             sim_scenes=sim_scenes,
             sim_suites=sim_suites,
-            s3=S3Connection.from_env_vars(),
             cache_dir=cache_dir,
         )
 
