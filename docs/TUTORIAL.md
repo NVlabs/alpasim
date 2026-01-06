@@ -185,7 +185,7 @@ alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam
 
 ### Alpamayo-R1
 
-To run with the [Alpamayo-R1](https://github.com/NVlabs/alpamayo) model use
+To run with the [Alpamayo-R1](https://github.com/NVlabs/alpamayo) 10b model use
 `driver=[ar1,ar1_runtime_configs]`.
 
 First, one may download the model weights from HuggingFace:
@@ -210,15 +210,21 @@ alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,a
 > capacity to run it.
 
 To visualize the predicted chain-of-causation reaoning you can change the generated video layout
-with `eval.video.video_layouts=[reasoning_overlay]`.
+
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+```
 
 ### Transfuser (provisional)
 
 As an example for how to integrate a different driver model, we provide a provisional integration
-for the [Transfuser](https://github.com/autonomousvision/transfuser) model.
+for the
+[Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
+policy, specifically the Latent TransFuser v6
+([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) model developed for
+[NAVSIM](https://github.com/autonomousvision/navsim).
 
-To run with the [Transfuser](https://huggingface.co/ln2697/tfv6_navsim) model use
-`driver=[transfuser,transfuser_runtime_configs]`.
+To run with the Transfuser model use `driver=[transfuser,transfuser_runtime_configs]`.
 
 First, one must download the Transfuser model weights/config from HuggingFace:
 
