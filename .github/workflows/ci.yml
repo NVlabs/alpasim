@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Tests & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies and compile Protos
+        run: |
+          # AlpaSim uses a setup script to handle gRPC and venv
+          chmod +x setup_local_env.sh
+          ./setup_local_env.sh
+          
+      - name: Static Analysis (Linting)
+        run: |
+          uv run ruff check .
+          uv run black --check .
+
+      - name: Type Checking (Runtime)
+        run: |
+          uv run mypy src/runtime
+
+      - name: Run Pytest
+        run: |
+          # Runs fast tests, skipping manual/heavy simulation tests
+          uv run pytest -m "not manual"
