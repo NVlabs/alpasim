@@ -26,6 +26,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies and compile Protos
+        with:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}      
         run: |
           # AlpaSim uses a setup script to handle gRPC and venv
           chmod +x setup_local_env.sh
