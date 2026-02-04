@@ -1,7 +1,7 @@
 desired_data:
   - nuplan_test
 
-cache_location: "/inspire/hdd/project/roboticsystem2/wangcaojun-240208020180/repo-wcj/trajdata/datasets2"
+cache_location: "/dir/to/trajdata/cache" # Trajdata cache location
 
 incl_vector_map: true
 rebuild_cache: false
@@ -12,7 +12,7 @@ desired_dt: 0.5
 verbose: true
 
 data_dirs:
-  nuplan_test: "/inspire/hdd/project/roboticsystem2/public/nuplan/dataset/nuplan-v1.1"
+  nuplan_test: "/dir/to/nuplan-v1.1" # nuplan-v1.1
 
 # scene_indices: [0]
 
