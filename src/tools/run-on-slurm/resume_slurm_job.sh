@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025 NVIDIA Corporation
 
-#SBATCH --account av_alpamayo_research
-#SBATCH --partition polar,polar3,polar4,grizzly
+# Override account and partition on the command line:
+#   sbatch --account=<account> --partition=<partition> resume_slurm_job.sh <JOB_DIR>
 #SBATCH --time 03:59:00
 #SBATCH --nodes=1
 #SBATCH --gpus=8

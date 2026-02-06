@@ -48,10 +48,15 @@ from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.telemetry.telemetry_context import tag_telemetry, try_get_context
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.geometry import (
+    Pose,
+    Trajectory,
+    pose_to_grpc,
+    trajectory_from_grpc,
+    trajectory_to_grpc,
+)
 from alpasim_utils.logs import LogWriter
-from alpasim_utils.qvec import QVec
 from alpasim_utils.scenario import AABB, TrafficObjects
-from alpasim_utils.trajectory import Trajectory
 from trajdata.maps import VectorMap
 
 from eval.runtime_evaluator import RuntimeEvaluator
@@ -64,7 +69,7 @@ logger = logging.getLogger(__name__)
 ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US = 1000
 
 
-def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> QVec:
+def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
     """Transforms the ego pose from the DS rig to the center of the AABB.
 
     The center of the DS rig is the mid bottom rear bbox edge.
@@ -80,9 +85,9 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> QVec:
         dtype=np.float32,
     )
 
-    return QVec(
-        vec3=ds_rig_to_aabb_center,
-        quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+    return Pose(
+        ds_rig_to_aabb_center,
+        np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
     )
 
 
@@ -118,7 +123,7 @@ class UnboundRollout:
     image_format: ImageFormat
     ego_mask_rig_config_id: str
     assert_zero_decision_delay: bool
-    transform_ego_coords_ds_to_aabb: QVec
+    transform_ego_coords_ds_to_aabb: Pose
     ego_aabb: AABB
     planner_delay_us: int
     egomotion_noise: EgomotionNoiseModelConfig
@@ -199,9 +204,9 @@ class UnboundRollout:
 
         hidden_objs_dict: dict[str, TrafficObjects.TrafficObject] = {}
         if hidden_ids:
-            hide_offset = QVec(
-                vec3=np.array([0.0, 0.0, -100.0], dtype=np.float32),
-                quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            hide_offset = Pose(
+                np.array([0.0, 0.0, -100.0], dtype=np.float32),
+                np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
             )
 
             for hid in hidden_ids:
@@ -358,13 +363,11 @@ class BoundRollout:
         self.traffic_objs = self.unbound.traffic_objs.clip_trajectories(
             prerun_start_us, prerun_end_us + 1
         )
-        self.ego_trajectory = self.unbound.gt_ego_trajectory.interpolate_to_timestamps(
+        self.ego_trajectory = self.unbound.gt_ego_trajectory.interpolate(
             np.array([prerun_start_us, prerun_end_us], dtype=np.uint64)
         )
-        self.ego_trajectory_estimate = (
-            self.unbound.gt_ego_trajectory.interpolate_to_timestamps(
-                np.array([prerun_start_us, prerun_end_us], dtype=np.uint64)
-            )
+        self.ego_trajectory_estimate = self.unbound.gt_ego_trajectory.interpolate(
+            np.array([prerun_start_us, prerun_end_us], dtype=np.uint64)
         )
         # Initialize estimated dynamic state
 
@@ -397,7 +400,7 @@ class BoundRollout:
             self.unbound.egomotion_noise
         )
         self.route_generator = RouteGenerator.create(
-            self.unbound.gt_ego_trajectory.poses.vec3,
+            self.unbound.gt_ego_trajectory.positions,
             vector_map=self.unbound.vector_map,
             route_generator_type=self.unbound.route_generator_type,
         )
@@ -468,8 +471,12 @@ class BoundRollout:
                     force_gt_duration=self.unbound.force_gt_duration_us,
                     version_ids=version_ids,
                     rollout_index=0,  # Always 0 since we only have one rollout
-                    transform_ego_coords_rig_to_aabb=self.unbound.transform_ego_coords_ds_to_aabb.as_grpc_pose(),
-                    ego_rig_recorded_ground_truth_trajectory=self.unbound.gt_ego_trajectory.to_grpc(),
+                    transform_ego_coords_rig_to_aabb=pose_to_grpc(
+                        self.unbound.transform_ego_coords_ds_to_aabb
+                    ),
+                    ego_rig_recorded_ground_truth_trajectory=trajectory_to_grpc(
+                        self.unbound.gt_ego_trajectory
+                    ),
                 )
             )
         )
@@ -496,7 +503,7 @@ class BoundRollout:
         )
         if not triggers:
             return
-        ego_trajectory = self.ego_trajectory_estimate.interpolate_to_timestamps(
+        ego_trajectory = self.ego_trajectory_estimate.interpolate(
             np.array([t.time_range_us.start for t in triggers], dtype=np.uint64)
         )
         await self.driver.submit_trajectory(
@@ -510,11 +517,11 @@ class BoundRollout:
                 f"Timestamp mismatch: {self.ego_trajectory.timestamps_us[-1]} != {timestamp_us}"
             )
 
-        pose_local_to_rig = self.ego_trajectory.poses[-1]
+        pose_local_to_rig = self.ego_trajectory.last_pose
         route_polyline_in_rig = self.route_generator.generate_route(
             timestamp_us, pose_local_to_rig
         )
-        RouteGenerator.prepare_for_policy(route_polyline_in_rig)
+        route_polyline_in_rig = RouteGenerator.prepare_for_policy(route_polyline_in_rig)
         await self.driver.submit_route(timestamp_us, route_polyline_in_rig)
 
     async def send_recording_ground_truth(self, timestamp_us: int) -> None:
@@ -527,16 +534,16 @@ class BoundRollout:
         trajectory = self.unbound.gt_ego_trajectory
 
         # Transform the ground truth trajectory into the rig coordinate frame
-        pose_local_to_rig = self.ego_trajectory.poses[-1]
+        pose_local_to_rig = self.ego_trajectory.last_pose
         trajectory_in_rig = trajectory.transform(pose_local_to_rig.inverse())
 
         await self.driver.submit_recording_ground_truth(timestamp_us, trajectory_in_rig)
 
     async def update_pose(
         self,
-        ego_ds_pose_future: QVec,
-        local_to_rig_estimate_future: QVec,
-        traffic_poses_future: dict[str, QVec],
+        ego_ds_pose_future: Pose,
+        local_to_rig_estimate_future: Pose,
+        traffic_poses_future: dict[str, Pose],
         future_us: int,
         dynamic_state_estimated: DynamicState,
     ) -> None:
@@ -544,10 +551,7 @@ class BoundRollout:
         pose_rig_to_noisy_rig = (
             self.egomotion_noise_model.update(dt_sec)
             if self.egomotion_noise_model
-            else QVec(
-                vec3=np.array([0.0, 0.0, 0.0]),
-                quat=np.array([0.0, 0.0, 0.0, 1.0]),
-            )
+            else Pose.identity()
         )
 
         self.ego_trajectory.update_absolute(future_us, ego_ds_pose_future)
@@ -566,7 +570,7 @@ class BoundRollout:
         await self._log_actor_poses(future_us)
 
         egomotion_estimate_error_message = PoseAtTime(
-            pose=pose_rig_to_noisy_rig.as_grpc_pose(), timestamp_us=future_us
+            pose=pose_to_grpc(pose_rig_to_noisy_rig), timestamp_us=future_us
         )
         await self.broadcaster.broadcast(
             LogEntry(egomotion_estimate_error=egomotion_estimate_error_message)
@@ -596,7 +600,7 @@ class BoundRollout:
             interpolated_pose = trajectory.interpolate_pose(timestamp_us)
             actor_poses.append(
                 ActorPoses.ActorPose(
-                    actor_id=obj_id, actor_pose=interpolated_pose.as_grpc_pose()
+                    actor_id=obj_id, actor_pose=pose_to_grpc(interpolated_pose)
                 )
             )
 
@@ -933,9 +937,9 @@ class BoundRollout:
             # or traj = T_local_to_rig_gt * T_rig_est_to_local * traj
             drive_trajectory = (
                 drive_trajectory_noisy.transform(
-                    self.ego_trajectory_estimate.poses[-1].inverse()
+                    self.ego_trajectory_estimate.last_pose.inverse()
                 )
-            ).transform(self.ego_trajectory.poses[-1])
+            ).transform(self.ego_trajectory.last_pose)
 
             force_gt = future_us in self.unbound.force_gt_period
 
@@ -1015,7 +1019,7 @@ class BoundRollout:
         Returns:
             PropagatedPoses: The future ego pose for the DS/rig coordinate system.
         """
-        pose_local_to_rig = self.ego_trajectory.poses[-1]
+        pose_local_to_rig = self.ego_trajectory.last_pose
 
         # We want to start feeding the controller the 'real' drive trajectory as
         # soon as available to warm it up. So we only replace it if empty.
@@ -1026,7 +1030,7 @@ class BoundRollout:
                 self.unbound.gt_ego_trajectory.time_range_us.stop - 1,
             )
             reference_trajectory_of_rig_in_local = (
-                self.unbound.gt_ego_trajectory.interpolate_to_timestamps(
+                self.unbound.gt_ego_trajectory.interpolate(
                     np.linspace(now_us, max_interp_time_us, num=51, dtype=np.uint64)
                 )
             )
@@ -1045,8 +1049,8 @@ class BoundRollout:
                 self.ego_trajectory.timestamps_us[-1]
                 - self.ego_trajectory.timestamps_us[-2]
             ) / 1e6
-            pose_local_to_rig_t0 = self.ego_trajectory.poses[-2]
-            pose_local_to_rig_t1 = self.ego_trajectory.poses[-1]
+            pose_local_to_rig_t0 = self.ego_trajectory.get_pose(-2)
+            pose_local_to_rig_t1 = self.ego_trajectory.last_pose
             fallback_pose_local_to_rig_future = (
                 reference_trajectory_of_rig_in_local.interpolate_pose(future_us)
             )
@@ -1076,11 +1080,11 @@ class BoundRollout:
 
     async def apply_physics_to_ego_pose(
         self,
-        pose_local_to_rig_unconstrained: QVec,
+        pose_local_to_rig_unconstrained: Pose,
         now_us: int,
         future_us: int,
         force_gt: bool,
-    ) -> QVec:
+    ) -> Pose:
         """Post process the ego pose response from the driver.
 
         Args:
@@ -1091,7 +1095,7 @@ class BoundRollout:
                 model response and use the ground truth instead)
 
         Returns:
-            QVec: The future ego pose for the DS/rig coordinate system.
+            Pose: The future ego pose for the DS/rig coordinate system.
         """
         pose_local_to_rig_future_unconstrained = (
             self.unbound.gt_ego_trajectory.interpolate_pose(future_us)
@@ -1110,7 +1114,7 @@ class BoundRollout:
                 delta_end_us=future_us,
                 # Physics is processed in our aabb coordinates (center of bbox),
                 # but the driver returns the pose in the DS coordinate system.
-                pose_now=self.ego_trajectory.poses[-1]
+                pose_now=self.ego_trajectory.last_pose
                 @ self.unbound.transform_ego_coords_ds_to_aabb,
                 pose_future=pose_local_to_rig_future_unconstrained
                 @ self.unbound.transform_ego_coords_ds_to_aabb,
@@ -1128,28 +1132,27 @@ class BoundRollout:
 
     async def apply_physics_traffic_poses(
         self,
-        ego_ds_pose_future: QVec,
+        ego_ds_pose_future: Pose,
         traffic_response: TrafficReturn,
         now_us: int,
         future_us: int,
         force_gt: bool,
-    ) -> dict[str, QVec]:
+    ) -> dict[str, Pose]:
         """Post process the traffic response.
 
         Args:
-            ego_ds_pose_future (QVec): The future ego pose of the rig/dw relative to local/ENU.
-            traffic_response (TrafficReturn): The response from the traffic
-            model.
-            now_us (int): The current timestamp in microseconds.
-            future_us (int): The future timestamp in microseconds.
-            force_gt (bool): Whether to force the ground truth (i.e. ignore the
+            ego_ds_pose_future: The future ego pose of the rig/dw relative to local/ENU.
+            traffic_response: The response from the traffic model.
+            now_us: The current timestamp in microseconds.
+            future_us: The future timestamp in microseconds.
+            force_gt: Whether to force the ground truth (i.e. ignore the
                 model response and use the ground truth instead)
 
         Returns:
-            QVec: The corrected poses of objects at `future_us`, all defined
-                for their AABB coordinate system (this includes EGO).
+            The corrected poses of objects at `future_us`, all defined
+            for their AABB coordinate system (this includes EGO).
         """
-        traffic_poses_future: dict[str, QVec] = {}
+        traffic_poses_future: dict[str, Pose] = {}
 
         if force_gt:  # override model responses with gt
             for key, traffic_obj in self.unbound.traffic_objs.items():
@@ -1160,13 +1163,10 @@ class BoundRollout:
                 )
         else:
             for object_trajectory_update in traffic_response.object_trajectory_updates:
-                object_trajectory = Trajectory.from_grpc(
+                object_trajectory = trajectory_from_grpc(
                     object_trajectory_update.trajectory
                 )
 
-                assert (
-                    len(object_trajectory.poses.batch_size) == 1
-                ), "only time dimension should be present"
                 if future_us not in object_trajectory.time_range_us:
                     continue
 
@@ -1175,7 +1175,7 @@ class BoundRollout:
                 )
 
         if self.unbound.physics_update_mode == PhysicsUpdateMode.ALL_ACTORS:
-            ego_ds_pose_now = self.ego_trajectory.poses[-1]
+            ego_ds_pose_now = self.ego_trajectory.last_pose
             ego_aabb_pose_now = (
                 ego_ds_pose_now @ self.unbound.transform_ego_coords_ds_to_aabb
             )
@@ -1210,15 +1210,15 @@ class BoundRollout:
         if self.unbound.physics_update_mode == PhysicsUpdateMode.NONE:
             return trajectory
 
-        async def process_pose(i: int) -> QVec:
+        async def process_pose(i: int) -> Pose:
             # Unused by physics, don't worry about it.
             now_us = int(trajectory.timestamps_us[i]) - self.unbound.control_timestep_us
             # Physics is applied to the "future" pose, but we want to apply it
             # to the "now" pose, so we just call it future. Bad API.
             future_us = int(trajectory.timestamps_us[i])
 
-            pose_now = trajectory.poses[i]  # unused by physics
-            pose_future = trajectory.poses[i]
+            pose_now = trajectory.get_pose(i)  # unused by physics
+            pose_future = trajectory.get_pose(i)
 
             # Transform to AABB coordinates for physics
             pose_now_aabb = pose_now @ self.unbound.transform_ego_coords_ds_to_aabb
@@ -1248,7 +1248,7 @@ class BoundRollout:
             *[process_pose(i) for i in range(len(trajectory.timestamps_us))]
         )
 
-        return Trajectory(
-            timestamps_us=trajectory.timestamps_us,
-            poses=QVec.stack(processed_poses),
+        return Trajectory.from_poses(
+            timestamps=trajectory.timestamps_us,
+            poses=list(processed_poses),
         )

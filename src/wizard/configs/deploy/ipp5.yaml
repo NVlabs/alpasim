@@ -1,0 +1,61 @@
+# @package _global_
+# ARM64 config for running on IPP5 (Mississippi) GB300 cluster with SLURM
+# Uses ARM64 images from local_oss_arm + SLURM deployment
+# Usage: sbatch --account=wlew --partition=gtc_demo --gpus=4 src/tools/run-on-slurm/submit.sh +deploy=ipp5
+
+defaults:
+  - local_oss_arm
+  - _self_
+
+defines:
+  filesystem: "${oc.env:HOME}/alpasim-cache"
+
+wizard:
+  run_method: "SLURM"
+  slurm_gpu_partition: "gtc_demo"
+  slurm_cpu_partition: "gtc_demo"
+
+  sqshcaches:
+    - "${oc.env:HOME}/alpasim-cache/sqsh"
+
+services:
+  # Use original NRE image tag (version string must match scene DB)
+  # The ARM64 sqsh is symlinked as nre_25.7.9_dc9a8043.sqsh in sqshcaches
+  sensorsim:
+    image: nvcr.io/nvidian/alpamayo/nre:25.7.9-dc9a8043
+    external_image: true
+    replicas_per_container: 1
+    gpus: [0, 1]
+    environments:
+      - OMP_NUM_THREADS=1
+      # GB300 is compute capability 10.3, not recognized by the old PyTorch in NRE.
+      # Force 9.0+PTX for forward compatibility so slangtorch JIT doesn't crash.
+      - TORCH_CUDA_ARCH_LIST=9.0+PTX
+    command:
+      - "/app/run serve-grpc --port={port} --host=0.0.0.0 --artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz --egocar-hood-dir=/mnt/ego-hoods --no-enable-nrend --use-gsplat"
+
+  # 4 GPUs on GB300 node: sensorsim [0,1], driver [2], physics [3]
+  driver:
+    replicas_per_container: 1
+    gpus: [2]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [3]
+
+  controller:
+    replicas_per_container: 1
+    gpus: null
+
+runtime:
+  endpoints:
+    sensorsim:
+      n_concurrent_rollouts: 1
+    driver:
+      n_concurrent_rollouts: 1
+    controller:
+      n_concurrent_rollouts: 1
+    physics:
+      n_concurrent_rollouts: 1
+    trafficsim:
+      skip: true

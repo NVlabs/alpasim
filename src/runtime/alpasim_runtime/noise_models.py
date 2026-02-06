@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from alpasim_runtime.config import EgomotionNoiseModelConfig
-from alpasim_utils.qvec import QVec
+from alpasim_utils.geometry import Pose
 
 
 @dataclass
@@ -82,13 +82,13 @@ class EgomotionNoiseModel:
             time_constant_orientation,
         )
 
-    def update(self, dt: float) -> QVec:
+    def update(self, dt: float) -> Pose:
         """
         Update the noise model for the given time step.
         Args:
             dt: The time step in seconds
         Returns:
-            The noise in the form of a QVec
+            The noise in the form of a Pose
         """
         a_position = math.exp(-dt / self.time_constant_position)
         a_orientation = math.exp(-dt / self.time_constant_orientation)
@@ -102,9 +102,9 @@ class EgomotionNoiseModel:
 
         qw = math.sqrt(1.0 - self.orientation_error.dot(self.orientation_error) / 4.0)
 
-        return QVec(
-            vec3=self.position_error,
-            quat=np.array(
+        return Pose(
+            self.position_error.astype(np.float32),
+            np.array(
                 [
                     self.orientation_error[0] / 2.0,
                     self.orientation_error[1] / 2.0,

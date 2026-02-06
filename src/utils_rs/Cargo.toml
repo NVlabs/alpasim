@@ -1,0 +1,13 @@
+[package]
+name = "utils_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "utils_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
+glam = "0.29"

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 A stub for defining simulation scenarios. For now a scenario is just a ground truth rig trajectory
@@ -16,8 +16,7 @@ from typing import Optional, Self
 import csaps
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB as ProtoAABB
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +144,17 @@ class Rig:
                     aabb_z_offset_m=off_z - dim_z / 2,
                 )
 
+            # Convert SE3 matrices to list of Pose objects
+            rig_poses_arr = np.array(rig_poses, dtype=np.float32)
+            poses_list = [
+                Pose.from_se3(rig_poses_arr[i]) for i in range(rig_poses_arr.shape[0])
+            ]
             rigs.append(
                 cls(
                     sequence_id=sequence_id,
-                    trajectory=Trajectory(
-                        timestamps_us=np.array(rig_timestamps_us, dtype=np.uint64),
-                        poses=QVec.from_se3(np.array(rig_poses)),
+                    trajectory=Trajectory.from_poses(
+                        timestamps=np.array(rig_timestamps_us, dtype=np.uint64),
+                        poses=poses_list,
                     ),
                     camera_ids=camera_ids,
                     world_to_nre=world_to_nre,
@@ -190,7 +194,7 @@ class TrafficObjects(dict[str, TrafficObject]):
                 track_flag,
                 aabb_xyz,
                 timestamps_us,
-                poses_qvec_json,
+                poses_json,
             ) in zip(
                 tracks_data["tracks_id"],
                 tracks_data["tracks_label_class"],
@@ -199,37 +203,41 @@ class TrafficObjects(dict[str, TrafficObject]):
                 tracks_data["tracks_timestamps_us"],
                 tracks_data["tracks_poses"],
             ):
-                poses_np = np.array(poses_qvec_json)  # [t, 7]
-
-                poses_qvec = QVec(
-                    vec3=poses_np[..., :3],
-                    quat=poses_np[..., 3:],
-                )
+                poses_np = np.array(poses_json, dtype=np.float32)  # [t, 7]
+                positions = poses_np[..., :3]
+                quaternions = poses_np[..., 3:]
 
                 is_static = (
                     "CONTROLLABLE" not in track_flag
                 )  # there can be multiple flags set
 
-                trajectory = Trajectory(
-                    timestamps_us=np.array(timestamps_us, dtype=np.uint64),
-                    poses=poses_qvec,
-                )
+                timestamps_us_arr = np.array(timestamps_us, dtype=np.uint64)
+
                 if smooth:
                     css = csaps.CubicSmoothingSpline(
-                        trajectory.timestamps_us / 1e6,
-                        trajectory.poses.vec3.T,  # Expects time in last dimension
+                        timestamps_us_arr / 1e6,
+                        positions.T,  # Expects time in last dimension
                         normalizedsmooth=True,
                     )
-                    filtered_positions = css(trajectory.timestamps_us / 1e6).T
+                    filtered_positions = css(timestamps_us_arr / 1e6).T
 
-                    max_error = np.max(
-                        np.abs(filtered_positions - trajectory.poses.vec3)
-                    )
+                    max_error = np.max(np.abs(filtered_positions - positions))
                     if max_error > 1.0:
                         logger.warning(
                             f"Max error in cubic spline approximation: {max_error:.6f} m for {track_id=}"
                         )
-                    trajectory.poses.vec3 = filtered_positions
+                    positions = filtered_positions.astype(np.float32)
+
+                # Create list of Pose objects
+                poses_list = [
+                    Pose(positions[i], quaternions[i])
+                    for i in range(len(timestamps_us_arr))
+                ]
+
+                trajectory = Trajectory.from_poses(
+                    timestamps=timestamps_us_arr,
+                    poses=poses_list,
+                )
 
                 trajectories[track_id] = TrafficObject(
                     track_id, AABB(*aabb_xyz), trajectory, is_static, track_label

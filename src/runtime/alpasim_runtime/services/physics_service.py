@@ -8,14 +8,14 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Tuple, Type
 
-from alpasim_grpc.v0.common_pb2 import Pose
+from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionRequest
 from alpasim_grpc.v0.physics_pb2_grpc import PhysicsServiceStub
 from alpasim_runtime.config import PhysicsUpdateMode, ScenarioConfig
 from alpasim_runtime.services.service_base import ServiceBase
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_utils.qvec import QVec
+from alpasim_utils import geometry
 from alpasim_utils.scenario import AABB
 
 logger = logging.getLogger(__name__)
@@ -38,12 +38,12 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         scene_id: str,
         delta_start_us: int,
         delta_end_us: int,
-        pose_now: QVec,
-        pose_future: QVec,
-        traffic_poses: Dict[str, QVec],
+        pose_now: geometry.Pose,
+        pose_future: geometry.Pose,
+        traffic_poses: Dict[str, geometry.Pose],
         ego_aabb: AABB,
         skip: bool = False,
-    ) -> Tuple[QVec, Dict[str, QVec]]:
+    ) -> Tuple[geometry.Pose, Dict[str, geometry.Pose]]:
         """
         Calculate ground intersection for ego and traffic vehicles.
 
@@ -71,9 +71,9 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
             scene_id,
             delta_start_us,
             delta_end_us,
-            pose_now.as_grpc_pose(),
-            pose_future.as_grpc_pose(),
-            [p.as_grpc_pose() for p in traffic_poses.values()],
+            geometry.pose_to_grpc(pose_now),
+            geometry.pose_to_grpc(pose_future),
+            [geometry.pose_to_grpc(p) for p in traffic_poses.values()],
             ego_aabb=ego_aabb,
         )
 
@@ -85,9 +85,9 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
 
         await self.session_info.broadcaster.broadcast(LogEntry(physics_return=response))
 
-        ego_response = QVec.from_grpc_pose(response.ego_pose.pose)
+        ego_response = geometry.pose_from_grpc(response.ego_pose.pose)
         traffic_responses = {
-            k: QVec.from_grpc_pose(v.pose)
+            k: geometry.pose_from_grpc(v.pose)
             for k, v in zip(traffic_poses.keys(), response.other_poses)
         }
 
@@ -98,9 +98,9 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         scene_id: str,
         delta_start_us: int,
         delta_end_us: int,
-        ego_pose_now: Pose,
-        ego_pose_future: Pose,
-        other_poses: List[Pose],
+        ego_pose_now: common_pb2.Pose,
+        ego_pose_future: common_pb2.Pose,
+        other_poses: List[common_pb2.Pose],
         ego_aabb: AABB,
     ) -> PhysicsGroundIntersectionRequest:
         """Prepare the physics ground intersection request."""

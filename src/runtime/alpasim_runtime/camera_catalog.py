@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
+# SPDX-License-Identifier: Apache-2.0
 
 """Runtime-facing catalog for camera definitions."""
 
@@ -17,7 +20,7 @@ from alpasim_runtime.config import (
     OpenCVFisheyeConfig,
     OpenCVPinholeConfig,
 )
-from alpasim_utils.qvec import QVec
+from alpasim_utils.geometry import Pose, pose_from_grpc, pose_to_grpc
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,7 @@ class CameraDefinition:
 
     logical_id: str
     intrinsics: sensorsim_pb2.CameraSpec
-    rig_to_camera: QVec
+    rig_to_camera: Pose
 
     def copy(self) -> CameraDefinition:
         """Return a deep copy of this camera definition."""
@@ -57,21 +60,19 @@ class CameraDefinition:
             logical_id=self.logical_id,
         )
         proto.intrinsics.CopyFrom(self.intrinsics)
-        proto.rig_to_camera.CopyFrom(self.rig_to_camera.as_grpc_pose())
+        proto.rig_to_camera.CopyFrom(pose_to_grpc(self.rig_to_camera))
         return proto
 
     @staticmethod
     def _pose_from_config(
         translation_m: tuple[float, float, float],
         rotation_xyzw: tuple[float, float, float, float],
-    ) -> QVec:
-        """Validate the pose from config and convert it into a `QVec`."""
-        translation = np.asarray(translation_m, dtype=np.float64)
-        quat = np.asarray(rotation_xyzw, dtype=np.float64)
-        norm = np.linalg.norm(quat)
-        if not np.isclose(norm, 1.0, atol=1e-6):
-            raise ValueError("rig_to_camera.rotation_xyzw must be a unit quaternion")
-        return QVec(vec3=translation, quat=quat)
+    ) -> Pose:
+        """Validate the pose from config and convert it into a `Pose`."""
+        translation = np.asarray(translation_m, dtype=np.float32)
+        quat = np.asarray(rotation_xyzw, dtype=np.float32)
+        # Unit quaternion validation is handled by Rust Pose constructor
+        return Pose(translation, quat)
 
     @staticmethod
     def _apply_pinhole_intrinsics(
@@ -209,7 +210,7 @@ class CameraDefinition:
         cls, available_camera: sensorsim_pb2.AvailableCamerasReturn.AvailableCamera
     ) -> CameraDefinition:
         """Clone a definition from an `AvailableCamera` protobuf."""
-        rig_to_camera = QVec.from_grpc_pose(available_camera.rig_to_camera)
+        rig_to_camera = pose_from_grpc(available_camera.rig_to_camera)
         spec = sensorsim_pb2.CameraSpec()
         spec.CopyFrom(available_camera.intrinsics)
         return cls(

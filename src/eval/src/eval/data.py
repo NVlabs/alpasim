@@ -13,14 +13,14 @@ import matplotlib.transforms as transforms
 import numpy as np
 import polars as pl
 import shapely
-from alpasim_grpc.v0.common_pb2 import AABB, Vec3
+from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse, RolloutCameraImage, Route
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_grpc.v0.sensorsim_pb2 import AvailableCamerasReturn, CameraSpec
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from PIL import Image, UnidentifiedImageError
+from scipy.spatial.transform import Rotation as R
 from trajdata.maps import VectorMap
 
 from eval.schema import EvalConfig, MetricVehicleConfig
@@ -41,7 +41,9 @@ class RAABB:
     corner_radius_m: float
 
     @staticmethod
-    def from_grpc(aabb: AABB, metric_vehicle_config: MetricVehicleConfig) -> "RAABB":
+    def from_grpc(
+        aabb: common_pb2.AABB, metric_vehicle_config: MetricVehicleConfig
+    ) -> "RAABB":
         """Create a RAABB from a grpc AABB and vehicle config.
 
         Args:
@@ -57,7 +59,7 @@ class RAABB:
         assert 0.0 <= metric_vehicle_config.vehicle_shrink_factor <= 1.0
         assert 0.0 <= metric_vehicle_config.vehicle_corner_roundness <= 1.0
         # Make sure we're not applying the shrinkage factor twice.
-        assert isinstance(aabb, AABB) and not isinstance(aabb, RAABB)
+        assert isinstance(aabb, common_pb2.AABB) and not isinstance(aabb, RAABB)
 
         size_factor = 1.0 - metric_vehicle_config.vehicle_shrink_factor
         min_side_length = min(aabb.size_x, aabb.size_y) * size_factor
@@ -73,54 +75,142 @@ class RAABB:
         )
 
 
-@dataclasses.dataclass
-class RenderableTrajectory(Trajectory):
+class RenderableTrajectory:
     """Represents a grpc trajectory with bbox.
 
     Also handles its own rendering by managing it's visual appearance as well as
     it's matplotlib artists.
+
+    Uses composition to wrap a Trajectory instance since Rust types cannot be subclassed.
     """
 
-    raabb: RAABB
-    polygon_artists: dict[str, list[plt.Artist]] | None = None
-    renderable_linestring: RenderableLineString | None = None
-    fill_color: str = "black"
-    fill_alpha: float = 0.1
+    def __init__(
+        self,
+        timestamps_us: np.ndarray,
+        positions: np.ndarray,
+        quaternions: np.ndarray,
+        raabb: RAABB | None = None,
+        polygon_artists: dict[str, list[plt.Artist]] | None = None,
+        renderable_linestring: RenderableLineString | None = None,
+        fill_color: str = "black",
+        fill_alpha: float = 0.1,
+    ):
+        positions = np.asarray(positions, dtype=np.float32)
+        quaternions = np.asarray(quaternions, dtype=np.float32)
+
+        # Ensure 2D arrays
+        if positions.ndim == 1 and len(positions) == 3:
+            positions = positions.reshape(1, 3)
+        if quaternions.ndim == 1 and len(quaternions) == 4:
+            quaternions = quaternions.reshape(1, 4)
+
+        # Store wrapped Trajectory instance (composition instead of inheritance)
+        self._trajectory = geometry.Trajectory(
+            np.asarray(timestamps_us, dtype=np.uint64),
+            positions,
+            quaternions,
+        )
+
+        self.raabb = raabb
+        self.polygon_artists = polygon_artists
+        self.renderable_linestring = renderable_linestring
+        self.fill_color = fill_color
+        self.fill_alpha = fill_alpha
+
+    # Delegate properties to wrapped Trajectory
+    @property
+    def timestamps_us(self) -> np.ndarray:
+        return self._trajectory.timestamps_us
+
+    @property
+    def positions(self) -> np.ndarray:
+        return self._trajectory.positions
+
+    @property
+    def quaternions(self) -> np.ndarray:
+        return self._trajectory.quaternions
+
+    @property
+    def yaws(self) -> np.ndarray:
+        return self._trajectory.yaws
+
+    @property
+    def time_range_us(self) -> range:
+        return self._trajectory.time_range_us
+
+    def __len__(self) -> int:
+        return len(self._trajectory)
+
+    def is_empty(self) -> bool:
+        return self._trajectory.is_empty()
+
+    def get_pose(self, idx: int) -> geometry.Pose:
+        return self._trajectory.get_pose(idx)
+
+    def interpolate_pose(self, at_us: int) -> geometry.Pose:
+        return self._trajectory.interpolate_pose(at_us)
+
+    def interpolate(self, target_timestamps: np.ndarray) -> "RenderableTrajectory":
+        """Interpolates trajectory to target timestamps."""
+        interp = self._trajectory.interpolate(
+            np.asarray(target_timestamps, dtype=np.uint64)
+        )
+        return RenderableTrajectory.from_trajectory(interp, self.raabb)
 
     @staticmethod
-    def from_grpc_with_aabb(traj: Trajectory, raabb: RAABB) -> "RenderableTrajectory":
+    def from_grpc_with_aabb(
+        traj: common_pb2.Trajectory, raabb: RAABB
+    ) -> "RenderableTrajectory":
         """Creates trajectory with bbox from grpc trajectory and aabb."""
-        return RenderableTrajectory.from_trajectory(Trajectory.from_grpc(traj), raabb)
+        return RenderableTrajectory.from_trajectory(
+            geometry.trajectory_from_grpc(traj), raabb
+        )
 
     @staticmethod
-    def from_trajectory(traj: Trajectory, raabb: RAABB) -> "RenderableTrajectory":
+    def from_trajectory(
+        traj: geometry.Trajectory, raabb: RAABB
+    ) -> "RenderableTrajectory":
         """Creates trajectory with bbox from trajectory and aabb."""
         return RenderableTrajectory(
-            poses=traj.poses,
             timestamps_us=traj.timestamps_us,
+            positions=traj.positions,
+            quaternions=traj.quaternions,
             raabb=raabb,
         )
 
     @staticmethod
     def create_empty_with_bbox(raabb: RAABB) -> "RenderableTrajectory":
         """Creates empty trajectory with specified bbox from aabb."""
-        return RenderableTrajectory.from_trajectory(Trajectory.create_empty(), raabb)
+        return RenderableTrajectory.from_trajectory(
+            geometry.Trajectory.create_empty(), raabb
+        )
+
+    def update_absolute(self, timestamp_us: int, pose: geometry.Pose) -> None:
+        """Append a new pose with absolute coordinates."""
+        self._trajectory.update_absolute(timestamp_us, pose)
 
     def transform(
-        self, qvec: QVec, is_relative: bool = False
+        self, transform: geometry.Pose, is_relative: bool = False
     ) -> "RenderableTrajectory":
-        """Transforms trajectory with bbox by qvec."""
-        return RenderableTrajectory.from_trajectory(
-            super().transform(qvec, is_relative), self.raabb
-        )
+        """Transforms trajectory with bbox by pose."""
+        transformed = self._trajectory.transform(transform, is_relative)
+        return RenderableTrajectory.from_trajectory(transformed, self.raabb)
+
+    def interpolate_to_timestamps(
+        self, ts_target: np.ndarray
+    ) -> "RenderableTrajectory":
+        """Interpolates trajectory to target timestamps."""
+        return self.interpolate(ts_target)
 
     @property
     def corners(self) -> np.ndarray:
-        """Returns bbox corners from poses, aabb and yaw. Shape (T, 4, 2)"""
-        cx = self.poses.vec3[..., 0]
-        cy = self.poses.vec3[..., 1]
-        cos = np.cos(self.poses.yaw)
-        sin = np.sin(self.poses.yaw)
+        """Returns bbox corners from positions, aabb and yaw. Shape (T, 4, 2)"""
+        positions = self.positions
+        yaws = self.yaws
+        cx = positions[..., 0]
+        cy = positions[..., 1]
+        cos = np.cos(yaws)
+        sin = np.sin(yaws)
         length = self.raabb.size_x
         width = self.raabb.size_y
         dx = length / 2
@@ -145,7 +235,7 @@ class RenderableTrajectory(Trajectory):
         """Returns shapely linestring from trajectory."""
         if self.is_empty():
             return shapely.LineString()
-        return shapely.LineString(self.poses.vec3[:, 0:2])
+        return shapely.LineString(self.positions[:, 0:2])
 
     def to_polygons(self) -> list[shapely.Polygon]:
         """Returns list of shapely polygons from bbox corners."""
@@ -169,8 +259,9 @@ class RenderableTrajectory(Trajectory):
         """
         if self.is_empty():
             return shapely.Point()
-        assert len(self.poses.vec3) == 1
-        return shapely.Point(self.poses.vec3[0, 0], self.poses.vec3[0, 1])
+        positions = self.positions
+        assert len(positions) == 1
+        return shapely.Point(positions[0, 0], positions[0, 1])
 
     def _maybe_rounded_bumper_lines(
         self, lines: list[shapely.LineString]
@@ -199,13 +290,6 @@ class RenderableTrajectory(Trajectory):
             return [shapely.LineString()]
         lines = shapely.creation.linestrings(self.corners[:, 2:4])
         return self._maybe_rounded_bumper_lines(lines)  # type: ignore
-
-    def interpolate_to_timestamps(
-        self, ts_target: np.ndarray
-    ) -> "RenderableTrajectory":
-        """Interpolates trajectory to target timestamps."""
-        new_trajectory = super().interpolate_to_timestamps(ts_target)
-        return RenderableTrajectory.from_trajectory(new_trajectory, self.raabb)
 
     def get_polygon_at_time(self, time: int) -> shapely.Polygon:
         return self.interpolate_to_timestamps(np.array([time])).to_polygons()[0]
@@ -415,7 +499,7 @@ class DriverResponseAtTime:
         now_time_us: int,
         query_time_us: int,
         ego_raabb: RAABB,
-        ego_coords_rig_to_aabb_center: QVec,
+        ego_coords_rig_to_aabb_center: geometry.Pose,
     ) -> "DriverResponseAtTime":
         """Helper function. Create DriverResponseAtTime from DriveResponse."""
         safety_monitor_safe = None
@@ -482,7 +566,7 @@ class DriverResponses:
             repeatedly updated to capture the new driver response.
     """
 
-    ego_coords_rig_to_aabb_center: QVec
+    ego_coords_rig_to_aabb_center: geometry.Pose
     ego_trajectory_local: RenderableTrajectory
 
     @property
@@ -541,9 +625,12 @@ class DriverResponses:
             # Update geometry (and style in case step-to-step recovery toggles)
             sel_artist = self.artists["selected_trajectory_artist"][0]
             sel_ls = driver_response_at_time.selected_trajectory.renderable_linestring
+            sel_positions = np.asarray(
+                driver_response_at_time.selected_trajectory.positions
+            )
             sel_artist.set_data(
-                driver_response_at_time.selected_trajectory.poses.vec3[:, 0],
-                driver_response_at_time.selected_trajectory.poses.vec3[:, 1],
+                sel_positions[:, 0],
+                sel_positions[:, 1],
             )
             sel_artist.set_color(sel_ls.color)
             sel_artist.set_linewidth(sel_ls.linewidth)
@@ -556,9 +643,10 @@ class DriverResponses:
                 self.artists["sampled_trajectory_artists"],
                 strict=True,
             ):
+                samp_positions = sampled_trajectory.positions
                 artist.set_data(
-                    sampled_trajectory.poses.vec3[:, 0],
-                    sampled_trajectory.poses.vec3[:, 1],
+                    samp_positions[:, 0],
+                    samp_positions[:, 1],
                 )
                 samp_ls = sampled_trajectory.renderable_linestring
                 artist.set_color(samp_ls.color)
@@ -664,7 +752,7 @@ class DriverResponses:
 
         sel_ls = driver_response_at_time.selected_trajectory.renderable_linestring
         sel_rig = _to_rig(driver_response_at_time.selected_trajectory)
-        sel_pixels, _ = projector.project_points(sel_rig.poses.vec3[:, :3])
+        sel_pixels, _ = projector.project_points(sel_rig.positions[:, :3])
         artists["selected"] = _upsert_line(
             artists["selected"],
             sel_pixels,
@@ -689,7 +777,7 @@ class DriverResponses:
         ):
             ls = traj.renderable_linestring
             rig_traj = _to_rig(traj)
-            pixels, _ = projector.project_points(rig_traj.poses.vec3[:, :3])
+            pixels, _ = projector.project_points(rig_traj.positions[:, :3])
             updated = _upsert_line(
                 artist,
                 pixels,
@@ -779,7 +867,7 @@ class ActorPolygonsAtTime:
                 rear_bumper_lines.append(
                     interpolated_trajectory.to_rear_bumper_lines()[0]
                 )
-                yaws.append(interpolated_trajectory.poses[0].yaw)
+                yaws.append(float(interpolated_trajectory.yaws[0]))
         return ActorPolygonsAtTime(
             bbox_polygons=bbox_polygons,
             yaws=yaws,
@@ -1043,7 +1131,7 @@ class CameraCalibration:
 
     logical_id: str
     intrinsics: CameraSpec
-    rig_to_camera: QVec
+    rig_to_camera: geometry.Pose
 
     @staticmethod
     def from_available_camera(
@@ -1055,7 +1143,7 @@ class CameraCalibration:
         return CameraCalibration(
             logical_id=available_camera.logical_id,
             intrinsics=intrinsics,
-            rig_to_camera=QVec.from_grpc_pose(available_camera.rig_to_camera),
+            rig_to_camera=geometry.pose_from_grpc(available_camera.rig_to_camera),
         )
 
 
@@ -1248,7 +1336,7 @@ class CameraProjector:
         """Project an entire trajectory to pixel space; returns (M,2) pixels."""
         if trajectory.is_empty():
             return np.empty((0, 2))
-        pixels, _ = self.project_points(trajectory.poses.vec3[:, :3])
+        pixels, _ = self.project_points(trajectory.positions[:, :3])
         return pixels
 
     def project_trajectories(
@@ -1370,7 +1458,7 @@ class Routes:
     )
     # Set after convert_routes_to_global_frame is called; used for camera projection.
     _ego_trajectory: Optional["RenderableTrajectory"] = None
-    _ego_coords_rig_to_aabb_center: Optional[QVec] = None
+    _ego_coords_rig_to_aabb_center: Optional[geometry.Pose] = None
 
     def add_route(self, route: Route) -> None:
         """Add a route to the routes.
@@ -1385,7 +1473,7 @@ class Routes:
             len(self.timestamps_us) == 0 or route.timestamp_us > self.timestamps_us[-1]
         ), "Routes must be added in chronological order"
 
-        def _vec3_to_np_array(vec3: Vec3) -> np.ndarray:
+        def _vec3_to_np_array(vec3: common_pb2.Vec3) -> np.ndarray:
             return np.array([vec3.x, vec3.y, vec3.z])
 
         self.timestamps_us.append(route.timestamp_us)
@@ -1396,7 +1484,7 @@ class Routes:
     def convert_routes_to_global_frame(
         self,
         ego_trajectory: "RenderableTrajectory",
-        ego_coords_rig_to_aabb_center: QVec,
+        ego_coords_rig_to_aabb_center: geometry.Pose,
     ) -> None:
         """Convert the routes to the global frame and store them.
 
@@ -1409,16 +1497,19 @@ class Routes:
         for timestamp_us, route_in_rig_frame in zip(
             self.timestamps_us, self.routes_in_rig_frame, strict=True
         ):
-            route_qvec_aabb_frame = QVec(
-                vec3=route_in_rig_frame - ego_coords_rig_to_aabb_center.vec3,
-                quat=np.array([[0, 0, 0, 1]] * len(route_in_rig_frame)),
+            # Transform waypoints from rig frame to AABB frame (just translation)
+            route_in_aabb_frame = (
+                route_in_rig_frame - ego_coords_rig_to_aabb_center.vec3
             )
-            ego_coords = ego_trajectory.interpolate_to_timestamps(
-                np.array([timestamp_us], dtype=np.uint64)
-            ).poses
 
-            route_qvec_global_frame = ego_coords @ route_qvec_aabb_frame
-            self.routes_in_global_frame.append(route_qvec_global_frame.vec3)
+            # Get ego pose at this timestamp
+            ego_pose = ego_trajectory.interpolate_pose(timestamp_us)
+
+            # Transform waypoints to global frame: rotate by ego orientation, then translate
+            rotation = R.from_quat(ego_pose.quat).as_matrix()
+            route_in_global_frame = (rotation @ route_in_aabb_frame.T).T + ego_pose.vec3
+
+            self.routes_in_global_frame.append(route_in_global_frame)
 
     def get_route_at_time(self, time: int, strict: bool = True) -> np.ndarray | None:
         """Get the route at a given time."""
@@ -1489,13 +1580,12 @@ class Routes:
             ego_pose_local_aabb @ self._ego_coords_rig_to_aabb_center.inverse()
         )
 
-        # Transform route points from global to rig frame
-        route_qvec_global = QVec(
-            vec3=route_global[:, :3],
-            quat=np.array([[0, 0, 0, 1]] * len(route_global)),
+        # Transform route points from global to rig frame using SE3 matrix
+        T_world_to_rig = ego_pose_local_rig.inverse().as_se3()  # 4x4 matrix
+        route_homogeneous = np.hstack(
+            [route_global[:, :3], np.ones((len(route_global), 1))]
         )
-        route_qvec_rig = ego_pose_local_rig.inverse() @ route_qvec_global
-        route_rig = route_qvec_rig.vec3
+        route_rig = (route_homogeneous @ T_world_to_rig.T)[:, :3]
 
         pixels, _ = projector.project_points(route_rig)
 
@@ -1620,7 +1710,7 @@ class ScenarioEvalInput:
     batch_id: str = dataclasses.field()  # Usually "0" for single-batch runs
 
     # Transformation from Rig frame to AABB center frame
-    ego_coords_rig_to_aabb_center: QVec
+    ego_coords_rig_to_aabb_center: geometry.Pose
 
     # Ego's bounding box dimensions
     ego_aabb_x_m: float
@@ -1629,11 +1719,13 @@ class ScenarioEvalInput:
 
     # Actor trajectories (dict of actor_id -> trajectory)
     # Trajectories should be in AABB frame (center of bounding box)
-    actor_trajectories: dict[str, tuple[Trajectory, tuple[float, float, float]]]
+    actor_trajectories: dict[
+        str, tuple[geometry.Trajectory, tuple[float, float, float]]
+    ]
     # Dict mapping actor_id to (trajectory, (aabb_x, aabb_y, aabb_z))
 
     # Ground truth ego trajectory (recorded original trajectory)
-    ego_recorded_ground_truth_trajectory: Trajectory
+    ego_recorded_ground_truth_trajectory: geometry.Trajectory
 
     # Driver responses (optional, needed for some metrics)
     driver_responses: Optional[DriverResponses] = None
@@ -1665,7 +1757,7 @@ class SimulationResult:
 
     session_metadata: RolloutMetadata.SessionMetadata
     # Transformation from Rig frame to AABB center frame
-    ego_coords_rig_to_aabb_center: QVec
+    ego_coords_rig_to_aabb_center: geometry.Pose
     # Trajectories for all agents, including EGO. Mapping id -> trajectory
     actor_trajectories: dict[str, RenderableTrajectory]
     # This might deviate from the ground truth trajectory due to noise.
@@ -1714,7 +1806,9 @@ class SimulationResult:
         ) in scenario_input.actor_trajectories.items():
             # Centralized RAABB construction (apply shrink/roundness once)
             raabb = RAABB.from_grpc(
-                AABB(size_x=aabb_dims[0], size_y=aabb_dims[1], size_z=aabb_dims[2]),
+                common_pb2.AABB(
+                    size_x=aabb_dims[0], size_y=aabb_dims[1], size_z=aabb_dims[2]
+                ),
                 cfg.vehicle,
             )
             actor_trajectories[actor_id] = RenderableTrajectory.from_trajectory(
@@ -1723,7 +1817,7 @@ class SimulationResult:
 
         # Create ego RAABB (centralized)
         ego_raabb = RAABB.from_grpc(
-            AABB(
+            common_pb2.AABB(
                 size_x=scenario_input.ego_aabb_x_m,
                 size_y=scenario_input.ego_aabb_y_m,
                 size_z=scenario_input.ego_aabb_z_m,
@@ -1742,7 +1836,7 @@ class SimulationResult:
             driver_estimated_trajectory = ego_trajectory
         else:
             driver_estimated_trajectory = RenderableTrajectory.from_trajectory(
-                Trajectory.create_empty(), ego_raabb
+                geometry.Trajectory.create_empty(), ego_raabb
             )
 
         # Create driver responses if not provided

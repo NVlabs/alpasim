@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 
@@ -76,15 +76,15 @@ class PlanDeviationScorer(Scorer):
                 <= driver_plan_pred_at_prev_time.timestamps_us[-1]
             ]
 
-            driver_waypoints_at_prev_time = (
+            driver_waypoints_at_prev_time = np.asarray(
                 driver_plan_pred_at_prev_time.interpolate_to_timestamps(
                     common_timestamps
-                ).poses.vec3
+                ).positions
             )
-            driver_waypoints_at_time = (
+            driver_waypoints_at_time = np.asarray(
                 driver_plan_pred_at_time.interpolate_to_timestamps(
                     common_timestamps
-                ).poses.vec3
+                ).positions
             )
 
             delta_xyz = driver_waypoints_at_time - driver_waypoints_at_prev_time

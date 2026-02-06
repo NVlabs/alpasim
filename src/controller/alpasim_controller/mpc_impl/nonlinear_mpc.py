@@ -318,19 +318,18 @@ class NonlinearMPC(MPCController):
         ref_range = ref_traj.time_range_us
         timestamps = np.clip(timestamps, ref_range.start, ref_range.stop - 1)
 
-        # Batch interpolate
-        ref_poses = ref_traj.interpolate_to_timestamps(timestamps)
+        # Batch interpolate using Trajectory
+        ref_interp = ref_traj.interpolate(timestamps.astype(np.uint64))
 
         for k in range(n_horizon + 1):
-            pose = ref_poses.poses[k]
-
+            pose = ref_interp.get_pose(k)
             if k == 0:
                 self._first_reference_pose_vec3 = pose.vec3
-                self._first_reference_pose_yaw = pose.yaw
+                self._first_reference_pose_yaw = pose.yaw()
 
             tvp_template["_tvp", k, "x_ref"] = pose.vec3[0]
             tvp_template["_tvp", k, "y_ref"] = pose.vec3[1]
-            tvp_template["_tvp", k, "heading_ref"] = pose.yaw
+            tvp_template["_tvp", k, "heading_ref"] = pose.yaw()
             tvp_template["_tvp", k, "tracking_enabled"] = 1.0 if k >= idx_start else 0.0
 
         return tvp_template

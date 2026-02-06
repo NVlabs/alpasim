@@ -7,8 +7,7 @@ import numpy as np
 from alpasim_controller.mpc_controller import ControllerInput, MPCGains
 from alpasim_controller.mpc_impl import LinearMPC
 from alpasim_controller.vehicle_model import VehicleModel
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import Trajectory
 
 
 class TestLinearMPCInit:
@@ -136,13 +135,11 @@ def _create_simple_trajectory(
     for i in range(num_points):
         t_s = i * dt_us / 1e6
         x = velocity * t_s
-        vec3_list.append(np.array([x, 0.0, 0.0]))
-        quat_list.append(np.array([0.0, 0.0, 0.0, 1.0]))
+        vec3_list.append(np.array([x, 0.0, 0.0], dtype=np.float32))
+        quat_list.append(np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32))
 
-    poses = QVec(
-        vec3=np.stack(vec3_list, axis=0),
-        quat=np.stack(quat_list, axis=0),
-    )
+    positions = np.stack(vec3_list, axis=0).astype(np.float32)
+    quaternions = np.stack(quat_list, axis=0).astype(np.float32)
 
     timestamps = np.array([i * dt_us for i in range(num_points)], dtype=np.uint64)
-    return Trajectory(poses=poses, timestamps_us=timestamps)
+    return Trajectory(timestamps, positions, quaternions)

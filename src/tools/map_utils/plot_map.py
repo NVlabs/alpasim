@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 A tool to plot the map data from an artifact and also visualize the route if requested.
@@ -231,7 +231,7 @@ def plot_xodr_map(
     """
     try:
         artifact = Artifact(source=usdz_path)
-        rig_waypoints = artifact.rig.trajectory.poses.vec3  # (N,3) in NuRec space
+        rig_waypoints = artifact.rig.trajectory.positions  # (N,3) in NuRec space
         ax.plot(
             rig_waypoints[:, 0],
             rig_waypoints[:, 1],
@@ -485,7 +485,7 @@ def main(artifact_name, preview_route, no_block):
             artifacts = Artifact.discover_from_glob(artifact_name)
             artifact = artifacts[list(artifacts.keys())[0]]
             route_generator = RouteGeneratorMap(
-                artifact.rig.trajectory.poses.vec3, artifact.map
+                artifact.rig.trajectory.positions, artifact.map
             )
             for i in range(
                 100

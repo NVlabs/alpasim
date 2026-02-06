@@ -1,17 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Transfuser model wrapper implementing the common interface."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import numpy as np
 import torch
 
-from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction
+from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
 from .transfuser_impl import load_tf
 
 logger = logging.getLogger(__name__)
@@ -111,97 +110,119 @@ class TransfuserModel(BaseTrajectoryModel):
         }
         return COMMAND_MAP[command]
 
-    def predict(
-        self,
-        camera_images: dict[str, list[tuple[int, np.ndarray]]],
-        command: DriveCommand,
-        speed: float,
-        acceleration: float,
-        ego_pose_at_time_history_local: list[Any] | None = None,
-    ) -> ModelPrediction:
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         """Generate trajectory prediction.
 
+        Delegates to :meth:`predict_batch` so there is one inference path.
+        """
+        return self.predict_batch([prediction_input])[0]
+
+    def predict_batch(
+        self, prediction_inputs: list[PredictionInput]
+    ) -> list[ModelPrediction]:
+        """Generate trajectory predictions for a batch of inputs.
+
+        All camera images are preprocessed and concatenated per sample, then
+        stacked into a single batch tensor for one forward pass.
+
+        Transfuser uses camera images, command, speed, and acceleration.
+        Ego pose history is unused.
+
         Args:
-            camera_images: Dict mapping camera_id to list of
-                (timestamp_us, image) tuples. For Transfuser,
-                list length must be 1 (single frame).
-            command: Canonical navigation command.
-            speed: Current vehicle speed in m/s.
-            acceleration: Current longitudinal acceleration in m/s².
-            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
-                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
-                orientation in local frame.
+            prediction_inputs: List of prediction inputs, one per concurrent
+                session.
 
         Returns:
-            ModelPrediction with trajectory in rig frame coordinates.
-            CARLA uses Y+ right, rig frame uses Y+ left, so Y axis
-            is inverted.
+            List of ModelPrediction with trajectories in rig frame
+            coordinates. CARLA uses Y+ right, rig frame uses Y+ left,
+            so Y axis is inverted.
         """
-        del ego_pose_at_time_history_local
-        self._validate_cameras(camera_images)
+        if not prediction_inputs:
+            return []
 
-        # Validate frame count (Transfuser uses single frame)
-        for cam_id, frames in camera_images.items():
-            if len(frames) != 1:
-                raise ValueError(
-                    f"Transfuser expects 1 frame per camera, "
-                    f"got {len(frames)} for {cam_id}"
-                )
+        batch_size = len(prediction_inputs)
 
-        # Extract single frame from each camera
-        current_images = {
-            cam_id: frames[0][1] for cam_id, frames in camera_images.items()
-        }
+        # --- Validate and collect per-sample tensors ---
+        rgb_tensors: list[torch.Tensor] = []
+        encoded_commands: list[int] = []
+        speeds: list[float] = []
+        accelerations: list[float] = []
 
-        # Resize each camera and concatenate horizontally
-        concatenated = self._concatenate_cameras(current_images)
+        for inp in prediction_inputs:
+            self._validate_cameras(inp.camera_images)
 
-        # Convert to tensor: HWC uint8 -> CHW uint8
-        # NOTE: Model internally converts to float and applies ImageNet normalization
-        rgb = (
-            torch.from_numpy(concatenated)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .to(self._device)
-        )
+            # Validate frame count (Transfuser uses single frame)
+            for cam_id, frames in inp.camera_images.items():
+                if len(frames) != 1:
+                    raise ValueError(
+                        f"Transfuser expects 1 frame per camera, "
+                        f"got {len(frames)} for {cam_id}"
+                    )
 
-        # Encode command using model-specific encoding
-        encoded_command = self._encode_command(command)
+            # Extract single frame from each camera
+            current_images = {
+                cam_id: frames[0][1] for cam_id, frames in inp.camera_images.items()
+            }
 
-        # Prepare data dict as expected by Transfuser Model.forward()
-        # Command must be one-hot encoded as a float tensor of shape (batch, 4)
-        command_one_hot = torch.nn.functional.one_hot(
-            torch.tensor([encoded_command], device=self._device, dtype=torch.long),
+            # Resize each camera and concatenate horizontally
+            concatenated = self._concatenate_cameras(current_images)
+
+            # Convert to tensor: HWC uint8 -> CHW uint8
+            rgb = torch.from_numpy(concatenated).permute(2, 0, 1)
+            rgb_tensors.append(rgb)
+
+            encoded_commands.append(self._encode_command(inp.command))
+            speeds.append(inp.speed)
+            accelerations.append(inp.acceleration)
+
+        # --- Stack into batch tensors ---
+        # RGB: (B, 3, H, W)
+        batched_rgb = torch.stack(rgb_tensors, dim=0).to(self._device)
+
+        # Command: (B, 4) one-hot encoded float
+        batched_command = torch.nn.functional.one_hot(
+            torch.tensor(encoded_commands, device=self._device, dtype=torch.long),
             num_classes=4,
         ).float()
 
+        # Speed and acceleration: (B,)
+        float_dtype = self._config.torch_float_type
+        batched_speed = torch.tensor(speeds, device=self._device, dtype=float_dtype)
+        batched_acceleration = torch.tensor(
+            accelerations, device=self._device, dtype=float_dtype
+        )
+
         data = {
-            "rgb": rgb,  # (1, 3, H, W) uint8, model handles normalization
-            "command": command_one_hot,  # (1, 4) one-hot encoded float
-            "speed": torch.tensor(
-                [speed], device=self._device, dtype=self._config.torch_float_type
-            ),
-            "acceleration": torch.tensor(
-                [acceleration],
-                device=self._device,
-                dtype=self._config.torch_float_type,
-            ),
+            "rgb": batched_rgb,  # (B, 3, H, W) uint8, model handles normalization
+            "command": batched_command,  # (B, 4) one-hot encoded float
+            "speed": batched_speed,  # (B,)
+            "acceleration": batched_acceleration,  # (B,)
         }
 
+        # --- Single forward pass ---
         with torch.no_grad():
             prediction = self._model(data)
 
-        # Extract waypoints and convert coordinates
-        # Model was trained in CARLA coordinate system, convert to NavSim/NuPlan/rig frame
+        # --- Convert to rig frame and compute headings on batch ---
         # CARLA: X+ forward, Y+ right; Rig: X+ forward, Y+ left
-        waypoints = prediction.pred_future_waypoints[0].cpu().numpy()  # (N, 2)
-        waypoints[:, 1] *= -1  # Invert Y axis
+        waypoints_batch = prediction.pred_future_waypoints.cpu().numpy()  # (B, N, 2)
+        waypoints_batch[:, :, 1] *= -1  # Invert Y axis
 
-        # Extract headings if available, otherwise compute from trajectory
         if prediction.pred_headings is not None:
-            headings = prediction.pred_headings[0].cpu().numpy()  # (N,)
-            headings *= -1  # Invert heading angles for coordinate transform
+            headings_batch = prediction.pred_headings.cpu().numpy()  # (B, N)
+            headings_batch = headings_batch * -1  # Invert for coordinate transform
         else:
-            headings = self._compute_headings_from_trajectory(waypoints)
+            headings_batch = self._compute_headings_from_trajectory_batch(
+                waypoints_batch
+            )
 
-        return ModelPrediction(trajectory_xy=waypoints, headings=headings)
+        # --- Unpack per-sample results ---
+        results: list[ModelPrediction] = []
+        for i in range(batch_size):
+            results.append(
+                ModelPrediction(
+                    trajectory_xy=waypoints_batch[i].copy(),
+                    headings=headings_batch[i].copy(),
+                )
+            )
+        return results

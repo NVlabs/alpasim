@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim-physics"
-version = "1.9.0"
+version = "1.11.0"
 description = "Physics micro-service of the Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -12,7 +12,6 @@ dependencies = [
   "alpasim_utils",
   "numpy",
   "warp-lang",
-  "point_cloud_utils",
   "pyyaml",
   "dataclasses_json",
   "pytest"

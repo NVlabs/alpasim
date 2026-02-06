@@ -24,7 +24,13 @@ from alpasim_controller.mpc_controller import (
 )
 from alpasim_controller.vehicle_model import VehicleModel
 from alpasim_grpc.v0 import common_pb2, controller_pb2
-from alpasim_utils import trajectory
+from alpasim_utils.geometry import (
+    Pose,
+    Trajectory,
+    pose_from_grpc,
+    pose_to_grpc,
+    trajectory_from_grpc,
+)
 
 __all__ = ["System", "VehicleModel", "create_system"]
 
@@ -47,10 +53,10 @@ class System:
         """
         self._timestamp_us = initial_state_grpc.timestamp_us
         self._reference_trajectory = None
-        self._trajectory = trajectory.Trajectory.create_empty()
-        self._trajectory.update_absolute(
-            initial_state_grpc.timestamp_us,
-            trajectory.QVec.from_grpc_pose(initial_state_grpc.pose),
+        initial_pose = pose_from_grpc(initial_state_grpc.pose)
+        self._trajectory = Trajectory.from_poses(
+            timestamps=np.array([initial_state_grpc.timestamp_us], dtype=np.uint64),
+            poses=[initial_pose],
         )
 
         self._vehicle_model = VehicleModel(
@@ -68,9 +74,7 @@ class System:
         self._log_header()
 
         # Initialize attributes that will be set during stepping
-        self._first_reference_pose_rig: trajectory.QVec = trajectory.QVec(
-            vec3=np.array([0, 0, 0]), quat=np.array([0, 0, 0, 1])
-        )
+        self._first_reference_pose_rig: Pose = Pose.identity()
         self.control_input: np.ndarray = np.array([0.0, 0.0])
         self._solve_time_ms: float = 0.0
 
@@ -131,15 +135,11 @@ class System:
             request.state.timestamp_us,
             request.state.pose,
         )
-        self._trajectory.poses.vec3[-1] = trajectory.QVec.from_grpc_pose(
-            request.state.pose
-        ).vec3
-        self._trajectory.poses.quat[-1] = trajectory.QVec.from_grpc_pose(
-            request.state.pose
-        ).quat
+        corrected_pose = pose_from_grpc(request.state.pose)
+        self._trajectory.set_pose(-1, corrected_pose)
 
         # Store the reference trajectory
-        self._reference_trajectory = trajectory.Trajectory.from_grpc(
+        self._reference_trajectory = trajectory_from_grpc(
             request.planned_trajectory_in_rig
         )
 
@@ -167,8 +167,9 @@ class System:
                 dt_us = int(1e6 * self._controller.DT_MPC)
             self._step(dt_us)
 
-        current_pose_local_to_rig = self._trajectory.last_pose.to_grpc_pose_at_time(
-            self._timestamp_us
+        current_pose_local_to_rig = common_pb2.PoseAtTime(
+            timestamp_us=self._timestamp_us,
+            pose=pose_to_grpc(self._trajectory.last_pose),
         )
 
         # Build dynamic state with velocities and accelerations in rig frame
@@ -253,8 +254,8 @@ class System:
 
         # Cache info for logging
         self._solve_time_ms = ctrl_output.solve_time_ms
-        if ref_in_rig is not None and len(ref_in_rig.poses) > 0:
-            self._first_reference_pose_rig = ref_in_rig.poses[0]
+        if ref_in_rig is not None and len(ref_in_rig) > 0:
+            self._first_reference_pose_rig = ref_in_rig.get_pose(0)
 
         # Advance the vehicle model and update the trajectory history
         pose_rig_t0_to_rig_t1 = self._vehicle_model.advance(
@@ -277,7 +278,7 @@ class System:
 
         self._log()
 
-    def _get_reference_in_rig_frame(self) -> trajectory.Trajectory | None:
+    def _get_reference_in_rig_frame(self) -> Trajectory | None:
         """Transform reference trajectory to current rig frame.
 
         Returns:
@@ -297,12 +298,13 @@ class System:
 
         # Transform all poses
         transformed_poses = []
-        for pose in self._reference_trajectory.poses:
+        for i in range(len(self._reference_trajectory)):
+            pose = self._reference_trajectory.get_pose(i)
             transformed_poses.append(pose_rig_now_to_rig_at_traj_time @ pose)
 
-        return trajectory.Trajectory(
-            timestamps_us=self._reference_trajectory.timestamps_us.copy(),
-            poses=trajectory.QVec.stack(transformed_poses),
+        return Trajectory.from_poses(
+            timestamps=self._reference_trajectory.timestamps_us.copy(),
+            poses=transformed_poses,
         )
 
     def _log_header(self) -> None:
@@ -331,10 +333,9 @@ class System:
         for i in range(2):
             self._log_file_handle.write(f"{self.control_input[i]},")
         if self._reference_trajectory is not None:
+            first_pos = self._reference_trajectory.positions[0]
             for i in range(2):
-                self._log_file_handle.write(
-                    f"{self._reference_trajectory.poses[0].vec3[i]},"
-                )
+                self._log_file_handle.write(f"{first_pos[i]},")
         else:
             self._log_file_handle.write("0.0,0.0,")
         self._log_file_handle.write(f"{self._vehicle_model.front_steering_angle},")

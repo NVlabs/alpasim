@@ -12,6 +12,8 @@ This module contains utility functions for Alpamayo Sim that are shared across m
 - **asl_to_frames/**: Command-line tool for extracting frames from ASL logs
 - **print_asl/**: Command-line tool for printing ASL log contents
 
+The core types (`Pose`, `Trajectory`, `Polyline`) are implemented in Rust via [utils_rs](../utils_rs/). See [`utils_rs.pyi`](../utils_rs/utils_rs.pyi) for the full list of available methods and their signatures.
+
 ## Installation
 
 This module is typically installed as a dependency by other Alpasim services. It requires
@@ -20,8 +22,7 @@ This module is typically installed as a dependency by other Alpasim services. It
 ## Usage
 
 ```python
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory, pose_from_grpc
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.logs import async_read_pb_log
 ```
