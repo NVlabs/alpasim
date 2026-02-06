@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Worker process entry point and main loop.
@@ -138,11 +138,10 @@ async def worker_async_main(args: WorkerArgs) -> None:
     # Network config is not needed - allocations are pre-computed
     user_config = typed_parse_config(args.user_config_path, UserSimulatorConfig)
 
-    asl_dir = os.path.join(args.log_dir, "asl")
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
-    metrics_dir = os.path.join(args.log_dir, "metrics")
+    rollouts_dir = os.path.join(args.log_dir, "rollouts")
+    telemetry_dir = os.path.join(args.log_dir, "telemetry")
     os.makedirs(txt_logs_dir, exist_ok=True)
-    os.makedirs(metrics_dir, exist_ok=True)
 
     # Configure logging with worker_id in format.
     # Only configure alpasim loggers to avoid breaking third-party library logging.
@@ -174,10 +173,10 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     start_time = time.perf_counter()
 
-    # TelemetryContext for metrics collection.
+    # TelemetryContext for telemetry collection.
     # Worker 0 samples resources (CPU/GPU); other workers only collect RPC/rollout/step timing.
     async with TelemetryContext(
-        output_dir=metrics_dir,
+        output_dir=telemetry_dir,
         worker_id=args.worker_id,
         sample_resources=(args.worker_id == 0),
     ) as ctx:
@@ -185,7 +184,8 @@ async def worker_async_main(args: WorkerArgs) -> None:
             user_config=user_config,
             allocations=args.allocations,
             usdz_glob=args.usdz_glob,
-            asl_dir=asl_dir,
+            rollouts_dir=rollouts_dir,
+            eval_config=args.eval_config,
         )
 
         rollout_count = await run_worker_loop(

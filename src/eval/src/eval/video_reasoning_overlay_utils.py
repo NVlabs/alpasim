@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 import os
@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
 from eval.aggregation.processing import ProcessedMetricDFs
-from eval.data import EvaluationResultContainer
+from eval.data import SimulationResult
 from eval.schema import EvalConfig
 
 logger = logging.getLogger("alpasim.eval.video_reasoning_overlay_utils")
@@ -398,7 +398,7 @@ def _get_camera_frame_numpy(camera, time_us) -> np.ndarray:
 
 
 def _render_single_reasoning_overlay_frame(
-    evaluation_result_container: EvaluationResultContainer,
+    sim_result: SimulationResult,
     time_us: np.uint64,
     cached_reasoning: str,
     display_time_s: float,
@@ -407,7 +407,7 @@ def _render_single_reasoning_overlay_frame(
     """Render a single reasoning overlay style frame.
 
     Args:
-        evaluation_result_container: Container with simulation results
+        sim_result: The simulation result to render.
         time_us: Timestamp in microseconds to render
         cached_reasoning: Cached CoT reasoning text to display
         display_time_s: Display time in seconds (for overlay)
@@ -416,7 +416,6 @@ def _render_single_reasoning_overlay_frame(
     Returns:
         Combined frame as numpy array (H, W, 3)
     """
-    sim_result = evaluation_result_container.sim_result
     camera = sim_result.cameras.camera_by_logical_id[cfg.video.camera_id_to_render]
     driver_responses = sim_result.driver_responses
 
@@ -483,7 +482,7 @@ def _render_single_reasoning_overlay_frame(
 
 
 def render_reasoning_overlay_style_video(
-    evaluation_result_container: EvaluationResultContainer,
+    sim_result: SimulationResult,
     processed_metric_dfs: ProcessedMetricDFs,
     output_path: str,
     cfg: EvalConfig,
@@ -492,7 +491,7 @@ def render_reasoning_overlay_style_video(
         first-person camera with reasoning text overlay + trajectory chart on the right.
 
     Args:
-        evaluation_result_container: Container with simulation results
+        sim_result: The simulation result to render.
         processed_metric_dfs: Processed metrics dataframes
         output_path: Path to save the video
         cfg: Evaluation configuration
@@ -500,7 +499,6 @@ def render_reasoning_overlay_style_video(
     del processed_metric_dfs
     logger.info("Rendering reasoning overlay style video")
 
-    sim_result = evaluation_result_container.sim_result
     timestamps_us = sim_result.timestamps_us
     driver_responses = sim_result.driver_responses
 
@@ -545,7 +543,7 @@ def render_reasoning_overlay_style_video(
 
         # Render the frame
         combined_frame = _render_single_reasoning_overlay_frame(
-            evaluation_result_container,
+            sim_result,
             time_us,
             cached_reasoning,
             display_time_s,

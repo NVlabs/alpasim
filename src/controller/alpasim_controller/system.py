@@ -1,309 +1,50 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
+
+"""
+Vehicle simulation system with pluggable MPC controller.
+
+This module provides the System class which handles:
+- Trajectory management and coordinate transforms
+- Vehicle model simulation
+- gRPC request/response handling
+- Logging
+
+The MPC algorithm is delegated to an MPCController instance, allowing
+different implementations (LinearMPC, NonlinearMPC) to be chosen at runtime.
+"""
 
 import logging
-import math
-import warnings
-from dataclasses import dataclass
 
-# Suppress do_mpc warnings BEFORE importing - warnings trigger at import time
-# We don't use the ONNX sysid or opcua features, and the SyntaxWarning is a bug in do_mpc
-warnings.filterwarnings("ignore", message="The ONNX feature is not available")
-warnings.filterwarnings("ignore", message="The opcua feature is not available")
-warnings.filterwarnings("ignore", message='"is" with a literal', category=SyntaxWarning)
+import numpy as np
+from alpasim_controller.mpc_controller import (
+    ControllerInput,
+    MPCController,
+    MPCImplementation,
+)
+from alpasim_controller.vehicle_model import VehicleModel
+from alpasim_grpc.v0 import common_pb2, controller_pb2
+from alpasim_utils import trajectory
 
-import casadi  # noqa: E402
-import do_mpc  # noqa: E402
-import numpy as np  # noqa: E402
-from alpasim_grpc.v0 import common_pb2, controller_pb2  # noqa: E402
-from alpasim_utils import trajectory  # noqa: E402
-
-
-class VehicleModel:
-    """
-    The VehicleModel class uses a planar dynamic bicycle model to simulate the vehicle dynamics
-    and relative pose over an advance call. The state is:
-    [
-               inertial x:     x position of the rig origin relative to the inertial frame,
-               inertial y:     y position of the rig origin relative to the inertial frame,
-               inertial yaw:   yaw angle of the rig origin relative to the inertial frame,
-               body x-vel:     x component of the cg velocity (relative to inertial frame),
-                               resolved in the rig frame,
-               body y-vel:     y component of the cg velocity (relative to inertial frame),
-                               resolved in the rig frame,
-               yaw rate:       yaw rate of the rig in the rig frame,
-               steering_angle: steering angle of the front wheel,
-               acceleration:   time derivative of the longitudinal velocity
-    ]
-    Note: this state has the velocity measured at the body center of gravity (cg), whereas
-    the interface (trajectories, grpc-provided states) use the rig frame velocity.
-    Note: lateral and longitudinal dynamics are decoupled
-    """
-
-    @dataclass
-    class Parameters:
-        """
-        Vehicle model parameters. Default values from Ford Fusion
-        """
-
-        mass: float = 2014.4  # Mass [kg]
-        inertia: float = 3414.2  # Moment of inertia around z-axis [kg*m^2]
-        l_rig_to_cg: float = 1.59  # Distance from rear wheel to CoG [m]
-        wheelbase: float = 2.85  # Wheelbase [m]
-        front_cornering_stiffness: float = 93534.5  # Front cornering stiffness [N/rad]
-        rear_cornering_stiffness: float = 176162.1  # Rear cornering stiffness [N/rad]
-        steering_time_constant: float = (
-            0.1  # Time constant for steering angle response [s]
-        )
-        acceleration_time_constant: float = (
-            0.1  # Time constant for longitudinal accel response [s]
-        )
-        kinematic_threshold_speed: float = (
-            5.0  # Speed threshold below which a kinematic model is used [m/s]
-        )
-
-    def __init__(
-        self,
-        initial_velocity: np.ndarray,
-        initial_yaw_rate: float,
-    ):
-        """
-        Initializes the vehicle model with the initial velocity and yaw rate.
-        Args:
-            initial_velocity: Initial velocity in the rig frame [vx, vy] [m/s]
-            initial_yaw_rate: Initial yaw rate in the rig frame [rad/s]
-        """
-        self._parameters = self.Parameters()
-        if initial_velocity[0] > 0.25:
-            # approximate kinematic steering angle
-            initial_steering_angle = math.atan(
-                initial_yaw_rate / initial_velocity[0] * self._parameters.wheelbase
-            )
-        else:
-            initial_steering_angle = 0.0
-        self._state = np.array(
-            [
-                0.0,
-                0.0,
-                0.0,
-                initial_velocity[0],
-                initial_velocity[1],
-                initial_yaw_rate,
-                initial_steering_angle,
-                0.0,
-            ]
-        )
-        # Store the last computed accelerations (derivatives of velocity states)
-        # [d_v_cg_x (longitudinal accel), d_v_cg_y (lateral accel), d_yaw_rate (angular accel)]
-        self._accelerations = np.array([0.0, 0.0, 0.0])
-
-    @property
-    def parameters(self) -> "VehicleModel.Parameters":
-        """Getter for the vehicle parameters."""
-        return self._parameters
-
-    @property
-    def state(self) -> np.ndarray:
-        """Getter for the vehicle state."""
-        return self._state
-
-    @property
-    def front_steering_angle(self) -> float:
-        """Getter for the front steering angle."""
-        return self._state[6]
-
-    @property
-    def accelerations(self) -> np.ndarray:
-        """
-        Getter for the last computed accelerations in the CG frame.
-        Returns:
-            Array of [d_v_cg_x, d_v_cg_y, d_yaw_rate] where:
-            - d_v_cg_x: longitudinal acceleration at CG [m/s²]
-            - d_v_cg_y: lateral acceleration at CG [m/s²]
-            - d_yaw_rate: angular acceleration (yaw) [rad/s²]
-        """
-        return self._accelerations
-
-    def reset_origin(self) -> None:
-        """Reset the state to the origin (x, y, yaw) = 0."""
-        self._state[:3] = 0.0
-
-    def set_velocity(self, v_cg_x: float, v_cg_y: float) -> None:
-        """
-        Set the velocity of the CG in the rig/body frame.
-        Args:
-            v_cg_x: Longitudinal velocity of the CG in the rig frame [m/s]
-            v_cg_y: Lateral velocity of the CG in the rig frame [m/s]
-        """
-        self._state[3] = v_cg_x
-        self._state[4] = v_cg_y
-
-    def advance(self, u: np.ndarray, dt: float) -> trajectory.QVec:
-        """
-        Advances the vehicle model by dt seconds using a 2nd order Runge-Kutta method.
-        Args:
-            u: Control input [steering angle, longitudinal acceleration]
-            dt: Time step in seconds
-        Returns:
-            The current pose. Note that, if reset_origin is called prior to calling this
-            method, the returned value will be the relative position in the rig frame after
-            dt seconds (pose_rig_at_t0_to_rig_at_t1)
-        """
-        DT_STEP_MAX = 0.01
-
-        logging.debug("state: %s, u: %s, dt: %s", self._state, u, dt)
-        total_time = 0.0
-        while total_time < dt:
-            if dt - total_time > DT_STEP_MAX:
-                step_dt = DT_STEP_MAX
-            else:
-                step_dt = dt - total_time
-
-            total_time += step_dt
-
-            # 2nd order Runge-Kutta method for numerical integration
-            k1 = step_dt * self._derivs(self._state, u)
-            k2 = step_dt * self._derivs(self._state + k1 / 2.0, u)
-            self._state += k2
-            self._state[3] = max(0.0, self._state[3])  # Ensure non-negative velocity
-
-        # Store the final accelerations (derivatives at the end state)
-        # derivs returns [dx, dy, dyaw, d_v_x, d_v_y, d_yaw_rate, d_steering, d_accel]
-        final_derivs = self._derivs(self._state, u)
-        # d_v_x is the longitudinal acceleration (state[7]), d_v_y and d_yaw_rate are computed
-        self._accelerations = np.array(
-            [final_derivs[3], final_derivs[4], final_derivs[5]]
-        )
-
-        logging.debug("state (after prop): %s", self._state)
-        return trajectory.QVec(
-            vec3=np.array([self._state[0], self._state[1], 0]),
-            quat=np.array(
-                [0, 0, math.sin(self._state[2] / 2), math.cos(self._state[2] / 2)]
-            ),
-        )
-
-    def _derivs(self, state: np.ndarray, u: np.ndarray) -> np.ndarray:
-
-        # Grab states
-        yaw_angle = state[2]
-        v_x = state[3]
-        v_y = state[4]
-        yaw_rate = state[5]
-        front_steering_angle = state[6]
-        longitudinal_acceleration = state[7]
-
-        use_kinematic_model = v_x < self._parameters.kinematic_threshold_speed
-        if use_kinematic_model:
-            # Differential equations
-
-            # Note: when using the linearized kinematic model, the dynamics should pull the
-            # system to the no-slip conditions:
-            # yaw_rate = v_x_cg * front_steering_angle / (l_f + l_r)
-            # v_cg_y = v_cg_x * front_steering_angle * l_r / (l_f + l_r)
-            steady_state_v_y = (
-                v_x
-                * front_steering_angle
-                * self._parameters.l_rig_to_cg
-                / self._parameters.wheelbase
-            )
-            steady_state_yaw_rate = (
-                v_x * front_steering_angle / self._parameters.wheelbase
-            )
-            GAIN = 10.0
-            v_y_rig = 0.0  # No slip at rear
-            d_v_y = GAIN * (steady_state_v_y - v_y)
-            d_yaw_rate = GAIN * (steady_state_yaw_rate - yaw_rate)
-        else:
-            # Equations of motion for single-track bicycle model
-            kinetic_mass = self._parameters.mass * v_x
-            kinetic_inertia = self._parameters.inertia * v_x
-            lf = self._parameters.wheelbase - self._parameters.l_rig_to_cg
-            lf_caf = lf * self._parameters.front_cornering_stiffness
-            lr_car = (
-                self._parameters.l_rig_to_cg * self._parameters.rear_cornering_stiffness
-            )
-            lf_sq_caf = lf * lf_caf
-            lr_sq_car = self._parameters.l_rig_to_cg * lr_car
-            a_00 = (
-                -2
-                * (
-                    self._parameters.front_cornering_stiffness
-                    + self._parameters.rear_cornering_stiffness
-                )
-                / kinetic_mass
-            )
-            a_01 = -v_x - 2 * (lf_caf - lr_car) / kinetic_mass
-            a_10 = -2 * (lf_caf - lr_car) / kinetic_inertia
-            a_11 = -2 * (lf_sq_caf + lr_sq_car) / kinetic_inertia
-
-            b_00 = (
-                2 * self._parameters.front_cornering_stiffness / self._parameters.mass
-            )
-            b_10 = 2 * lf_caf / self._parameters.inertia
-
-            v_y_rig = (
-                v_y - state[5] * self._parameters.l_rig_to_cg
-            )  # v_y in the rig frame, accounting for yaw rate
-
-            d_v_y = a_00 * v_y + a_01 * yaw_rate + b_00 * front_steering_angle
-            d_yaw_rate = a_10 * v_y + a_11 * yaw_rate + b_10 * front_steering_angle
-
-        front_steering_angle_cmd = u[0][0]
-        longitudinal_acceleration_cmd = u[1][0]
-
-        return np.array(
-            [
-                v_x * math.cos(yaw_angle) - v_y_rig * math.sin(yaw_angle),
-                v_x * math.sin(yaw_angle) + v_y_rig * math.cos(yaw_angle),
-                yaw_rate,
-                longitudinal_acceleration,
-                d_v_y,
-                d_yaw_rate,
-                (front_steering_angle_cmd - front_steering_angle)
-                / self._parameters.steering_time_constant,
-                (longitudinal_acceleration_cmd - longitudinal_acceleration)
-                / self._parameters.acceleration_time_constant,
-            ]
-        )
+__all__ = ["System", "VehicleModel", "create_system"]
 
 
 class System:
-    DT_MPC = 0.1  # MPC time step in seconds
+    """Vehicle simulation system vehicle model and controller."""
 
-    @dataclass
-    class MPCGains:
+    def __init__(
+        self,
+        log_file: str,
+        initial_state_grpc: common_pb2.StateAtTime,
+        controller: MPCController,
+    ):
+        """Initialize the System.
+
+        Args:
+            log_file: Path to CSV log file
+            initial_state_grpc: Initial vehicle state from gRPC
+            controller: MPCController instance to use for control computation
         """
-        These default gains are provisional. They were chosen to provide a stable
-        step response for the default vehicle model, but have not been tuned to
-        better match the in-car performance.
-
-        See https://www.do-mpc.com/en/latest/api/do_mpc.controller.MPC.html#set-objective
-        and https://www.do-mpc.com/en/latest/api/do_mpc.controller.MPC.html#set-rterm
-        for more information about the cost function.
-        """
-
-        long_position_weight: float = (
-            2.0  # lagrange term / meyer term penalty on x position error
-        )
-        lat_position_weight: float = (
-            1.0  # lagrange term / meyer term penalty on y position error
-        )
-        heading_weight: float = (
-            1.0  # lagrange term / meyer term penalty on heading error
-        )
-        acceleration_weight: float = (
-            0.1  # lagrange term / meyer term penalty on acceleration state
-        )
-        rel_front_steering_angle_weight: float = (
-            5.0  # regularization term on the commanded steering angle changes
-        )
-        rel_acceleration_weight: float = (
-            1.0  # regularization term on the commanded acceleration changes
-        )
-        idx_start_penalty: int = 10  # Tracking costs are ignored up to this index
-
-    def __init__(self, log_file: str, initial_state_grpc: common_pb2.StateAtTime):
         self._timestamp_us = initial_state_grpc.timestamp_us
         self._reference_trajectory = None
         self._trajectory = trajectory.Trajectory.create_empty()
@@ -321,37 +62,22 @@ class System:
             ),
             initial_yaw_rate=initial_state_grpc.state.angular_velocity.z,
         )
-        self._gains = self.MPCGains()
-
-        velocity_cg = self._dynamic_state_to_cg_velocity(initial_state_grpc.state)
-        self._x0 = np.array(
-            [
-                0.0,  # Initial x position [m]
-                0.0,  # Initial y position [m]
-                0.0,  # Initial yaw angle [rad]
-                velocity_cg[0],  # Initial x-velocity of cg [m/s]
-                velocity_cg[1],  # Initial y-velocity of cg [m/s]
-                initial_state_grpc.state.angular_velocity.z,  # Initial yaw rate [rad/s]
-                self._vehicle_model.front_steering_angle,  # Initial steering angle [rad]
-                0.0,  # Initial acceleration [m/s^2, not used in the MPC]
-            ]
-        ).reshape(-1, 1)
-
-        self._model = System._build_model(self._vehicle_model.parameters)
-        self._setup_mpc()
+        self._controller = controller
 
         self._log_file_handle = open(log_file, "w", encoding="utf-8")
         self._log_header()
-        # Initialize attributes that will be set during stepping.
-        # Done to satisfy the type checking gods.
+
+        # Initialize attributes that will be set during stepping
         self._first_reference_pose_rig: trajectory.QVec = trajectory.QVec(
             vec3=np.array([0, 0, 0]), quat=np.array([0, 0, 0, 1])
         )
-        self.control_input: np.ndarray = np.array([[0.0], [0.0]])
+        self.control_input: np.ndarray = np.array([0.0, 0.0])
+        self._solve_time_ms: float = 0.0
 
     def _dynamic_state_to_cg_velocity(
         self, dynamic_state: common_pb2.DynamicState
     ) -> np.ndarray:
+        """Convert rig frame velocity to CG frame velocity."""
         return np.array(
             [
                 dynamic_state.linear_velocity.x,
@@ -361,257 +87,18 @@ class System:
             ]
         )
 
-    @staticmethod
-    def _build_model(params: VehicleModel.Parameters) -> do_mpc.model.Model:
-        # The model used is a planar dynamic bicycle model
-
-        model = do_mpc.model.Model("continuous", "SX")
-
-        model.set_variable(var_type="_x", var_name="x_rig_inertial", shape=(1, 1))
-        model.set_variable(var_type="_x", var_name="y_rig_inertial", shape=(1, 1))
-        yaw_angle = model.set_variable(
-            var_type="_x", var_name="yaw_angle", shape=(1, 1)
-        )  # yaw angle
-        v_cg_x = model.set_variable(var_type="_x", var_name="v_cg_x", shape=(1, 1))
-        v_cg_y = model.set_variable(var_type="_x", var_name="v_cg_y", shape=(1, 1))
-        yaw_rate = model.set_variable(
-            var_type="_x", var_name="yaw_rate", shape=(1, 1)
-        )  # yaw rate
-        front_steering_angle = model.set_variable(
-            var_type="_x", var_name="front_steering_angle", shape=(1, 1)
-        )  # steering angle
-        acceleration = model.set_variable(
-            var_type="_x", var_name="acceleration", shape=(1, 1)
-        )  # longitudinal acceleration
-
-        # Input struct (optimization variables):
-        front_steering_angle_cmd = model.set_variable(
-            var_type="_u", var_name="front_steering_angle_cmd"
-        )  # Steering angle
-        acceleration_cmd = model.set_variable(
-            var_type="_u", var_name="acceleration_cmd"
-        )  # Acceleration command
-
-        EPS_SPEED = 1.0e-2
-        kinetic_mass = params.mass * casadi.fmax(v_cg_x, EPS_SPEED)
-        kinetic_inertia = params.inertia * casadi.fmax(v_cg_x, EPS_SPEED)
-        lf = params.wheelbase - params.l_rig_to_cg
-        lf_caf = lf * params.front_cornering_stiffness
-        lr_car = params.l_rig_to_cg * params.rear_cornering_stiffness
-        lf_sq_caf = lf * lf_caf
-        lr_sq_car = params.l_rig_to_cg * lr_car
-        a_00 = (
-            -2
-            * (params.front_cornering_stiffness + params.rear_cornering_stiffness)
-            / kinetic_mass
-        )
-        a_01 = -v_cg_x - 2 * (lf_caf - lr_car) / kinetic_mass
-        a_10 = -2 * (lf_caf - lr_car) / kinetic_inertia
-        a_11 = -2 * (lf_sq_caf + lr_sq_car) / kinetic_inertia
-
-        b_00 = 2 * params.front_cornering_stiffness / params.mass
-        b_10 = 2 * lf_caf / params.inertia
-
-        # Differential equations
-        # Note: when using the kinematic model, the dynamics should pull the system
-        # to the no-slip conditions, and linearized:
-        # yaw_rate = v_x_cg * front_steering_angle / (l_f + l_r)
-        # v_cg_y = v_cg_x * front_steering_angle * l_r / (l_f + l_r)
-
-        use_kinematic_model = casadi.lt(v_cg_x, params.kinematic_threshold_speed)
-
-        model.set_rhs(
-            "x_rig_inertial",
-            casadi.if_else(
-                use_kinematic_model,
-                v_cg_x * casadi.cos(yaw_angle),
-                v_cg_x * casadi.cos(yaw_angle)
-                - (v_cg_y - params.l_rig_to_cg * yaw_rate) * casadi.sin(yaw_angle),
-            ),
-        )
-        model.set_rhs(
-            "y_rig_inertial",
-            casadi.if_else(
-                use_kinematic_model,
-                v_cg_x * casadi.sin(yaw_angle),
-                v_cg_x * casadi.sin(yaw_angle)
-                + (v_cg_y - params.l_rig_to_cg * yaw_rate) * casadi.cos(yaw_angle),
-            ),
-        )
-        model.set_rhs("yaw_angle", yaw_rate)
-        model.set_rhs("v_cg_x", acceleration)
-
-        yaw_rate_kinematic = v_cg_x * front_steering_angle / params.wheelbase
-        v_cg_y_kinematic = (
-            v_cg_x * front_steering_angle * params.l_rig_to_cg / params.wheelbase
-        )
-
-        GAIN = 10.0  # gain to bring states to kinematic model consistency
-
-        model.set_rhs(
-            "v_cg_y",
-            casadi.if_else(
-                use_kinematic_model,
-                GAIN * (v_cg_y_kinematic - v_cg_y),
-                a_00 * v_cg_y + a_01 * yaw_rate + b_00 * front_steering_angle,
-            ),
-        )
-        model.set_rhs(
-            "yaw_rate",
-            casadi.if_else(
-                use_kinematic_model,
-                GAIN * (yaw_rate_kinematic - yaw_rate),
-                a_10 * v_cg_y + a_11 * yaw_rate + b_10 * front_steering_angle,
-            ),
-        )
-        model.set_rhs(
-            "front_steering_angle",
-            (front_steering_angle_cmd - front_steering_angle)
-            / params.steering_time_constant,
-        )
-        model.set_rhs(
-            "acceleration",
-            (acceleration_cmd - acceleration) / params.acceleration_time_constant,
-        )
-
-        # Trajectory reference
-        model.set_variable(var_type="_tvp", var_name="x_ref")
-        model.set_variable(var_type="_tvp", var_name="y_ref")
-        model.set_variable(var_type="_tvp", var_name="heading_ref")
-        model.set_variable(var_type="_tvp", var_name="tracking_enabled")
-
-        # Build the model
-        model.setup()
-        return model
-
-    def _setup_mpc(self) -> None:
-        self.mpc = do_mpc.controller.MPC(self._model)
-
-        # Set MPC settings
-        self.mpc.settings.n_horizon = 20
-        self.mpc.settings.t_step = 0.1
-        self.mpc.settings.n_robust = 0
-        self.mpc.settings.open_loop = 0
-        self.mpc.settings.state_discretization = "collocation"
-        self.mpc.settings.collocation_type = "radau"
-        self.mpc.settings.collocation_deg = 2
-        self.mpc.settings.collocation_ni = 1
-        self.mpc.settings.store_full_solution = False
-        self.mpc.settings.nlpsol_opts = {"ipopt.max_iter": 30}
-        self.mpc.settings.supress_ipopt_output()
-
-        # Set up the cost function
-        term = self._model.tvp["tracking_enabled"] * (
-            self._gains.long_position_weight
-            * (self._model.x["x_rig_inertial"] - self._model.tvp["x_ref"]) ** 2
-            + self._gains.lat_position_weight
-            * (self._model.x["y_rig_inertial"] - self._model.tvp["y_ref"]) ** 2
-            + self._gains.acceleration_weight * (self._model.x["acceleration"] ** 2)
-            + self._gains.heading_weight
-            * casadi.atan2(
-                casadi.sin(self._model.x["yaw_angle"] - self._model.tvp["heading_ref"]),
-                casadi.cos(self._model.x["yaw_angle"] - self._model.tvp["heading_ref"]),
-            )
-            ** 2
-        )
-        self.mpc.set_objective(mterm=term, lterm=term)
-
-        self.mpc.set_rterm(
-            front_steering_angle_cmd=self._gains.rel_front_steering_angle_weight,
-            acceleration_cmd=self._gains.rel_acceleration_weight,
-        )
-
-        self.mpc.set_tvp_fun(self._tvp_fun)
-
-        # Provide state bounds
-        self.mpc.bounds["lower", "_x", "x_rig_inertial"] = -500
-        self.mpc.bounds["upper", "_x", "x_rig_inertial"] = 500
-        self.mpc.bounds["lower", "_x", "y_rig_inertial"] = -20
-        self.mpc.bounds["upper", "_x", "y_rig_inertial"] = 20
-        self.mpc.bounds["lower", "_x", "yaw_angle"] = -0.78
-        self.mpc.bounds["upper", "_x", "yaw_angle"] = 0.78
-        self.mpc.bounds["lower", "_x", "v_cg_x"] = 0.0
-        self.mpc.bounds["upper", "_x", "v_cg_x"] = 35
-        self.mpc.bounds["lower", "_x", "v_cg_y"] = -10
-        self.mpc.bounds["upper", "_x", "v_cg_y"] = 10
-        self.mpc.bounds["lower", "_x", "yaw_rate"] = -3
-        self.mpc.bounds["upper", "_x", "yaw_rate"] = 3
-        self.mpc.bounds["lower", "_x", "front_steering_angle"] = -math.pi / 4
-        self.mpc.bounds["upper", "_x", "front_steering_angle"] = math.pi / 4
-
-        # Provide input bounds
-        self.mpc.bounds["lower", "_u", "front_steering_angle_cmd"] = -2
-        self.mpc.bounds["upper", "_u", "front_steering_angle_cmd"] = 2
-        self.mpc.bounds["lower", "_u", "acceleration_cmd"] = -9.0
-        self.mpc.bounds["upper", "_u", "acceleration_cmd"] = 6.0
-
-        # Final setup
-        self.mpc.setup()
-        self.mpc.x0 = self._x0
-        self.mpc.set_initial_guess()
-
-    def _tvp_fun(self, _t_now: float) -> dict:
-        # Notes:
-        # - _t_now ignored in favor of self._timestamp_us
-        # - This function is called once during MPC setup (before the reference trajectory is set)
-
-        DT_MPC_US = int(self.DT_MPC * 1e6)
-        tvp_template = self.mpc.get_tvp_template()
-
-        # Account for temporal inconsistency between the command and current state by
-        # remapping the quantities from the inertial frame "dropped" at the trajectory
-        # validity timestamp into the current vehicle frame (rig frame).
-        if self._reference_trajectory is not None:
-            pose_local_to_rig_at_reference_start_time = (
-                self._trajectory.interpolate_pose(
-                    self._reference_trajectory.timestamps_us[0]
-                )
-            )
-            pose_local_to_rig_now = self._trajectory.last_pose
-            pose_rig_now_to_rig_at_trajectory_time = (
-                pose_local_to_rig_now.inverse()
-                @ pose_local_to_rig_at_reference_start_time
-            )
-        else:
-            pose_rig_now_to_rig_at_trajectory_time = trajectory.QVec(
-                vec3=np.array([0, 0, 0]), quat=np.array([0, 0, 0, 1])
-            )
-
-        for k in range(self.mpc.settings.n_horizon + 1):
-            tk_us = self._timestamp_us + k * DT_MPC_US
-            if self._reference_trajectory is not None:
-                ref_pose_in_rig = (
-                    pose_rig_now_to_rig_at_trajectory_time
-                    @ self._reference_trajectory.interpolate_pose(tk_us)
-                )
-                ref_heading = ref_pose_in_rig.yaw
-                if k == 0:
-                    self._first_reference_pose_rig = ref_pose_in_rig
-            else:
-                ref_pose_in_rig = trajectory.QVec(
-                    vec3=np.array([0, 0, 0]), quat=np.array([0, 0, 0, 1])
-                )
-                ref_heading = 0.0
-
-            tvp_template["_tvp", k, "x_ref"] = ref_pose_in_rig.vec3[0]
-            tvp_template["_tvp", k, "y_ref"] = ref_pose_in_rig.vec3[1]
-            tvp_template["_tvp", k, "heading_ref"] = ref_heading
-            tvp_template["_tvp", k, "tracking_enabled"] = (
-                1.0 if k >= self._gains.idx_start_penalty else 0.0
-            )
-        return tvp_template
-
     def run_controller_and_vehicle_model(
         self, request: controller_pb2.RunControllerAndVehicleModelRequest
     ) -> controller_pb2.RunControllerAndVehicleModelResponse:
-        """
-        Runs the controller and vehicle model for the given request.
+        """Run the controller and vehicle model for the given request.
+
         Args:
-            request: The request containing the current state, planned trajectory, and future time.
+            request: The request containing current state, planned trajectory,
+                and future time.
+
         Returns:
             A response containing the current pose and dynamic state in the local frame.
         """
-
         logging.debug(
             "run_controller_and_vehicle_model: %s: %s -> %s",
             request.session_uuid,
@@ -622,7 +109,8 @@ class System:
         # Input sanity checks
         if request.state.timestamp_us != self._timestamp_us:
             raise ValueError(
-                f"Timestamp mismatch: expected {self._timestamp_us}, got {request.state.timestamp_us}"
+                f"Timestamp mismatch: expected {self._timestamp_us}, "
+                f"got {request.state.timestamp_us}"
             )
         if len(request.planned_trajectory_in_rig.poses) == 0:
             raise ValueError("Planned trajectory is empty")
@@ -635,7 +123,8 @@ class System:
         # Update the pose (corrected for ground constraints) for the current timestamp
         if request.state.timestamp_us != self._trajectory.timestamps_us[-1]:
             raise ValueError(
-                f"Timestamp mismatch: expected {self._trajectory.timestamps_us[-1]}, got {request.state.timestamp_us}"
+                f"Timestamp mismatch: expected {self._trajectory.timestamps_us[-1]}, "
+                f"got {request.state.timestamp_us}"
             )
         logging.debug(
             "overriding pose at timestamp %s with %s",
@@ -665,7 +154,7 @@ class System:
         # - all the steps are DT_MPC seconds long, except possibly the last one
         # - the last step can be shorter or slightly longer than DT_MPC seconds
         dt_request_us = request.future_time_us - self._timestamp_us
-        dt_mpc_us = int(1e6 * self.DT_MPC)
+        dt_mpc_us = int(1e6 * self._controller.DT_MPC)
         n_steps = dt_request_us // dt_mpc_us
         if (dt_request_us % dt_mpc_us) / dt_mpc_us > 0.1:
             n_steps += 1
@@ -675,7 +164,7 @@ class System:
             if i == n_steps - 1:
                 dt_us = request.future_time_us - self._timestamp_us
             else:
-                dt_us = int(1e6 * self.DT_MPC)
+                dt_us = int(1e6 * self._controller.DT_MPC)
             self._step(dt_us)
 
         current_pose_local_to_rig = self._trajectory.last_pose.to_grpc_pose_at_time(
@@ -740,15 +229,32 @@ class System:
         )
 
     def _step(self, dt_us: int) -> None:
+        """Execute one MPC step."""
         # Reset the integrated positional states (x, y, psi)
         # This is equivalent to resetting the vehicle model to the origin so we can
         # compute the relative pose over the propagation time
         self._vehicle_model.reset_origin()
 
-        # Reset the state based on the vehicle model
-        self._x0 = self._vehicle_model.state.copy().reshape(-1, 1)
+        # Transform reference trajectory to rig frame
+        ref_in_rig = self._get_reference_in_rig_frame()
+        if ref_in_rig is None:
+            raise ValueError("Cannot step controller: no reference trajectory set. ")
 
-        self.control_input = self.mpc.make_step(self._x0)
+        # Build controller input
+        ctrl_input = ControllerInput(
+            state=self._vehicle_model.state.copy(),
+            reference_trajectory=ref_in_rig,
+            timestamp_us=self._timestamp_us,
+        )
+
+        # Compute control
+        ctrl_output = self._controller.compute_control(ctrl_input)
+        self.control_input = ctrl_output.control
+
+        # Cache info for logging
+        self._solve_time_ms = ctrl_output.solve_time_ms
+        if ref_in_rig is not None and len(ref_in_rig.poses) > 0:
+            self._first_reference_pose_rig = ref_in_rig.poses[0]
 
         # Advance the vehicle model and update the trajectory history
         pose_rig_t0_to_rig_t1 = self._vehicle_model.advance(
@@ -756,6 +262,7 @@ class System:
         )
         self._timestamp_us += dt_us
 
+        # Update trajectory
         logging.debug(
             "pose_rig_t0_to_rig_t1: %s, %s",
             pose_rig_t0_to_rig_t1.vec3,
@@ -770,7 +277,36 @@ class System:
 
         self._log()
 
+    def _get_reference_in_rig_frame(self) -> trajectory.Trajectory | None:
+        """Transform reference trajectory to current rig frame.
+
+        Returns:
+            Reference trajectory transformed to rig frame, or None if no reference.
+        """
+        if self._reference_trajectory is None:
+            return None
+
+        # Transform from local frame to current rig frame
+        pose_local_to_rig_at_ref_start = self._trajectory.interpolate_pose(
+            self._reference_trajectory.timestamps_us[0]
+        )
+        pose_local_to_rig_now = self._trajectory.last_pose
+        pose_rig_now_to_rig_at_traj_time = (
+            pose_local_to_rig_now.inverse() @ pose_local_to_rig_at_ref_start
+        )
+
+        # Transform all poses
+        transformed_poses = []
+        for pose in self._reference_trajectory.poses:
+            transformed_poses.append(pose_rig_now_to_rig_at_traj_time @ pose)
+
+        return trajectory.Trajectory(
+            timestamps_us=self._reference_trajectory.timestamps_us.copy(),
+            poses=trajectory.QVec.stack(transformed_poses),
+        )
+
     def _log_header(self) -> None:
+        """Write CSV header."""
         self._log_file_handle.write("timestamp_us,")
         self._log_file_handle.write("x,y,z,")
         self._log_file_handle.write("qx,qy,qz,qw,")
@@ -784,25 +320,79 @@ class System:
         self._log_file_handle.write("yaw_ref_0\n")
 
     def _log(self) -> None:
-        self._log_file_handle.write(f"{self._timestamp_us},")  # 0
+        """Write CSV row."""
+        self._log_file_handle.write(f"{self._timestamp_us},")
         for i in range(3):
-            self._log_file_handle.write(f"{self._trajectory.last_pose.vec3[i]},")  # 1-3
+            self._log_file_handle.write(f"{self._trajectory.last_pose.vec3[i]},")
         for i in range(4):
-            self._log_file_handle.write(f"{self._trajectory.last_pose.quat[i]},")  # 4-7
+            self._log_file_handle.write(f"{self._trajectory.last_pose.quat[i]},")
         for i in range(3):
-            self._log_file_handle.write(f"{self._vehicle_model.state[i + 3]},")  # 8-10
+            self._log_file_handle.write(f"{self._vehicle_model.state[i + 3]},")
         for i in range(2):
-            self._log_file_handle.write(f"{self.control_input[i][0]},")  # 11-12
+            self._log_file_handle.write(f"{self.control_input[i]},")
+        if self._reference_trajectory is not None:
+            for i in range(2):
+                self._log_file_handle.write(
+                    f"{self._reference_trajectory.poses[0].vec3[i]},"
+                )
+        else:
+            self._log_file_handle.write("0.0,0.0,")
+        self._log_file_handle.write(f"{self._vehicle_model.front_steering_angle},")
+        self._log_file_handle.write(f"{self._vehicle_model.state[7]},")
         for i in range(2):
-            self._log_file_handle.write(
-                f"{self._reference_trajectory.poses[0].vec3[i]},"
-            )  # 13-14
-        self._log_file_handle.write(
-            f"{self._vehicle_model.front_steering_angle},"
-        )  # 15
-        self._log_file_handle.write(f"{self._vehicle_model.state[7]},")  # 16
-        for i in range(2):
-            self._log_file_handle.write(
-                f"{self._first_reference_pose_rig.vec3[i]},"
-            )  # 17-18
-        self._log_file_handle.write(f"{self._first_reference_pose_rig.yaw}\n")  # 19
+            self._log_file_handle.write(f"{self._first_reference_pose_rig.vec3[i]},")
+        self._log_file_handle.write(f"{self._first_reference_pose_rig.yaw}\n")
+
+
+def create_system(
+    log_file: str,
+    initial_state: common_pb2.StateAtTime,
+    mpc_implementation: MPCImplementation = MPCImplementation.LINEAR,
+) -> System:
+    """Create a System with the specified MPC implementation.
+
+    This is a convenience factory that creates the appropriate controller
+    and passes it to System.
+
+    Args:
+        log_file: Path to CSV log file
+        initial_state: Initial vehicle state from gRPC
+        mpc_implementation: MPCImplementation.LINEAR (default) or MPCImplementation.NONLINEAR
+
+    Returns:
+        System instance with the specified controller
+
+    Example:
+        system = create_system("log.csv", initial_state, MPCImplementation.LINEAR)
+    """
+    # Create vehicle model to get parameters for controller
+    vehicle_model = VehicleModel(
+        initial_velocity=np.array(
+            [
+                initial_state.state.linear_velocity.x,
+                initial_state.state.linear_velocity.y,
+            ]
+        ),
+        initial_yaw_rate=initial_state.state.angular_velocity.z,
+    )
+
+    # Create controller based on mpc_implementation
+    if mpc_implementation == "linear":
+        from alpasim_controller.mpc_impl import LinearMPC
+
+        controller = LinearMPC(vehicle_model.parameters)
+    elif mpc_implementation == "nonlinear":
+        from alpasim_controller.mpc_impl import NonlinearMPC
+
+        controller = NonlinearMPC(vehicle_model.parameters)
+    else:
+        raise ValueError(
+            f"Unknown mpc_implementation: {mpc_implementation}. "
+            "Use 'linear' or 'nonlinear'."
+        )
+
+    return System(
+        log_file=log_file,
+        initial_state_grpc=initial_state,
+        controller=controller,
+    )

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import alpasim_utils.logs as logs
 import pytest
@@ -31,14 +31,14 @@ async def test_LogWriter_error_on_invalid_file_name():
 async def test_LogWriter_error_on_invalid_file_handle(tmp_path, valid_actor_poses):
     log_writer = logs.LogWriter(tmp_path / "test_log.asl")
     with pytest.raises(RuntimeError):
-        await log_writer.log_message(LogEntry(actor_poses=valid_actor_poses))
+        await log_writer.on_message(LogEntry(actor_poses=valid_actor_poses))
 
 
 @pytest.mark.asyncio
 async def test_LogWriter_write(tmp_path, valid_actor_poses):
     log_writer = logs.LogWriter(tmp_path / "test_log.asl")
     async with log_writer:
-        await log_writer.log_message(LogEntry(actor_poses=valid_actor_poses))
+        await log_writer.on_message(LogEntry(actor_poses=valid_actor_poses))
 
     # verify that the data was written
     with open(tmp_path / "test_log.asl", "rb") as f:
@@ -63,7 +63,7 @@ async def sample_log_file(tmp_path, valid_actor_poses):
         # write out the session metadata
         metadata = RolloutMetadata()
         metadata.session_metadata.scene_id = "test_scene"
-        await log_writer.log_message(LogEntry(rollout_metadata=metadata))
+        await log_writer.on_message(LogEntry(rollout_metadata=metadata))
 
         # write out a handful of actor poses
         actor_poses = ActorPoses()
@@ -71,7 +71,7 @@ async def sample_log_file(tmp_path, valid_actor_poses):
         for timestamp in range(0, 100000, 10000):
             actor_poses.timestamp_us = timestamp
             actor_poses.actor_poses[0].actor_pose.vec.x = float(timestamp) / 1e6
-            await log_writer.log_message(LogEntry(actor_poses=actor_poses))
+            await log_writer.on_message(LogEntry(actor_poses=actor_poses))
     return file_path
 
 

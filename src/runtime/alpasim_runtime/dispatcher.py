@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from __future__ import annotations
 
@@ -32,6 +32,8 @@ from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.worker.ipc import JobResult, RolloutJob, ServiceAllocations
 from alpasim_utils.artifact import Artifact
 
+from eval.schema import EvalConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +55,8 @@ class Dispatcher:
     user_config: UserSimulatorConfig
     artifacts: dict[str, Artifact]
     version_ids: RolloutMetadata.VersionIds
-    asl_dir: str
+    rollouts_dir: str
+    eval_config: EvalConfig  # Eval config for in-runtime evaluation
 
     async def find_scenario_incompatibilities(
         self, scenario: ScenarioConfig
@@ -73,7 +76,8 @@ class Dispatcher:
         user_config: UserSimulatorConfig,
         allocations: ServiceAllocations,
         usdz_glob: str,
-        asl_dir: str,
+        rollouts_dir: str,
+        eval_config: EvalConfig,
     ) -> Dispatcher:
         """Initialize dispatcher: discover artifacts, build pools from allocations."""
         camera_catalog = CameraCatalog(user_config.extra_cameras)
@@ -147,7 +151,8 @@ class Dispatcher:
             user_config=user_config,
             artifacts=artifacts,
             version_ids=version_ids,
-            asl_dir=asl_dir,
+            rollouts_dir=rollouts_dir,
+            eval_config=eval_config,
         )
 
     def get_pool_capacity(self) -> int:
@@ -211,19 +216,20 @@ class Dispatcher:
                     version_ids=self.version_ids,
                     random_seed=job.seed,
                     available_artifacts=self.artifacts,
-                    asl_dir=self.asl_dir,
+                    rollouts_dir=self.rollouts_dir,
                 ),
             )
 
             # Acquire all services atomically with automatic cleanup
             async with self.acquire_all_services() as services:
-                await rollout.bind(
+                eval_result = await rollout.bind(
                     services["driver"],
                     services["sensorsim"],
                     services["physics"],
                     services["trafficsim"],
                     services["controller"],
                     self.camera_catalog,
+                    eval_config=self.eval_config,
                 ).run()
 
             return JobResult(
@@ -232,6 +238,7 @@ class Dispatcher:
                 error=None,
                 error_traceback=None,
                 rollout_uuid=rollout.rollout_uuid,
+                eval_result=eval_result,
             )
 
         except Exception as exc:  # noqa: BLE001

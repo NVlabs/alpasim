@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Provides geometry tools for working with vehicle trajectories, expressed as quaternion + translation
@@ -8,7 +8,7 @@ Provides geometry tools for working with vehicle trajectories, expressed as quat
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Literal, Sequence
+from typing import Any, Literal
 
 try:
     from typing import Self
@@ -26,119 +26,9 @@ except ImportError:
 import numpy as np
 from alpasim_grpc.v0 import common_pb2 as grpc_types
 from alpasim_utils.polyline import Polyline
-from alpasim_utils.qvec import QVec, assert_is_vec3_shape
+from alpasim_utils.qvec import QVec
 from scipy import spatial
 from scipy.spatial.transform import Rotation as R
-
-
-@dataclass
-class DynamicState:
-    angular_velocity: np.ndarray
-    linear_velocity: np.ndarray
-
-    def __post_init__(self):
-        assert_is_vec3_shape(self.angular_velocity)
-        assert_is_vec3_shape(self.linear_velocity)
-        assert self.angular_velocity.shape[:-1] == self.linear_velocity.shape[:-1]
-
-    @classmethod
-    def create_empty(cls) -> Self:
-        return cls(
-            angular_velocity=np.zeros((0, 3), dtype=np.float32),
-            linear_velocity=np.zeros((0, 3), dtype=np.float32),
-        )
-
-    @property
-    def batch_size(self) -> tuple[int, ...]:
-        return self.linear_velocity.shape[:-1]
-
-    @staticmethod
-    def stack(states: Sequence[DynamicState], axis: int = 0) -> DynamicState:
-        return DynamicState(
-            angular_velocity=np.stack(
-                [state.angular_velocity for state in states], axis=axis
-            ),
-            linear_velocity=np.stack(
-                [state.linear_velocity for state in states], axis=axis
-            ),
-        )
-
-    def _apply(
-        self,
-        fn: Callable[
-            [
-                np.ndarray,
-            ],
-            np.ndarray,
-        ],
-    ) -> DynamicState:
-        return DynamicState(
-            angular_velocity=fn(self.angular_velocity),
-            linear_velocity=fn(self.linear_velocity),
-        )
-
-    def __getitem__(self, index) -> DynamicState:
-        return self._apply(lambda arr: arr[index])
-
-    def __len__(self) -> int:
-        return self.batch_size[0]
-
-    def __iter__(self) -> Iterator[DynamicState]:
-        for i in range(len(self)):
-            yield self[i]
-
-    def append(self, other: DynamicState) -> DynamicState:
-        if len(self.batch_size) != 1:
-            raise ValueError("Can only append to a single state")
-        if other.batch_size != ():
-            raise ValueError("Can only append a single state")
-
-        other = other[None, :]  # add batch dimension
-
-        return DynamicState(
-            angular_velocity=np.concatenate(
-                [self.angular_velocity, other.angular_velocity], axis=0
-            ),
-            linear_velocity=np.concatenate(
-                [self.linear_velocity, other.linear_velocity], axis=0
-            ),
-        )
-
-    @staticmethod
-    def from_grpc_state(grpc_state: grpc_types.DynamicState) -> DynamicState:
-        return DynamicState(
-            angular_velocity=np.array(
-                [getattr(grpc_state.angular_velocity, dim) for dim in "xyz"]
-            ),
-            linear_velocity=np.array(
-                [getattr(grpc_state.linear_velocity, dim) for dim in "xyz"]
-            ),
-        )
-
-    def as_grpc_state(self) -> grpc_types.DynamicState:
-        if self.batch_size != ():
-            raise ValueError("Can only convert a single state to a grpc state")
-        return grpc_types.DynamicState(
-            angular_velocity=grpc_types.Vec3(
-                x=self.angular_velocity[0],
-                y=self.angular_velocity[1],
-                z=self.angular_velocity[2],
-            ),
-            linear_velocity=grpc_types.Vec3(
-                x=self.linear_velocity[0],
-                y=self.linear_velocity[1],
-                z=self.linear_velocity[2],
-            ),
-        )
-
-    def to_grpc_pose_at_time(
-        self, timestamp_us: int, qvec: QVec
-    ) -> grpc_types.PoseAtTime:
-        return qvec.to_grpc_pose_at_time(timestamp_us, self)
-
-    def as_grpc_states(self) -> Sequence[grpc_types.DynamicState]:
-        assert len(self.batch_size) == 1
-        return [state.as_grpc_state() for state in self]
 
 
 @dataclass

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from __future__ import annotations
 
@@ -33,9 +33,6 @@ class AlpasimConfig:
     services: ServicesConfig = MISSING
     runtime: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
     trafficsim: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
-
-    # See avmf/src/alpasim_avmf/schema.py for the actual schema.
-    avmf: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
     eval: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
     driver: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
 
@@ -45,6 +42,9 @@ class ScenesConfig:
     # Selection method (exactly one must be set)
     scene_ids: Optional[list[str]] = None
     test_suite_id: Optional[str] = None
+
+    # Limit the number of scenes to run (0 or negative means no limit)
+    limit_to_first_n: int = 0
 
     # Paths
     scene_cache: str = MISSING
@@ -130,6 +130,12 @@ class WizardConfig:
     # For GPU partition, use SLURM_JOB_ACCOUNT if `None`
     slurm_gpu_partition: Optional[str] = None
     slurm_cpu_partition: str = "cpu_short"
+
+    # External service addresses for services running outside the deployment.
+    # Maps service name to list of addresses (e.g., {"driver": ["localhost:6789"]}).
+    # These addresses are added to generated-network-config.yaml so the runtime
+    # can connect to services running externally (e.g., on developer's machine).
+    external_services: Optional[dict[str, list[str]]] = None
 
 
 @dataclass

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Integration tests for AlpaSim runtime using pytest-grpc with separate servers for each service.
@@ -55,7 +55,7 @@ logging.basicConfig(
 # Required test data files - these are stored in Git LFS and will be
 # automatically downloaded if missing when tests are run
 REQUIRED_TEST_FILES = {
-    "asl": "0.asl",
+    "asl": "rollout.asl",
     "network_config": "generated-network-config.yaml",
     "user_config": "generated-user-config-0.yaml",
     "usdz": "6ea1c7a3-98b7-4adc-b774-4d9526371a0b.usdz",  # At least one USDZ file

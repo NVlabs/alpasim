@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Contains the code necessary for any entrypoint which uses Hydra to parse a config file
@@ -22,8 +22,6 @@ from omegaconf import DictConfig, OmegaConf
 from .schema import AlpasimConfig, RunMode
 
 logger = logging.getLogger("alpasim_wizard")
-logger.setLevel(logging.DEBUG)
-logger.addHandler(logging.StreamHandler())
 
 cs = ConfigStore.instance()
 # Registering the Config class with the name 'config'.

@@ -1,0 +1,47 @@
+# Should be used in defaults list, e.g.
+# - /driver: manual
+# Type validation happens at driver runtime via OmegaConf.structured merge
+
+defaults:
+  - _self_                  # YAML values override schema defaults
+  - manual_runtime_configs  # Load runtime config overrides
+
+# Manual Driver Configuration for Alpasim
+# This driver returns a constant forward trajectory and is designed for
+# human-in-the-loop control. It does not require a GPU.
+
+# Logging level (uses wizard's global setting)
+log_level: ${wizard.log_level}
+
+# Model configuration
+model:
+  model_type: MANUAL
+  # Manual model doesn't need checkpoints, but schema requires a path
+  checkpoint_path: "unused"
+  # Manual model is CPU-only, no GPU needed
+  device: "cpu"
+
+# Server configuration
+host: "0.0.0.0"
+port: ???
+
+# Inference configuration
+inference:
+  use_cameras: ["camera_front_wide_120fov"]  # Display front camera to user
+  max_batch_size: 1  # Human can only process one frame at a time
+  subsample_factor: 1
+  context_length: 1  # Only need latest frame
+
+# Route configuration (manual driver ignores commands - human decides)
+route:
+  default_command: 2  # straight
+  use_waypoint_commands: false  # Human makes decisions, not route
+
+# Output configuration
+output_dir: "/mnt/output/driver"
+
+# No trajectory optimization needed for manual control
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

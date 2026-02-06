@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import asyncio
 
@@ -42,6 +42,7 @@ async def test_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path):
         [
             "--user-config=tests/data/mock/user-config.yaml",
             "--network-config=tests/data/mock/network-config.yaml",
+            "--eval-config=tests/data/mock/eval-config.yaml",
             "--usdz-glob=tests/data/**/*.usdz",
             f"--log-dir={tmp_path}",
         ]

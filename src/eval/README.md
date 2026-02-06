@@ -9,15 +9,16 @@ This module is a refactored version of the `KPI` service. It
 
 ### Configuration
 
-See [schema.py](src/eval/schema.py).
+See [schema.py](src/eval/schema.py). Video output is controlled by `eval.video`: use `video_layouts` to select which layouts to render (e.g. `DEFAULT`, `REASONING_OVERLAY`) and `reasoning_text_refresh_interval_s` for the reasoning overlay layout.
 
 ## Writing your own metric scorer
 
 A key motivation for this module was to make writing new scorers fast and easy. To do so, we:
 
 - Rely heavily on dataclasses for storing the information parsed from ASL. The information is
-  organized hierarchically, with the root being `EvaluationResultContainer` in
-  [`data.py`](src/eval/data.py).
+  organised hierarchically, with the root being `SimulationResult` in [`data.py`](src/eval/data.py).
+  Use `ScenarioEvaluator` for evaluation and `asl_loader.load_scenario_eval_input_from_asl()` to
+  load ASL files.
 - We don't use indexing by index, but always by timestamp_us, to reduce off-by-one errors.
 - We rely on the `Trajectory` class from AlpaSim, which allows indexing into trajectories by
   timestamp. We expand this class to `RenderableTrajectory` in [`data.py`](src/eval/data.py) which
@@ -27,8 +28,7 @@ A key motivation for this module was to make writing new scorers fast and easy. 
   `RenderableTrajectory` class has helper methods to convert itself to shapely objects.
 - We also have a `ShapelyMap` class, which is primarily used for fast video rendering of maps. For
   computing map-based metrics, it's probably easiest to use the `trajdata.vec_map` directly, which
-  is also stored in `EvaluationResultContainer.sim_result` and allows querying for current lanes,
-  etc..
+  is also stored in `SimulationResult` and allows querying for current lanes, etc..
 
 ### Running locally
 
@@ -51,9 +51,8 @@ alpasim_wizard wizard.log_dir=<log_dir> +deploy=local
 
 ```bash
 uv run alpasim-eval  \
-  --asl_search_glob=<log_dir>/asl/clipgt-d8cbf4ca-b7ff-44bd-a5be-260f736a02fe/15f2c488-10ad-11f0-b123-0242c0a84004/\*\*/\*.asl \
-  --config_path=<log_dir>eval-config.yaml \
-  --output_dir=<log_dir>/eval \
+  --asl_search_glob=<log_dir>/rollouts/clipgt-d8cbf4ca-b7ff-44bd-a5be-260f736a02fe/15f2c488-10ad-11f0-b123-0242c0a84004/\*\*/\*.asl \
+  --config_path=<log_dir>/eval-config.yaml \
   --trajdata_cache_dir=<path_to_alpasim_repo>/data/trafficsim/unified_data_cache \
   --usdz_glob="<path_to_alpasim_repo>/data/nre-artifacts/all-usdzs/**/*.usdz"
 ```
@@ -65,8 +64,9 @@ The environment is shared with that of the main project and is automatically man
 Main components of the codebase:
 
 - [`data.py`](src/eval/data.py) contains most datastructures. Start exploring from
-  `EvaluationResultContainer`
-- Parsing ASL logs is done in `load_simulation_results()` in [`main.py`](src/eval/main.py)
+  `SimulationResult` and `ScenarioEvalInput`
+- Parsing ASL logs is done in `asl_loader.load_scenario_eval_input_from_asl()` in
+  [`asl_loader.py`](src/eval/asl_loader.py)
 - Scorers are implemented in the folder [`scorers`](src/eval/scorers/). If you add a new scorer,
   don't forget to add it to the list in [`scorers.__init__.py`](src/eval/scorers/__init__.py)
 - Scorers produce metrics per timestamp per rollout. These results are aggregated in

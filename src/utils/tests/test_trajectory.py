@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
 import pytest
-from alpasim_grpc.v0 import common_pb2
 from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import DynamicState, Trajectory
+from alpasim_utils.trajectory import Trajectory
 from numpy.testing import assert_almost_equal
 from scipy.spatial.transform import Rotation
 
@@ -230,89 +229,6 @@ def test_transform_relative() -> None:
     transformed = traj.transform(transform, is_relative=True)
     assert_almost_equal(transformed.poses.vec3[0], np.array([2.0, 0.0, 0.0]))
     assert_almost_equal(transformed.poses.vec3[1], np.array([0.0, 2.0, 0.0]))
-
-
-# DynamicState
-def test_DynamicState_throws_on_construct_with_invalid_size():
-    with pytest.raises(ValueError):
-        DynamicState(angular_velocity=np.zeros(4), linear_velocity=np.zeros(3))
-    with pytest.raises(ValueError):
-        DynamicState(angular_velocity=np.zeros(3), linear_velocity=np.zeros(2))
-
-
-def test_DynamicState_nominal():
-    states = []
-    for i in range(4):
-        linear_velocity = np.array([1.0 + i, 2.0, 3.0])
-        angular_velocity = np.array([4.0 + i, 5.0, 6.0])
-        states.append(
-            DynamicState(
-                angular_velocity=angular_velocity, linear_velocity=linear_velocity
-            )
-        )
-    stacked = DynamicState.stack(states)
-    assert stacked.angular_velocity.shape == (4, 3)
-    assert stacked.linear_velocity.shape == (4, 3)
-
-    assert len(stacked) == 4
-    assert stacked.batch_size == (4,)
-
-
-def test_DynamicState_append():
-    # TOOD(mwatson, migl): The behavior of append is not what was expected
-    # in that it returns a new state rather than modifying the existing one.
-    # For now, the unit test is written to reflect the current behavior, though
-    # we should get confirmation that this is the desired behavior.
-    states = DynamicState.create_empty()
-    for i in range(4):
-        linear_velocity = np.array([1.0 + i, 2.0, 3.0])
-        angular_velocity = np.array([4.0 + i, 5.0, 6.0])
-        states = states.append(
-            DynamicState(
-                angular_velocity=angular_velocity, linear_velocity=linear_velocity
-            )
-        )
-    assert states.angular_velocity.shape == (4, 3)
-
-    with pytest.raises(ValueError):
-        states.append(states)
-
-
-def test_DynamicState_from_grpc_state():
-    state = DynamicState.from_grpc_state(
-        common_pb2.DynamicState(
-            angular_velocity=common_pb2.Vec3(x=1.0, y=2.0, z=3.0),
-            linear_velocity=common_pb2.Vec3(x=4.0, y=5.0, z=6.0),
-        )
-    )
-    assert_almost_equal(state.angular_velocity, np.array([1.0, 2.0, 3.0]))
-    assert_almost_equal(state.linear_velocity, np.array([4.0, 5.0, 6.0]))
-
-
-def test_DynamicState_as_grpc_state():
-    print(82 * "=")
-    state = DynamicState(
-        angular_velocity=np.array([1.0, 2.0, 3.0]),
-        linear_velocity=np.array([4.0, 5.0, 6.0]),
-    )
-    grpc_state = state.as_grpc_state()
-    assert grpc_state.angular_velocity.x == pytest.approx(state.angular_velocity[0])
-    assert grpc_state.angular_velocity.y == pytest.approx(state.angular_velocity[1])
-    assert grpc_state.angular_velocity.z == pytest.approx(state.angular_velocity[2])
-    assert grpc_state.linear_velocity.x == pytest.approx(state.linear_velocity[0])
-    assert grpc_state.linear_velocity.y == pytest.approx(state.linear_velocity[1])
-    assert grpc_state.linear_velocity.z == pytest.approx(state.linear_velocity[2])
-
-    # Cannot convert a batch of states to a single grpc state
-    states = DynamicState.create_empty()
-    for i in range(6):
-        states = states.append(state)
-    with pytest.raises(ValueError):
-        states.as_grpc_state()
-
-    # But, we can convert a sequence
-    grpc_states = states.as_grpc_states()
-    assert len(grpc_states) == len(states)
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim_eval"
-version = "1.30.0"
+version = "1.34.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -22,7 +22,6 @@ dependencies = [
   "shapely",
   "trajdata-alpasim @ git+https://github.com/NVlabs/trajdata.git@alpasim",
   "rich[jupyter]",
-  "pandas",
   "pytest",
   "csaps",
   "ipywidgets",

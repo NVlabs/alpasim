@@ -28,6 +28,8 @@
   before pushing.
 - Follow PEP 8 naming plus domain hints: prefix vectors/poses with frames (`pose_local_to_rig`,
   `velocity_vehicle_in_local`) to avoid ambiguity in physics/AV math.
+- Do not use TYPE_CHECKING to conditionally import packages for type checking.
+- Do not use on-demand or runtime imports; always place all imports at the top of the file.
 - Document complex flows with concise comments; prefer dataclasses and type hints for public APIs.
 
 ## Testing Guidelines

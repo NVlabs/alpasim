@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Configuration manager for unified config generation."""
 
@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from alpasim_wizard.context import WizardContext
+from alpasim_wizard.schema import AlpasimConfig
 from omegaconf import OmegaConf
 
 from .services import ContainerDefinition, ContainerSet
@@ -47,11 +48,10 @@ class ConfigurationManager:
 
         # Get sim containers from service_manager for network config
         sim_containers = container_set.sim
-        self._generate_network_config(sim_containers)
+        self._generate_network_config(sim_containers, cfg)
 
         self._generate_trafficsim_config(cfg)
         self._generate_eval_config(cfg)
-        self._generate_avmf_config(cfg)
         self._generate_run_metadata(cfg)
         self._generate_driver_config(cfg)
 
@@ -86,8 +86,14 @@ class ConfigurationManager:
     def _generate_network_config(
         self,
         service_containers: List[ContainerDefinition],
+        cfg: AlpasimConfig,
     ) -> None:
-        """Generate network configuration for service discovery."""
+        """Generate network configuration for service discovery.
+
+        Args:
+            service_containers: List of container definitions from which to extract addresses.
+            cfg: AlpasimConfig containing wizard settings including external_services.
+        """
 
         network_config: Dict[str, Any] = {
             "driver": {"addresses": []},
@@ -126,6 +132,20 @@ class ConfigurationManager:
                 if c.name in network_config:
                     network_config[c.name]["addresses"].append(str(inst.address))
 
+        # Add external service addresses (for services running outside the deployment)
+        external_services = cfg.wizard.external_services
+        if external_services is not None:
+            for service_name, addresses in external_services.items():
+                if service_name in network_config:
+                    network_config[service_name]["addresses"].extend(addresses)
+                    logger.info(
+                        "Added external %s addresses: %s", service_name, addresses
+                    )
+                else:
+                    logger.warning(
+                        "Unknown external service '%s', skipping", service_name
+                    )
+
         self._write_config("generated-network-config.yaml", network_config)
         logger.debug("Generated network config")
 
@@ -161,17 +181,6 @@ class ConfigurationManager:
 
         self._write_config("driver-config.yaml", driver_config)
         logger.debug("Generated driver config")
-
-    def _generate_avmf_config(self, cfg: Any) -> None:
-        """Generate AVMF configuration."""
-        if not hasattr(cfg, "avmf"):
-            return
-
-        avmf_config = OmegaConf.to_container(cfg.avmf, resolve=True)
-        assert isinstance(avmf_config, dict)
-
-        self._write_config("avmf-config.yaml", avmf_config)
-        logger.debug("Generated avmf config")
 
     def _generate_run_metadata(self, cfg: Any) -> None:
         """Generate run metadata."""

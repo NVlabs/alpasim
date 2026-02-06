@@ -14,6 +14,7 @@ hydra:
 defines:
   filesystem: ???
   driver_model: ???
+  mpc_implementation: linear  # "linear" (OSQP, faster) or "nonlinear" (CasADi)
 
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
@@ -61,10 +62,12 @@ wizard:
     ["driver", "sensorsim", "physics", "trafficsim", "controller", "runtime"]
 
   # Services to run for evaluation (e.g., ["eval"])
-  run_eval_services: ["eval"]
+  # By default, evaluation runs in-runtime. Use +eval=eval_in_separate_job to run evaluation in a separate container.
+  run_eval_services: []
 
   # Services to run for aggregation (e.g., ["post_eval_aggregation"])
-  run_aggregation_services: ["post_eval_aggregation"]
+  # By default, aggregation runs in-runtime. Use +eval=eval_in_separate_job to run aggregation in a separate container.
+  run_aggregation_services: []
 
   # TODO: undocumented options
   run_mode: "BATCH"
@@ -90,6 +93,9 @@ scenes:
   # Selection method (set one of these two)
   scene_ids: null        # List of scene IDs to use
   test_suite_id: null    # Test suite ID to use (from suites_csv)
+
+  # Limit the number of scenes to run (0 or negative means no limit)
+  limit_to_first_n: 0
 
   # Paths
   scene_cache: "${defines.filesystem}/nre-artifacts"
@@ -187,7 +193,7 @@ services:
   controller:
     image: ???
     volumes:
-      - "${wizard.log_dir}/controller:/mnt/output" # output like the roadcast logs
+      - "${wizard.log_dir}/controller:/mnt/output"
       - "${repo-relative:'src'}:/repo/src"
     command:
       - "uv run python -m alpasim_controller.server"
@@ -210,18 +216,24 @@ services:
       - controller
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
-      - "${wizard.log_dir}:/mnt/rollouts"
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
       - "${repo-relative:'src'}:/repo/src"
     gpus: null # uses no GPUs
     command:
       - "uv run python -m alpasim_runtime.simulate"
       - "--usdz-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
-      - "--user-config=/mnt/rollouts/{runtime_config_name}"
-      - "--network-config=/mnt/rollouts/generated-network-config.yaml"
-      - "--log-dir=/mnt/rollouts"
+      - "--user-config=/mnt/log_dir/{runtime_config_name}"
+      - "--network-config=/mnt/log_dir/generated-network-config.yaml"
+      - "--log-dir=/mnt/log_dir"
       - "--log-level=${wizard.log_level}"
+      - "--array-job-dir=/mnt/array_job_dir"
+      - "--eval-config=/mnt/log_dir/eval-config.yaml"
     replicas_per_container: 1 # should only be one runtime orchestrator
 
+  # \/ the eval and post_eval_aggregation services are NOT used by the default eval-in-runtime mode,
+  # but we define the services here for completeness.
+  # Use +eval=eval_in_separate_job to run evaluation in a separate job using these containers.
   eval:
     image: ???
     volumes:
@@ -232,9 +244,8 @@ services:
     gpus: null
     command:
       - "uv run alpasim-eval"
-      - "--asl_search_glob=/mnt/log_dir/asl/**/*.asl"
+      - "--asl_search_glob=/mnt/log_dir/rollouts/**/*.asl"
       - "--config_path=/mnt/log_dir/eval-config.yaml"
-      - "--output_dir=/mnt/log_dir/eval"
       - "--trajdata_cache_dir=/mnt/trajdata_cache_dir"
       - "--usdz_glob=/mnt/nre-data/{sceneset}/**/*.usdz"
       - "--log-level=${wizard.log_level}"
@@ -291,7 +302,6 @@ runtime:
     n_rollouts: 1 # how many rollouts to simulate for that scenario
     force_gt_duration_us: 1_700_000 # 1.7s
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
-    send_av_messages: false # Flag to enable sending AV messages to the driver
 
     egopose_interval_us: 100_000
     control_timestep_us: 100_000
@@ -348,6 +358,9 @@ runtime:
         first_frame_offset_us: -30_000
 
 eval:
+  # Whether to run evaluation in runtime (after each rollout) or in separate job
+  run_in_runtime: true
+
   vec_map:
     incl_road_edges: true
     incl_traffic_signs: true

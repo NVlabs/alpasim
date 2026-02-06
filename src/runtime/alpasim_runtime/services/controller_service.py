@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Controller service implementation."""
 
@@ -13,12 +13,11 @@ import numpy as np
 from alpasim_grpc.v0.common_pb2 import DynamicState, Vec3
 from alpasim_grpc.v0.controller_pb2 import (
     RunControllerAndVehicleModelRequest,
-    RunControllerAndVehicleModelResponse,
     VDCSessionCloseRequest,
     VDCSessionRequest,
 )
 from alpasim_grpc.v0.controller_pb2_grpc import VDCServiceStub
-from alpasim_runtime.logs import LogEntry
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_runtime.services.service_base import (
     WILDCARD_SCENE_ID,
     ServiceBase,
@@ -147,6 +146,16 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         Run controller and vehicle model to get future pose.
         """
 
+        # Skip expensive gRPC request construction when in skip mode
+        if self.skip:
+            logger.debug("Skip mode: controller returning fallback pose")
+            return PropagatedPoses(
+                pose_local_to_rig=fallback_pose_local_to_rig_future,
+                pose_local_to_rig_estimate=fallback_pose_local_to_rig_future,
+                dynamic_state=DynamicState(),
+                dynamic_state_estimated=DynamicState(),
+            )
+
         request = self.create_run_controller_and_vehicle_request(
             session_uuid=self.session_info.uuid,
             now_us=now_us,
@@ -158,31 +167,18 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             force_gt=force_gt,
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(controller_request=request)
         )
 
-        if self.skip:
-            logger.info("Skip mode: controller returning fallback pose")
-            response: RunControllerAndVehicleModelResponse = (
-                RunControllerAndVehicleModelResponse(
-                    pose_local_to_rig=fallback_pose_local_to_rig_future.to_grpc_pose_at_time(
-                        future_us
-                    ),
-                    pose_local_to_rig_estimated=fallback_pose_local_to_rig_future.to_grpc_pose_at_time(
-                        future_us
-                    ),
-                )
-            )
-        else:
-            response = await profiled_rpc_call(
-                "run_controller_and_vehicle",
-                "controller",
-                self.stub.run_controller_and_vehicle,
-                request,
-            )
+        response = await profiled_rpc_call(
+            "run_controller_and_vehicle",
+            "controller",
+            self.stub.run_controller_and_vehicle,
+            request,
+        )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(controller_return=response)
         )
 

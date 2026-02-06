@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Implements the core of the simulation: a batch of rollouts with methods for advancing
@@ -23,6 +23,7 @@ from alpasim_grpc.v0.common_pb2 import DynamicState, PoseAtTime, Vec3
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.autoresume import mark_rollout_complete
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import (
     EgomotionNoiseModelConfig,
@@ -34,7 +35,6 @@ from alpasim_runtime.config import (
     VehicleConfig,
 )
 from alpasim_runtime.delay_buffer import DelayBuffer
-from alpasim_runtime.logs import LogWriterManager
 from alpasim_runtime.noise_models import EgomotionNoiseModel
 from alpasim_runtime.route_generator import RouteGenerator
 from alpasim_runtime.services.controller_service import (
@@ -45,7 +45,7 @@ from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.sensorsim_service import ImageFormat, SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
-from alpasim_runtime.telemetry.telemetry_context import try_get_context
+from alpasim_runtime.telemetry.telemetry_context import tag_telemetry, try_get_context
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.logs import LogWriter
@@ -53,6 +53,10 @@ from alpasim_utils.qvec import QVec
 from alpasim_utils.scenario import AABB, TrafficObjects
 from alpasim_utils.trajectory import Trajectory
 from trajdata.maps import VectorMap
+
+from eval.runtime_evaluator import RuntimeEvaluator
+from eval.scenario_evaluator import ScenarioEvalResult
+from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +145,7 @@ class UnboundRollout:
         version_ids: RolloutMetadata.VersionIds,
         random_seed: int,
         available_artifacts: dict[str, Artifact],
-        asl_dir: str,
+        rollouts_dir: str,
     ) -> UnboundRollout:
 
         # TODO: for now we assume there's a single sequence per NRE scene
@@ -237,7 +241,7 @@ class UnboundRollout:
             force_gt_duration_us=scenario.force_gt_duration_us,
             control_timestep_us=scenario.control_timestep_us,
             follow_log=None,
-            save_path_root=os.path.join(asl_dir, scenario.scene_id),
+            save_path_root=os.path.join(rollouts_dir, scenario.scene_id),
             time_start_offset_us=scenario.time_start_offset_us,
             version_ids=version_ids,
             camera_configs=camera_configs,
@@ -276,6 +280,7 @@ class UnboundRollout:
         trafficsim: TrafficService,
         controller: ControllerService,
         camera_catalog: CameraCatalog,
+        eval_config: EvalConfig,
     ) -> BoundRollout:
         return BoundRollout(
             self,
@@ -285,6 +290,7 @@ class UnboundRollout:
             trafficsim,
             controller,
             camera_catalog,
+            eval_config=eval_config,
         )
 
     def get_log_metadata(self) -> RolloutMetadata.SessionMetadata:
@@ -315,6 +321,7 @@ class BoundRollout:
     trafficsim: TrafficService
     controller: ControllerService
     camera_catalog: CameraCatalog
+    eval_config: EvalConfig  # Eval config for in-runtime evaluation
     # Sessions will be created dynamically in _loop
 
     # updated as we go
@@ -328,12 +335,16 @@ class BoundRollout:
     # Latest estimated dynamic state from the controller (velocities, accelerations in rig frame)
     dynamic_state_estimated: DynamicState = field(init=False)
 
-    log_writer: LogWriterManager = field(init=False)
+    # Message broadcaster for distributing LogEntry to handlers
+    broadcaster: MessageBroadcaster = field(init=False)
     planner_delay_buffer: DelayBuffer = field(init=False)
     egomotion_noise_model: EgomotionNoiseModel | None = field(init=False)
     route_generator: RouteGenerator = field(init=False)
     data_sensorsim_to_driver: Optional[bytes] = None
     runtime_cameras: list[RuntimeCamera] = field(init=False, default_factory=list)
+
+    # Runtime evaluator for in-runtime evaluation (becomes no-op if run_in_runtime=False)
+    _runtime_evaluator: RuntimeEvaluator = field(init=False)
 
     def __post_init__(self) -> None:
         # the ego obtains control at prerun_end_us, the prerun period gives us known camera poses to
@@ -341,8 +352,7 @@ class BoundRollout:
         prerun_start_us = self.unbound.control_timestamps_us[0]
         prerun_end_us = self.unbound.control_timestamps_us[1]
 
-        asl_log_writer = LogWriter(file_path=self.log_path())
-        self.log_writer = LogWriterManager(log_writers=[asl_log_writer])
+        asl_log_writer = LogWriter(file_path=self.asl_log_path())
 
         # populate the rollout trajectory history with the prerun history
         self.traffic_objs = self.unbound.traffic_objs.clip_trajectories(
@@ -392,20 +402,31 @@ class BoundRollout:
             route_generator_type=self.unbound.route_generator_type,
         )
 
-    def log_path(self) -> str:
-        return os.path.join(
-            self.unbound.save_path_root, self.unbound.rollout_uuid, "0.asl"
+        # Initialize runtime evaluator (becomes no-op internally if run_in_runtime=False)
+        self._runtime_evaluator = RuntimeEvaluator(
+            eval_config=self.eval_config,
+            rollout_uuid=self.unbound.rollout_uuid,
+            scene_id=self.unbound.scene_id,
+            save_path_root=self.unbound.save_path_root,
+            vector_map=self.unbound.vector_map,
         )
 
-    def rclog_path(self) -> str:
-        return os.path.join(
-            self.unbound.save_path_root,
-            self.unbound.rollout_uuid,
-            "0.rclog",
+        # Create message broadcaster with all handlers
+        # All handlers implement the MessageHandler protocol (on_message method)
+        self.broadcaster = MessageBroadcaster(
+            handlers=[asl_log_writer, self._runtime_evaluator],
         )
+
+    def rollout_dir(self) -> str:
+        """Directory for this rollout's output files."""
+        return os.path.join(self.unbound.save_path_root, self.unbound.rollout_uuid)
+
+    def asl_log_path(self) -> str:
+        """Path to ASL log file."""
+        return os.path.join(self.rollout_dir(), "rollout.asl")
 
     async def __aenter__(self) -> Self:
-        await self.log_writer.__aenter__()
+        await self.broadcaster.__aenter__()
         return self
 
     async def __aexit__(
@@ -414,7 +435,7 @@ class BoundRollout:
         exc_value: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        await self.log_writer.__aexit__(exc_type, exc_value, exc_tb)
+        await self.broadcaster.__aexit__(exc_type, exc_value, exc_tb)
 
     async def log_metadata(
         self,
@@ -437,7 +458,7 @@ class BoundRollout:
             aabb=self.unbound.ego_aabb.to_grpc(),
         )
 
-        await self.log_writer.log_message(
+        await self.broadcaster.broadcast(
             LogEntry(
                 rollout_metadata=RolloutMetadata(
                     session_metadata=session_metadata,
@@ -547,7 +568,7 @@ class BoundRollout:
         egomotion_estimate_error_message = PoseAtTime(
             pose=pose_rig_to_noisy_rig.as_grpc_pose(), timestamp_us=future_us
         )
-        await self.log_writer.log_message(
+        await self.broadcaster.broadcast(
             LogEntry(egomotion_estimate_error=egomotion_estimate_error_message)
         )
 
@@ -586,12 +607,17 @@ class BoundRollout:
             )
         )
 
-        await self.log_writer.log_message(poses_message)
+        await self.broadcaster.broadcast(poses_message)
 
-    async def run(self) -> None:
+    async def run(self) -> Optional[ScenarioEvalResult]:
         """
-        Run the simulation. Parses random seed sequence to follow (if available), starts at session
-        on self.driver and then dispatches to _loop
+        Run the simulation and return evaluation result if enabled.
+
+        Parses random seed sequence to follow (if available), starts a session
+        on self.driver and then dispatches to _loop.
+
+        Returns:
+            ScenarioEvalResult if in-runtime evaluation is enabled, None otherwise.
         """
 
         # gather stateful objects which need to be opened/closed via `async with`
@@ -610,7 +636,8 @@ class BoundRollout:
             for service in [self.sensorsim, self.physics, self.controller]:
                 await async_stack.enter_async_context(
                     service.session(
-                        uuid=str(self.unbound.rollout_uuid), log_writer=self.log_writer
+                        uuid=str(self.unbound.rollout_uuid),
+                        broadcaster=self.broadcaster,
                     )
                 )
 
@@ -644,7 +671,7 @@ class BoundRollout:
             await async_stack.enter_async_context(
                 self.driver.session(
                     uuid=str(self.unbound.rollout_uuid),
-                    log_writer=self.log_writer,
+                    broadcaster=self.broadcaster,
                     random_seed=self.unbound.random_seed,
                     sensorsim_cameras=available_camera_protos,
                     scene_id=self.unbound.scene_id,
@@ -664,7 +691,7 @@ class BoundRollout:
             await async_stack.enter_async_context(
                 self.trafficsim.session(
                     uuid=str(self.unbound.rollout_uuid),
-                    log_writer=self.log_writer,
+                    broadcaster=self.broadcaster,
                     traffic_objs=self.unbound.traffic_objs,
                     scene_id=self.unbound.scene_id,
                     ego_aabb=self.unbound.ego_aabb,
@@ -688,23 +715,96 @@ class BoundRollout:
                 self.unbound.random_seed,
             )
 
+            # Warmup sensorsim with a single render to avoid cold-start skewing metrics
+            if self.runtime_cameras and not self.sensorsim.skip:
+                await self._warmup_sensorsim()
+
+            # Start timing the main simulation loop (after setup and warmup)
+            loop_start_time = time.perf_counter()
+            logger.info("Simulation loop timer started")
+
             await self._loop()
 
-            # Record rollout duration
+            # Record loop duration (excluding setup and warmup)
+            loop_duration = time.perf_counter() - loop_start_time
+            logger.info("Simulation loop timer stopped")
+
+            # Total rollout duration (including setup and warmup)
             rollout_duration = time.perf_counter() - rollout_start_time
             ctx = try_get_context()
             if ctx is not None:
                 ctx.rollout_duration.observe(rollout_duration)
 
+            # Run in-runtime evaluation (returns None if run_in_runtime=False)
+            eval_result = self._runtime_evaluator.run_evaluation()
+
             mark_rollout_complete(
                 self.unbound.save_path_root, self.unbound.rollout_uuid
             )
+
+            # Calculate realtime ratio (simulated time / loop wall time, excluding setup/warmup)
+            simulated_duration_us = (
+                self.unbound.control_timestamps_us[-1]
+                - self.unbound.control_timestamps_us[0]
+            )
+            simulated_duration_s = simulated_duration_us / 1e6
+            realtime_ratio = simulated_duration_s / loop_duration
+
             logger.info(
-                "Session COMPLETED: uuid=%s scene=%s duration=%.2fs",
+                "Session COMPLETED: uuid=%s scene=%s "
+                "simulated %.2f sim seconds in %.2f wall clock seconds for %.2fx real time "
+                "(total rollout %.2fs incl. setup/warmup)",
                 self.unbound.rollout_uuid,
                 self.unbound.scene_id,
+                simulated_duration_s,
+                loop_duration,
+                realtime_ratio,
                 rollout_duration,
             )
+
+        return eval_result
+
+    async def _warmup_sensorsim(self) -> None:
+        """
+        Send a single render request to warm up sensorsim (cache, shader compilation, etc.)
+
+        This is tagged with "warmup" so it can be filtered out of "regular" telemetry.
+        """
+        camera = self.runtime_cameras[0]
+
+        # Use gt_ego_trajectory which has the full time range available
+        gt_traj = self.unbound.gt_ego_trajectory
+        traj_range = gt_traj.time_range_us
+
+        # Create a synthetic trigger that's guaranteed to be within trajectory bounds
+        trigger_start_us = traj_range.start
+        trigger_end_us = min(
+            traj_range.start + camera.clock.duration_us, traj_range.stop - 1
+        )
+        trigger = Clock.Trigger(
+            time_range_us=range(trigger_start_us, trigger_end_us + 1),
+            sequential_idx=-1,  # Warmup trigger, not part of normal sequence
+        )
+
+        # Empty traffic for warmup - we just need sensorsim to initialize
+        traffic_trajs: dict[str, Trajectory] = {}
+
+        logger.info("Warming up sensorsim with initial render request...")
+        warmup_start = time.perf_counter()
+
+        with tag_telemetry("warmup"):
+            await self.sensorsim.render(
+                ego_trajectory=gt_traj,
+                traffic_trajectories=traffic_trajs,
+                camera=camera,
+                trigger=trigger,
+                scene_id=self.unbound.scene_id,
+                image_format=self.unbound.image_format,
+                ego_mask_rig_config_id=self.unbound.ego_mask_rig_config_id,
+            )
+
+        warmup_duration = time.perf_counter() - warmup_start
+        logger.info(f"Sensorsim warmup complete in {warmup_duration:.3f}s")
 
     async def _send_images(self, past_us: int, now_us: int) -> None:
         camera_triggers = []
@@ -1049,14 +1149,6 @@ class BoundRollout:
             QVec: The corrected poses of objects at `future_us`, all defined
                 for their AABB coordinate system (this includes EGO).
         """
-        ego_ds_pose_now = self.ego_trajectory.poses[-1]
-        ego_aabb_pose_now = (
-            ego_ds_pose_now @ self.unbound.transform_ego_coords_ds_to_aabb
-        )
-        ego_aabb_pose_future = (
-            ego_ds_pose_future @ self.unbound.transform_ego_coords_ds_to_aabb
-        )
-
         traffic_poses_future: dict[str, QVec] = {}
 
         if force_gt:  # override model responses with gt
@@ -1083,6 +1175,14 @@ class BoundRollout:
                 )
 
         if self.unbound.physics_update_mode == PhysicsUpdateMode.ALL_ACTORS:
+            ego_ds_pose_now = self.ego_trajectory.poses[-1]
+            ego_aabb_pose_now = (
+                ego_ds_pose_now @ self.unbound.transform_ego_coords_ds_to_aabb
+            )
+            ego_aabb_pose_future = (
+                ego_ds_pose_future @ self.unbound.transform_ego_coords_ds_to_aabb
+            )
+
             _, traffic_poses_future = await self.physics.ground_intersection(
                 scene_id=self.unbound.scene_id,
                 delta_start_us=now_us,
@@ -1091,6 +1191,7 @@ class BoundRollout:
                 pose_future=ego_aabb_pose_future,
                 traffic_poses=traffic_poses_future,
                 ego_aabb=self.unbound.ego_aabb,
+                skip=self.trafficsim.skip or force_gt,
             )
         return traffic_poses_future
 

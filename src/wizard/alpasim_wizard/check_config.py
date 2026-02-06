@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 
@@ -29,6 +29,8 @@ def check_config(cfg: AlpasimConfig) -> None:
 
     manager = USDZManager.from_cfg(cfg.scenes)
 
+    # TODO The locic here duplicates what is in context.py:fetch_artifacts. Unify.
+
     # Determine which selection method to use
     test_suite_id = cfg.scenes.test_suite_id
     scene_ids = cfg.scenes.scene_ids
@@ -46,6 +48,16 @@ def check_config(cfg: AlpasimConfig) -> None:
     else:
         print("No scene_ids or test_suite_id specified.")
         return
+
+    # Sort to ensure deterministic ordering. This is important for resume runs when
+    # limit_to_first_n but also makes our life a bit easier.
+    artifacts = sorted(artifacts, key=lambda x: x.scene_id)
+
+    # Apply limit_to_first_n if specified (positive value)
+    limit_n = cfg.scenes.limit_to_first_n
+    if limit_n > 0 and len(artifacts) > limit_n:
+        print(f"Limiting scenes from {len(artifacts)} to first {limit_n}")
+        artifacts = artifacts[:limit_n]
 
     print(f"Found {len(artifacts)} scenes compatible with {nre_version_string=}.")
 

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Inter Process Communication (IPC) message types and helpers for worker pool communication.
 """
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
@@ -13,6 +15,9 @@ from typing import Optional, Union
 
 from alpasim_runtime.config import ScenarioConfig
 from alpasim_runtime.telemetry.rpc_wrapper import SharedRpcTracking
+
+from eval.scenario_evaluator import ScenarioEvalResult
+from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,10 @@ class JobResult:
     error: Optional[str]
     error_traceback: Optional[str]  # Full traceback for debugging
     rollout_uuid: Optional[str]
+    # Evaluation metrics from in-runtime evaluation (if enabled).
+    # Contains timestep_metrics, aggregated_metrics, and metrics_df.
+    # None if evaluation is disabled or failed.
+    eval_result: Optional[ScenarioEvalResult] = None
 
 
 class _ShutdownSentinel:
@@ -109,6 +118,7 @@ class WorkerArgs:
     user_config_path: str  # Needed for user config (scenarios, endpoints, etc.)
     usdz_glob: str
     log_dir: str  # Root directory for outputs (asl/, metrics/, txt-logs/)
+    eval_config: EvalConfig
     # For orphan detection in subprocess mode. None disables detection (inline mode).
     parent_pid: Optional[int] = None
     # Shared RPC tracking for global queue depth metrics across processes

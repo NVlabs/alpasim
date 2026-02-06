@@ -1,30 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from alpasim_runtime.config import RuntimeCameraConfig
-
-
-@dataclass
-class ImageWithMetadata:
-    start_timestamp_us: int
-    end_timestamp_us: int
-    image_bytes: bytes
-    camera_logical_id: str
-
-    def __repr__(self) -> str:
-        return (
-            "ImageWithMetadata("
-            f"start_timestamp_us={self.start_timestamp_us:_d}, "
-            f"end_timestamp_us={self.end_timestamp_us:_d}, "
-            f"camera_logical_id={self.camera_logical_id}, "
-            f"len(png_bytes)={len(self.image_bytes)})"
-        )
+from alpasim_runtime.config import RuntimeCameraConfig
 
 
 @dataclass

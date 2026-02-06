@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "asl-to-roadcast"
+version = "0.1.0"
+description = "Convert ASL logs to RoadCast (RCLog) format"
+requires-python = ">=3.11,<3.13"
+authors = [{name = "Alpamayo Team"}]
+dependencies = [
+    "aiofiles>=24.1.0",
+    "alpasim-grpc",
+    "alpasim-utils",
+    "maglev.av>=0.4.1.dev20241121",
+    "mergedeep>=1.3.4",
+    "numpy>=2.0.0",
+    "protobuf>=4.25.3",
+    "scipy>=1.15.0",
+    "trajdata-alpasim==1.4.3",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+]
+
+[project.scripts]
+asl-to-roadcast = "asl_to_roadcast.__main__:main"
+
+[tool.uv.sources]
+# Use editable relative paths since this package is isolated from the main workspace
+# Must be editable to match how these packages reference each other in the workspace
+alpasim-grpc = {path = "../../grpc", editable = true}
+alpasim-utils = {path = "../../utils", editable = true}
+
+[tool.uv.sources."maglev.av"]
+index = "maglev-pypi"
+
+[tool.uv.sources.trajdata-alpasim]
+index = "gitlab-trajdata-alpasim"
+
+[[tool.uv.index]]
+name = "maglev-pypi"
+url = "https://artifactory.build.nvda.ai/artifactory/api/pypi/maglev-pypi/simple"
+explicit = true
+
+[[tool.uv.index]]
+name = "gitlab-trajdata-alpasim"
+url = "https://gitlab-master.nvidia.com/api/v4/projects/58296/packages/pypi/simple"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["asl_to_roadcast"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

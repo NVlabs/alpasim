@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim_controller"
-version = "0.14.0"
+version = "0.16.0"
 description = "A simple, open source controller + vehicle model"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -12,16 +12,17 @@ dependencies = [
     "do_mpc",
     "pytest",
     "matplotlib",
+    "osqp",
+    "scipy",
     "alpasim_grpc",
     "alpasim_utils",
 ]
-
 authors = [
-{name = "Michael Watson", email = "mwatson@nvidia.com"},
+    {name = "Michael Watson", email = "mwatson@nvidia.com"},
 ]
 
 [tool.setuptools.packages.find]
-include = [ "alpasim_controller", "tests" ]
+include = [ "alpasim_controller", "benchmark", "tests" ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

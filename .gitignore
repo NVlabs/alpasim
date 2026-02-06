@@ -21,6 +21,7 @@ CLAUDE.md
 **/build/
 **/dist/
 
+runs/*
 tools/run-on-ord/runs
 tools/run-on-ord/outputs
 src/tools/run-on-ord/runs
