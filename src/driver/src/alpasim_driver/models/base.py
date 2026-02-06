@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Abstract base class for trajectory prediction models."""
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from PIL import Image
@@ -26,6 +26,32 @@ class DriveCommand(IntEnum):
     STRAIGHT = 1
     RIGHT = 2
     UNKNOWN = 3
+
+
+class CameraFrame(NamedTuple):
+    """A single camera frame with timestamp."""
+
+    timestamp_us: int
+    image: np.ndarray  # HWC uint8 RGB
+
+
+CameraImages = dict[str, list[CameraFrame]]
+"""Mapping from camera ID to temporal frames (length == context length)."""
+
+
+@dataclass
+class PredictionInput:
+    """All inputs needed for a single trajectory prediction.
+
+    The servicer always populates every field. Models read only the
+    fields they need.
+    """
+
+    camera_images: CameraImages
+    command: DriveCommand
+    speed: float  # m/s
+    acceleration: float  # m/s²
+    ego_pose_history: list[Any]  # list[PoseAtTime]
 
 
 @dataclass
@@ -53,12 +79,31 @@ class BaseTrajectoryModel(ABC):
     """
 
     @staticmethod
+    def _compute_headings_from_trajectory_batch(
+        trajectory_xy: np.ndarray,
+    ) -> np.ndarray:
+        """Compute headings from batched trajectory positions in rig frame.
+
+        For each waypoint, heading is the direction of travel from the previous
+        position. For the first waypoint, the previous position is the origin
+        (0, 0) since trajectory is ego-relative.
+
+        Args:
+            trajectory_xy: (B, N, 2) array of x,y positions in rig frame.
+
+        Returns:
+            (B, N) array of heading angles in radians.
+        """
+        prev = np.zeros_like(trajectory_xy)
+        prev[:, 1:, :] = trajectory_xy[:, :-1, :]
+        deltas = trajectory_xy - prev
+        return np.arctan2(deltas[:, :, 1], deltas[:, :, 0])
+
+    @staticmethod
     def _compute_headings_from_trajectory(trajectory_xy: np.ndarray) -> np.ndarray:
         """Compute headings from trajectory positions in rig frame.
 
-        Computes heading for each waypoint based on the direction of travel
-        from the previous position. For the first waypoint, the previous
-        position is the origin (0, 0) since trajectory is ego-relative.
+        Single-trajectory wrapper around :meth:`_compute_headings_from_trajectory_batch`.
 
         Args:
             trajectory_xy: (N, 2) array of x,y positions in rig frame.
@@ -66,9 +111,9 @@ class BaseTrajectoryModel(ABC):
         Returns:
             (N,) array of heading angles in radians.
         """
-        previous_positions = np.vstack(([0.0, 0.0], trajectory_xy[:-1]))
-        deltas = trajectory_xy - previous_positions
-        return np.arctan2(deltas[:, 1], deltas[:, 0])
+        return BaseTrajectoryModel._compute_headings_from_trajectory_batch(
+            trajectory_xy[np.newaxis, ...]
+        )[0]
 
     @staticmethod
     def _resize_and_center_crop(
@@ -112,7 +157,7 @@ class BaseTrajectoryModel(ABC):
 
     def _validate_cameras(
         self,
-        camera_images: dict[str, list[tuple[int, np.ndarray]]],
+        camera_images: CameraImages,
     ) -> None:
         """Validate received camera images match expected configuration.
 
@@ -140,32 +185,12 @@ class BaseTrajectoryModel(ABC):
         pass
 
     @abstractmethod
-    def predict(
-        self,
-        camera_images: dict[
-            str, list[tuple[int, np.ndarray]]
-        ],  # camera_name -> [(timestamp_us, image), ...]
-        command: DriveCommand,  # Canonical navigation command
-        speed: float,  # Current speed m/s
-        acceleration: float,  # Current longitudinal acceleration m/s²
-        ego_pose_at_time_history_local: list | None = None,
-    ) -> ModelPrediction:
-        """Generate trajectory prediction.
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
+        """Generate trajectory prediction for a single input.
 
         Args:
-            camera_images: Dictionary mapping camera logical ID to list of
-                (timestamp_us, image) tuples. List length equals context_length
-                (e.g., 8 for VAM, 1 for Transfuser). Images are HWC uint8 RGB
-                at whatever resolution the service received. Model validates
-                camera names, checks list length, and handles resize/preprocessing
-                internally. Timestamps allow caching of preprocessed frames.
-            command: Canonical DriveCommand enum value.
-                Model encodes this internally via _encode_command().
-            speed: Current vehicle speed in m/s (magnitude of velocity).
-            acceleration: Current longitudinal acceleration in m/s²
-            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
-                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
-                orientation in local frame.
+            prediction_input: All observation data needed for prediction. See
+                :class:`PredictionInput` for field descriptions.
 
         Returns:
             ModelPrediction with trajectory and headings in rig frame
@@ -178,6 +203,19 @@ class BaseTrajectoryModel(ABC):
                 or list lengths are wrong.
         """
         pass
+
+    def predict_batch(
+        self, prediction_inputs: list[PredictionInput]
+    ) -> list[ModelPrediction]:
+        """Generate predictions for a batch of inputs.
+
+        Default implementation calls :meth:`predict` sequentially.
+        Models that support GPU batching should override this to stack
+        tensors and run a single forward pass.
+        """
+        return [
+            self.predict(prediction_input) for prediction_input in prediction_inputs
+        ]
 
     @property
     @abstractmethod

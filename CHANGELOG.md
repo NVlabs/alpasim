@@ -5,6 +5,17 @@ date (more recent on top) and link to MRs which introduce the changes.
 
 ## Output directory structure changes (2.3.26)
 
+## ARM64 support and unified SLURM submit script (17.02.26)
+* **ARM64 support**: AlpaSim can now run on aarch64.
+  Build with `docker build --secret id=netrc,src=$HOME/.netrc -t alpasim-base:arm64 .`
+  and deploy with `+deploy=local_oss_arm` (Docker Compose) or `+deploy=ipp5` (SLURM).
+* **Unified SLURM script**: To run on slurm use `src/tools/run-on-slurm/submit.sh`.
+  All arguments are forwarded to the wizard as Hydra overrides.
+
+**Example**: Example SLURM submit command usage:
+- `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh +deploy=ipp5`
+
+## Output directory structure changes (03.02.26)
 The wizard output directory structure has been reorganized for clarity:
 
 - `./asl/` directory renamed to `./rollouts/` - contains rollout logs organized by scene and session

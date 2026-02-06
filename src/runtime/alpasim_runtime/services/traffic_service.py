@@ -31,9 +31,8 @@ from alpasim_runtime.services.service_base import (
     SessionInfo,
 )
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_utils.qvec import QVec
+from alpasim_utils.geometry import Pose, Trajectory, pose_to_grpc, trajectory_to_grpc
 from alpasim_utils.scenario import AABB, TrafficObjects
-from alpasim_utils.trajectory import Trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +163,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         logged_object_trajectories.append(
             ObjectTrajectory(
                 object_id="EGO",
-                trajectory=gt_ego_aabb_trajectory.to_grpc(),
+                trajectory=trajectory_to_grpc(gt_ego_aabb_trajectory),
                 aabb=ego_aabb.to_grpc(),
                 is_static=False,
             )
@@ -175,7 +174,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
             logged_object_trajectories.append(
                 ObjectTrajectory(
                     object_id=obj_id,
-                    trajectory=obj.trajectory.to_grpc(),
+                    trajectory=trajectory_to_grpc(obj.trajectory),
                     aabb=obj.aabb.to_grpc(),
                     is_static=obj.is_static,
                 )
@@ -223,7 +222,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
 
     async def simulate_traffic(
         self,
-        ego_aabb_pose_future: QVec,
+        ego_aabb_pose_future: Pose,
         future_us: int,
     ) -> TrafficReturn:
         """Simulate traffic for a given ego pose update."""
@@ -240,13 +239,13 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
 
                 # Get the trajectory at the requested timestamp
                 if future_us in obj.trajectory.time_range_us:
-                    traj = obj.trajectory.interpolate_to_timestamps(
+                    traj = obj.trajectory.interpolate(
                         np.array([future_us], dtype=np.uint64)
                     )
                     object_trajectory_updates.append(
                         ObjectTrajectoryUpdate(
                             object_id=obj_id,
-                            trajectory=traj.to_grpc(),
+                            trajectory=trajectory_to_grpc(traj),
                         )
                     )
 
@@ -259,7 +258,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
                 trajectory=common_pb2.Trajectory(
                     poses=[
                         PoseAtTime(
-                            pose=ego_aabb_pose_future.as_grpc_pose(),
+                            pose=pose_to_grpc(ego_aabb_pose_future),
                             timestamp_us=future_us,
                         )
                     ]

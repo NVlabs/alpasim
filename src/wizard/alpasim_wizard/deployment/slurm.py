@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 from ..context import WizardContext
 from ..schema import RunMode
 from ..services import ContainerDefinition, build_container_set
-from ..utils import image_url_to_sqsh_filename
+from ..utils import ensure_sqsh_path
 from .dispatcher import dispatch_command
 
 logger = logging.getLogger(__name__)
@@ -227,8 +227,9 @@ class SlurmDeployment:
             f"out-{slurm_job_id}-{container.uuid}-log.txt"
         )
 
-        sqsh = image_url_to_sqsh_filename(
-            container.service_config.image, container.context.cfg.wizard.sqshcaches
+        sqsh = ensure_sqsh_path(
+            container.service_config.image,
+            list(container.context.cfg.wizard.sqshcaches),
         )
 
         # Note that we cannot use --export=CUDA_VISIBLE_DEVICES=... with srun because SLURM
@@ -263,6 +264,7 @@ class SlurmDeployment:
 
         cmd = r"srun --verbose --overlap "
         cmd += f" --container-image={sqsh} "
+        cmd += " --container-writable "
         cmd += f" --container-mounts={s_mnt} "
 
         if container.workdir is not None:

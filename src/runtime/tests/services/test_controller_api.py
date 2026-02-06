@@ -7,30 +7,35 @@ import numpy as np
 import pytest
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.services.controller_service import ControllerService
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory
 
 
 @pytest.fixture
 def default_args():
-    qv = QVec(vec3=np.array([1.0, 0.0, 0.0]), quat=np.array([0.0, 0.0, 0.0, 1.0]))
-    trajectory = Trajectory(
-        timestamps_us=np.array([0], dtype=np.uint64),
-        poses=QVec.stack([qv]),
+
+    pose = Pose(
+        np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+    )
+    trajectory = Trajectory.from_poses(
+        timestamps=np.array([0], dtype=np.uint64),
+        poses=[pose],
     )
 
     args = {
         "session_uuid": "session_uuid",
         "now_us": 1000000,
-        "pose_local_to_rig": QVec(
-            vec3=np.array([1.0, 0.0, 0.0]), quat=np.array([0.0, 0.0, 0.0, 1.0])
+        "pose_local_to_rig": Pose(
+            np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
         ),
         "rig_linear_velocity_in_rig": np.array([1.0, 0.0, 0.0]),
         "rig_angular_velocity_in_rig": np.array([0.0, 0.0, 0.0]),
         "rig_reference_trajectory_in_rig": trajectory,
         "future_us": 10000,
-        "fallback_pose_local_to_rig_future": QVec(
-            vec3=np.array([5.0, 0.0, 0.0]), quat=np.array([0.0, 0.0, 0.0, 1.0])
+        "fallback_pose_local_to_rig_future": Pose(
+            np.array([5.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
         ),
         "force_gt": False,
     }

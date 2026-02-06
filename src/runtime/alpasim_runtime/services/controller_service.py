@@ -24,8 +24,13 @@ from alpasim_runtime.services.service_base import (
     SessionInfo,
 )
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import (
+    Pose,
+    Trajectory,
+    pose_from_grpc,
+    pose_to_grpc,
+    trajectory_to_grpc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +42,8 @@ class PropagatedPoses:
     the vehicle model, and the other representing the estimate used by the controller in the loop.
     """
 
-    pose_local_to_rig: QVec  # The pose of the vehicle in the local frame
-    pose_local_to_rig_estimate: (
-        QVec  # The "software" estimated pose of the vehicle in the local frame
-    )
+    pose_local_to_rig: Pose  # The pose of the vehicle in the local frame
+    pose_local_to_rig_estimate: Pose  # The "software" estimated pose in local frame
     dynamic_state: DynamicState  # The true dynamic state (velocities, accelerations)
     dynamic_state_estimated: DynamicState  # The estimated dynamic state
 
@@ -58,7 +61,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
     def create_run_controller_and_vehicle_request(
         session_uuid: str,
         now_us: int,
-        pose_local_to_rig: QVec,
+        pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
         rig_reference_trajectory_in_rig: Trajectory,
@@ -71,7 +74,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         request = RunControllerAndVehicleModelRequest()
         request.session_uuid = session_uuid
 
-        request.state.pose.CopyFrom(pose_local_to_rig.as_grpc_pose())
+        request.state.pose.CopyFrom(pose_to_grpc(pose_local_to_rig))
         request.state.timestamp_us = now_us
         request.state.state.linear_velocity.CopyFrom(
             Vec3(
@@ -89,7 +92,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         )
 
         request.planned_trajectory_in_rig.CopyFrom(
-            rig_reference_trajectory_in_rig.to_grpc()
+            trajectory_to_grpc(rig_reference_trajectory_in_rig)
         )
 
         request.future_time_us = future_us
@@ -134,13 +137,13 @@ class ControllerService(ServiceBase[VDCServiceStub]):
     async def run_controller_and_vehicle(
         self,
         now_us: int,
-        pose_local_to_rig: QVec,
+        pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
         rig_reference_trajectory_in_rig: Trajectory,
         future_us: int,
         force_gt: bool,
-        fallback_pose_local_to_rig_future: QVec,
+        fallback_pose_local_to_rig_future: Pose,
     ) -> PropagatedPoses:
         """
         Run controller and vehicle model to get future pose.
@@ -183,8 +186,8 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         )
 
         return PropagatedPoses(
-            pose_local_to_rig=QVec.from_grpc_pose(response.pose_local_to_rig.pose),
-            pose_local_to_rig_estimate=QVec.from_grpc_pose(
+            pose_local_to_rig=pose_from_grpc(response.pose_local_to_rig.pose),
+            pose_local_to_rig_estimate=pose_from_grpc(
                 response.pose_local_to_rig_estimated.pose
             ),
             dynamic_state=response.dynamic_state,

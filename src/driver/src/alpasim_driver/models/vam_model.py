@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """VAM (Video Action Model) wrapper implementing the common interface."""
 
 from __future__ import annotations
 
 import logging
+import platform
 from collections import OrderedDict
 from contextlib import nullcontext
-from typing import Any
 
 import numpy as np
 import omegaconf.dictconfig
@@ -18,7 +18,7 @@ import torch.serialization
 from vam.action_expert import VideoActionModelInference
 from vam.datalib.transforms import NeuroNCAPTransform
 
-from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction
+from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +77,9 @@ def _format_trajs(trajs: torch.Tensor) -> np.ndarray:
 class VAMModel(BaseTrajectoryModel):
     """VAM wrapper implementing the common interface."""
 
-    # VAM uses float16 for inference
-    DTYPE = torch.float16
+    # VAM uses float16 for inference; float32 on ARM (torch.amp.autocast on aarch64
+    # doesn't auto-cast Float32 weights in F.linear — fails across PyTorch versions)
+    DTYPE = torch.float32 if platform.machine() == "aarch64" else torch.float16
     # VAM only supports single camera
     NUM_CAMERAS = 1
     # NeuroNCAPTransform expects 900x1600 input
@@ -92,7 +93,6 @@ class VAMModel(BaseTrajectoryModel):
         device: torch.device,
         camera_ids: list[str],
         context_length: int = 8,
-        cache_size: int = 32,
     ):
         """Initialize VAM model.
 
@@ -102,7 +102,6 @@ class VAMModel(BaseTrajectoryModel):
             device: Torch device for inference.
             camera_ids: List of camera IDs (must be exactly 1).
             context_length: Number of temporal frames (default 8).
-            cache_size: Maximum number of tokenized frames to cache.
         """
         if len(camera_ids) != self.NUM_CAMERAS:
             raise ValueError(
@@ -117,11 +116,7 @@ class VAMModel(BaseTrajectoryModel):
         self._camera_ids = camera_ids
         self._context_length = context_length
         self._preproc_pipeline = NeuroNCAPTransform()
-        self._use_autocast = device.type == "cuda"
-
-        # Token cache: timestamp_us -> tokenized tensor (LRU)
-        self._token_cache: OrderedDict[int, torch.Tensor] = OrderedDict()
-        self._cache_size = cache_size
+        self._use_autocast = device.type == "cuda" and platform.machine() != "aarch64"
 
     @property
     def camera_ids(self) -> list[str]:
@@ -156,86 +151,111 @@ class VAMModel(BaseTrajectoryModel):
         )
         return self._preproc_pipeline(image)
 
-    def _get_or_tokenize(self, timestamp_us: int, image: np.ndarray) -> torch.Tensor:
-        """Get cached tokens or tokenize and cache."""
-        if timestamp_us in self._token_cache:
-            self._token_cache.move_to_end(timestamp_us)
-            return self._token_cache[timestamp_us]
-
-        # Preprocess and tokenize
-        tensor = self._preprocess(image)
-        autocast_ctx = (
-            torch.amp.autocast(self._device.type, dtype=self.DTYPE)
-            if self._use_autocast
-            else nullcontext()
-        )
-        with torch.no_grad():
-            with autocast_ctx:
-                tokens = self._tokenizer(tensor.unsqueeze(0).to(self._device))
-        tokens = tokens.squeeze(0).cpu()
-
-        # Cache with LRU eviction
-        self._token_cache[timestamp_us] = tokens
-        if len(self._token_cache) > self._cache_size:
-            self._token_cache.popitem(last=False)
-
-        return tokens
-
-    def predict(
-        self,
-        camera_images: dict[str, list[tuple[int, np.ndarray]]],
-        command: DriveCommand,
-        speed: float,
-        acceleration: float,
-        ego_pose_at_time_history_local: list[Any] | None = None,
-    ) -> ModelPrediction:
-        """Generate trajectory prediction.
+    def _preprocess_batch(self, images: list[np.ndarray]) -> torch.Tensor:
+        """Preprocess and stack multiple images into a batch tensor.
 
         Args:
-            camera_images: Dict mapping camera_id to list of
-                (timestamp_us, image) tuples. List length must equal
-                context_length.
-            command: Canonical navigation command.
-            speed: Current vehicle speed in m/s (unused by VAM).
-            acceleration: Current longitudinal acceleration (unused by VAM).
-            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
-                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
-                orientation in local frame.
+            images: List of HWC uint8 numpy arrays.
+
         Returns:
-            ModelPrediction with trajectory in rig frame.
+            Tensor of shape ``(B, C, H, W)`` ready for the tokenizer.
         """
-        del ego_pose_at_time_history_local
-        self._validate_cameras(camera_images)
+        tensors = [self._preprocess(img) for img in images]
+        return torch.stack(tensors, dim=0)
 
-        # VAM uses single camera
-        cam_id = self._camera_ids[0]
-        frames = camera_images[cam_id]
+    def _tokenize_frames(self, images: list[np.ndarray]) -> torch.Tensor:
+        """Preprocess and tokenize a batch of images in a single GPU call.
 
-        if len(frames) != self._context_length:
-            raise ValueError(
-                f"VAM expects {self._context_length} frames, got {len(frames)}"
-            )
+        Args:
+            images: List of HWC uint8 numpy arrays.
 
-        # VAM ignores speed/acceleration - uses only visual tokens + command
-        tokens = [self._get_or_tokenize(ts, img) for ts, img in frames]
-        token_tensor = torch.stack(tokens, dim=0).unsqueeze(0).to(self._device)
-
-        # Encode command using VAM-specific encoding
-        encoded_command = self._encode_command(command)
-        command_tensor = torch.tensor(
-            [[encoded_command]], device=self._device, dtype=torch.long
-        )
-
+        Returns:
+            Token tensor of shape ``(B, h, w)``.
+        """
+        batch_tensor = self._preprocess_batch(images).to(self._device)
         autocast_ctx = (
             torch.amp.autocast(self._device.type, dtype=self.DTYPE)
             if self._use_autocast
             else nullcontext()
         )
-
         with torch.no_grad():
             with autocast_ctx:
-                trajectory = self._vam(token_tensor, command_tensor, self.DTYPE)
+                tokens = self._tokenizer(batch_tensor)
+        return tokens
 
-        trajectory_xy = _format_trajs(trajectory)
-        headings = self._compute_headings_from_trajectory(trajectory_xy)
-        return ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
+        """Generate trajectory prediction.
+
+        Delegates to :meth:`predict_batch` so there is one inference path.
+        """
+        return self.predict_batch([prediction_input])[0]
+
+    def predict_batch(
+        self, prediction_inputs: list[PredictionInput]
+    ) -> list[ModelPrediction]:
+        """Generate trajectory predictions for a batch of inputs.
+
+        All frames are batch-tokenized in a single GPU call, then a single
+        VAM forward pass produces all trajectories.
+
+        Args:
+            prediction_inputs: List of prediction inputs, one per concurrent session.
+
+        Returns:
+            List of ModelPrediction, one per input, in the same order.
+        """
+        if not prediction_inputs:
+            return []
+
+        cam_id = self._camera_ids[0]
+        batch_size = len(prediction_inputs)
+
+        # --- Validate and collect all frames ---
+        all_images: list[np.ndarray] = []
+        all_commands: list[int] = []
+
+        for inp in prediction_inputs:
+            self._validate_cameras(inp.camera_images)
+            frames = inp.camera_images[cam_id]
+            if len(frames) != self._context_length:
+                raise ValueError(
+                    f"VAM expects {self._context_length} frames, got {len(frames)}"
+                )
+            for _ts, img in frames:
+                all_images.append(img)
+            all_commands.append(self._encode_command(inp.command))
+
+        # --- Batch tokenize: (B*T, C, H, W) -> (B*T, h, w) ---
+        all_tokens = self._tokenize_frames(all_images)
+
+        # Reshape to (B, T, h, w)
+        token_h, token_w = all_tokens.shape[1], all_tokens.shape[2]
+        batched_tokens = all_tokens.reshape(
+            batch_size, self._context_length, token_h, token_w
+        )
+
+        # --- Batch commands: (B, 1) ---
+        batched_commands = torch.tensor(
+            all_commands, device=self._device, dtype=torch.long
+        ).unsqueeze(1)
+
+        # --- Single VAM forward pass ---
+        autocast_ctx = (
+            torch.amp.autocast(self._device.type, dtype=self.DTYPE)
+            if self._use_autocast
+            else nullcontext()
+        )
+        with torch.no_grad():
+            with autocast_ctx:
+                trajectories = self._vam(batched_tokens, batched_commands, self.DTYPE)
+
+        # --- Unpack per-sample results ---
+        results: list[ModelPrediction] = []
+        for i in range(batch_size):
+            trajectory_xy = _format_trajs(trajectories[i : i + 1])
+            headings = self._compute_headings_from_trajectory(trajectory_xy)
+            results.append(
+                ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)
+            )
+
+        return results

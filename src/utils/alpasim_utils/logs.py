@@ -16,7 +16,9 @@ from typing import AsyncGenerator, Optional, Self, Type, TypeVar
 
 import aiofiles
 import aiofiles.os
-from alpasim_grpc.v0.logging_pb2 import LogEntry
+import numpy as np
+from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
+from alpasim_utils.geometry import Trajectory, pose_from_grpc
 from google.protobuf.message import Message
 
 logger = logging.getLogger(__name__)
@@ -100,3 +102,40 @@ async def async_read_pb_log(
         fname, message_type=LogEntry, raise_on_malformed=raise_on_malformed
     ):
         yield log_entry
+
+
+async def read_trajectory(fname: str) -> Optional[tuple[str, Trajectory]]:
+    """
+    Read a log stream, select actor poses and combine in a trajectory object.
+    Return scene name + trajectory
+    """
+    timestamps_us = []
+    poses = []
+
+    name: Optional[str] = None
+
+    async for message in async_read_pb_log(fname):
+        if message.WhichOneof("log_entry") == "rollout_metadata":
+            metadata: RolloutMetadata = message.rollout_metadata
+            name = metadata.session_metadata.scene_id
+            continue
+        if message.WhichOneof("log_entry") != "actor_poses":
+            continue
+        poses_message: ActorPoses = message.actor_poses
+        timestamp_us = poses_message.timestamp_us
+        (grpc_pose,) = poses_message.actor_poses
+        pose = pose_from_grpc(grpc_pose.actor_pose)
+        timestamps_us.append(timestamp_us)
+        poses.append(pose)
+
+    if not timestamps_us:
+        return None
+    if not name:
+        return None
+
+    trajectory = Trajectory.from_poses(
+        timestamps=np.array(timestamps_us, dtype=np.uint64),
+        poses=poses,  # List of Pose objects
+    )
+
+    return name, trajectory

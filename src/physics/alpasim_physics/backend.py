@@ -1,15 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
-import tempfile
 from enum import IntEnum, unique
 
 import numpy as np
-import point_cloud_utils as pcu
 import scipy.spatial.transform as scipy_trans
 import warp as wp
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionReturn
+from alpasim_physics.ply_io import load_mesh_vf
 from alpasim_physics.utils import batch_so3_trans_2_se3, so3_trans_2_se3
 
 try:
@@ -85,17 +84,6 @@ class GroundIntersectionStatus(IntEnum):
                 )
             case _:
                 return PhysicsGroundIntersectionReturn.Status.UNKNOWN
-
-
-def load_mesh_vf(mesh_ply: bytes) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Adapts pcu.load_mesh_vf to work with bytes input instead of file path until
-    https://github.com/fwilliams/point-cloud-utils/issues/98 is addressed.
-    """
-    with tempfile.NamedTemporaryFile(mode="wb", suffix=".ply") as temp_ply_file:
-        temp_ply_file.write(mesh_ply)
-        temp_ply_file.seek(0)
-        return pcu.load_mesh_vf(temp_ply_file.name)
 
 
 class PhysicsBackend:

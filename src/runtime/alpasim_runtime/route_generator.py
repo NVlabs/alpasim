@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 import math
@@ -8,8 +8,7 @@ from typing import final
 
 import numpy as np
 from alpasim_runtime.config import RouteGeneratorType
-from alpasim_utils.polyline import Polyline
-from alpasim_utils.qvec import QVec
+from alpasim_utils.geometry import Polyline, Pose
 from trajdata.maps import VectorMap
 from trajdata.maps.vec_map_elements import RoadLane
 
@@ -90,7 +89,7 @@ class RouteGenerator(ABC):
         else:
             self._route_polyline_in_local = Polyline(points=route_polyline_in_local)
 
-    def generate_route(self, timestamp_us: int, pose_local_to_rig: QVec) -> Polyline:
+    def generate_route(self, timestamp_us: int, pose_local_to_rig: Pose) -> Polyline:
         """
         Generate the route polyline in the rig frame for the given timestamp and pose
         Args:
@@ -165,7 +164,7 @@ class RouteGenerator(ABC):
         pass
 
     @staticmethod
-    def prepare_for_policy(polyline: Polyline) -> None:
+    def prepare_for_policy(polyline: Polyline) -> Polyline:
         """
         The target policy expects a few conditions to be true for the route waypoints:
         - There are always NUM_WAYPOINTS waypoints
@@ -174,11 +173,14 @@ class RouteGenerator(ABC):
         This method ensures these three conditions are met and pads the polyline with NaNs
         if necessary.
         Args:
-          polyline: the polyline to pad (modified in place)
+          polyline: the polyline to process
+        Returns:
+          a new Polyline with the required conditions met
         """
         MIN_DIST_M = 3.5
         MAX_DIST_M = 4.5
 
+        points = polyline.waypoints.copy()
         segment_lengths = polyline.segment_lengths
         invalid_indices = (segment_lengths < MIN_DIST_M) | (
             segment_lengths > MAX_DIST_M
@@ -186,15 +188,17 @@ class RouteGenerator(ABC):
 
         if np.any(invalid_indices):
             first_invalid_index = np.where(invalid_indices)[0][0]
-            polyline.points = polyline.points[0 : (first_invalid_index + 1)]
+            points = points[0 : (first_invalid_index + 1)]
 
         # pad the polyline with NaNs if necessary
-        num_waypoints_to_pad = RouteGenerator.NUM_WAYPOINTS - len(polyline)
+        num_waypoints_to_pad = RouteGenerator.NUM_WAYPOINTS - len(points)
         if num_waypoints_to_pad > 0:
             nan_padding = np.full((num_waypoints_to_pad, 3), np.nan)
-            polyline.points = np.vstack((polyline.points, nan_padding))
+            points = np.vstack((points, nan_padding))
         elif num_waypoints_to_pad < 0:
-            polyline.points = polyline.points[0 : RouteGenerator.NUM_WAYPOINTS]
+            points = points[0 : RouteGenerator.NUM_WAYPOINTS]
+
+        return Polyline(points=points)
 
     @staticmethod
     def sanity_check_waypoints_for_foldback(waypoints: np.ndarray) -> None:
