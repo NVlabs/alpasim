@@ -27,3 +27,8 @@ members = [
 override-dependencies = [
    "flash-attn; python_version < '0'",
 ]
+constraint-dependencies = [
+  # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.
+  # Remove this constraint when grpcio-tools and protobuf are upgraded to 5.x+.
+  "setuptools<82",
+]
