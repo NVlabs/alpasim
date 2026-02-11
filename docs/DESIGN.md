@@ -16,7 +16,7 @@ Core services include the
 traffic simulator (coming soon). Additionally, we have a [physics simulation module](/src/physics)
 (ground constraints for egovehicle and non-ego actors), a
 [controller/vehicle model](/src/controller), and a
-[runtime](https://gitlab-master.nvidia.com/alpamayo/alpasim-runtime) which drives the simulation
+[runtime](/src/runtime) which drives the simulation
 loop by issuing calls to the respective services and produces logs. An [eval module](src/eval) runs
 outside of the main simulation loop and consumes the logs to compute metrics for autonomous driving.
 
