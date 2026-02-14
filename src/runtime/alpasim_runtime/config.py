@@ -62,7 +62,7 @@ class NetworkSimulatorConfig:
 class RuntimeCameraConfig:
     """Configuration for a camera in the runtime. See `RuntimeCamera` for more details."""
 
-    logical_id: str = "camera_front_wide_120fov"
+    logical_id: str = ""
     height: int = 160
     width: int = 256
     frame_interval_us: int = 33_000  # about 30fps

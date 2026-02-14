@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim_render"
+version = "0.1.0"
+description = "DigitalTwin renderer module for Alpasim"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "pyquaternion>=0.9.0",
+    "gsplat>=1.0.0",
+    "alpasim_utils",  # For geometry_utils and other utilities
+]
+
+authors = [
+    {name = "Alpasim Team"},
+]
+
+[tool.uv.sources]
+alpasim_utils = {workspace = true}
+
+# Note: render module uses 'src.render' and 'src.utils' import path structure
+# The module structure is:
+#   - src/render/base_renderer.py -> src.render.base_renderer
+#   - src/render/src/digitaltwin.py -> src.render.src.digitaltwin
+#   - src/render/src/utils/ -> src.utils (gaussian_utils, portable_utils)
+#   - src/render/src/gaussian_model/ -> src.gaussian_model
+
+# Package discovery configuration
+# render module has a special structure where:
+# - base_renderer.py is at the root of render/
+# - src/ subdirectory contains the main code
+# - src/utils/ contains utilities that are imported as src.utils.*
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+exclude = ["tests*", "*.tests*"]

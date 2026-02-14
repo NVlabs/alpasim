@@ -31,6 +31,8 @@ from alpasim_runtime.services.service_pool import ServicePool
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.worker.ipc import JobResult, RolloutJob, ServiceAllocations
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.data_source_loader import load_data_sources
+from alpasim_utils.scene_data_source import SceneDataSource
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class Dispatcher:
     camera_catalog: CameraCatalog
 
     user_config: UserSimulatorConfig
-    artifacts: dict[str, Artifact]
+    artifacts: dict[str, SceneDataSource]
     version_ids: RolloutMetadata.VersionIds
     asl_dir: str
 
@@ -72,15 +74,27 @@ class Dispatcher:
     async def create(
         user_config: UserSimulatorConfig,
         allocations: ServiceAllocations,
-        usdz_glob: str,
-        asl_dir: str,
+        usdz_glob: str | None = None,
+        asl_dir: str = "",
+        trajdata_config_path: str | None = None,
     ) -> Dispatcher:
-        """Initialize dispatcher: discover artifacts, build pools from allocations."""
+        """
+        Initialize dispatcher: discover artifacts, build pools from allocations.
+        
+        Args:
+            user_config: User simulator configuration
+            allocations: Service allocations
+            usdz_glob: Glob pattern for USDZ files (mutually exclusive with trajdata_config_path)
+            asl_dir: Directory for ASL output files
+            trajdata_config_path: Path to JSON/YAML file containing trajdata configuration
+        """
         camera_catalog = CameraCatalog(user_config.extra_cameras)
 
         # NOTE: In multi-worker mode, each worker re-discovers artifacts independently.
-        artifacts = Artifact.discover_from_glob(
-            usdz_glob, smooth_trajectories=user_config.smooth_trajectories
+        artifacts = load_data_sources(
+            usdz_glob=usdz_glob,
+            trajdata_config_path=trajdata_config_path,
+            smooth_trajectories=user_config.smooth_trajectories,
         )
 
         endpoints = user_config.endpoints

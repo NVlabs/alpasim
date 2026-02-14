@@ -238,8 +238,12 @@ class Artifact:
             # Try loading map data
             map_loaded = False
             with zipfile.ZipFile(self.source, "r") as zip_file:
-                # Try loading map from xodr
-                if self._load_xodr_map(zip_file):
+                # Try loading map from protobuf (preferred, directly from VectorMap)
+                if self._load_pb_map(zip_file):
+                    map_loaded = True
+                    logger.info("Successfully loaded map from protobuf")
+                # Fallback to XODR if protobuf not available
+                elif self._load_xodr_map(zip_file):
                     map_loaded = True
                     logger.info("Successfully loaded map from XODR")
 
@@ -259,6 +263,43 @@ class Artifact:
             # Mark as attempted AFTER map is fully loaded and finalized
             self._attempted_map_load = True
             return self._map
+
+    def _load_pb_map(self, zip_file: zipfile.ZipFile) -> bool:
+        """Load map from protobuf file.
+
+        Args:
+            zip_file: Open ZipFile instance
+
+        Returns:
+            True if map was successfully loaded, False otherwise
+        """
+        try:
+            # Open protobuf file
+            with zip_file.open("map.pb", "r") as pb_file:
+                pb_bytes = pb_file.read()
+
+            # Parse protobuf
+            if VectorMap is None:
+                logger.warning("VectorMap is not available, cannot load protobuf map")
+                return False
+
+            import trajdata.proto.vectorized_map_pb2 as map_proto
+
+            vec_map_proto = map_proto.VectorizedMap()
+            vec_map_proto.ParseFromString(pb_bytes)
+
+            # Convert from protobuf to VectorMap
+            # Note: We use default parameters (incl_road_lanes=True, etc.)
+            # which matches the typical usage in trajdata
+            self._map = VectorMap.from_proto(vec_map_proto)
+
+            return True
+        except (KeyError, FileNotFoundError) as e:
+            logger.debug(f"Could not load protobuf map: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to load protobuf map: {e}")
+            return False
 
     def _load_xodr_map(self, zip_file: zipfile.ZipFile) -> bool:
         """Load map from XODR file.

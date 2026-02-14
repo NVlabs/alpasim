@@ -188,7 +188,18 @@ message RGBRenderRequest {
     fixed64 frame_start_us = 5;
     fixed64 frame_end_us = 6;
 
-    PosePair sensor_pose = 7;
+    // Deprecated: Use ego_pose instead. sensor_pose is camera pose in world frame.
+    // Kept for backward compatibility. If ego_pose is provided, it will be used instead.
+    PosePair sensor_pose = 7 [deprecated = true];
+
+    // Ego vehicle pose in world frame (preferred for MTGS renderer)
+    // If provided, this will be used instead of deriving from sensor_pose
+    PosePair ego_pose = 13;
+
+    // Rig to camera transformation (camera pose relative to ego/rig frame)
+    // If provided, this will be used for accurate camera2ego transformation
+    // If not provided, will be loaded from asset folder or data_source
+    common.Pose rig_to_camera = 14;
 
     repeated DynamicObject dynamic_objects = 8;
 

@@ -184,7 +184,8 @@ async def worker_async_main(args: WorkerArgs) -> None:
         dispatcher = await Dispatcher.create(
             user_config=user_config,
             allocations=args.allocations,
-            usdz_glob=args.usdz_glob,
+            usdz_glob=getattr(args, 'usdz_glob', None),
+            trajdata_config_path=getattr(args, 'trajdata_config_path', None),
             asl_dir=asl_dir,
         )
 

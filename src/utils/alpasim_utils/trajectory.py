@@ -206,6 +206,18 @@ class Trajectory:
         start_us = max(start_us, self.time_range_us.start)
         last_timestamp_us = min(end_us, self.time_range_us.stop) - 1
 
+        # Check if start and end are the same (single timestamp case)
+        if start_us == last_timestamp_us:
+            # Single timestamp case: just interpolate to that one timestamp
+            single_pose = self.interpolate_pose(start_us)
+            return Trajectory(
+                timestamps_us=np.array([start_us], dtype=np.uint64),
+                poses=QVec(
+                    vec3=single_pose.vec3[np.newaxis, :],
+                    quat=single_pose.quat[np.newaxis, :],
+                ),
+            )
+
         # interpolate the start and end poses, retain the poses in between
         first_pose, last_pose = self.interpolate_to_timestamps(
             np.array([start_us, last_timestamp_us], dtype=np.uint64)
@@ -213,16 +225,12 @@ class Trajectory:
         is_between_start_and_end = (self.timestamps_us > start_us) & (
             self.timestamps_us < last_timestamp_us
         )
-        if start_us == last_timestamp_us:
-            poses = [first_pose]
-            timestamps_us = [start_us]
-        else:
-            poses = [first_pose, *list(self.poses[is_between_start_and_end]), last_pose]
-            timestamps_us = [
-                start_us,
-                *self.timestamps_us[is_between_start_and_end],
-                last_timestamp_us,
-            ]
+        poses = [first_pose, *list(self.poses[is_between_start_and_end]), last_pose]
+        timestamps_us = [
+            start_us,
+            *self.timestamps_us[is_between_start_and_end],
+            last_timestamp_us,
+        ]
 
         return Trajectory(
             timestamps_us=np.array(timestamps_us, dtype=np.uint64),

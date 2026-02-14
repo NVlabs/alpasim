@@ -48,6 +48,7 @@ from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.telemetry.telemetry_context import try_get_context
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.logs import LogWriter
 from alpasim_utils.qvec import QVec
 from alpasim_utils.scenario import AABB, TrafficObjects
@@ -140,7 +141,7 @@ class UnboundRollout:
         scenario: ScenarioConfig,
         version_ids: RolloutMetadata.VersionIds,
         random_seed: int,
-        available_artifacts: dict[str, Artifact],
+        available_artifacts: dict[str, SceneDataSource],
         asl_dir: str,
     ) -> UnboundRollout:
 

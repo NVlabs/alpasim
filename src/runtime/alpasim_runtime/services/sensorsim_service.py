@@ -21,6 +21,7 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
     PosePair,
     RGBRenderRequest,
     RGBRenderReturn,
+    ShutterType,
 )
 from alpasim_grpc.v0.sensorsim_pb2_grpc import SensorsimServiceStub
 from alpasim_runtime.camera_catalog import CameraCatalog
@@ -81,7 +82,66 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
     ) -> list[AvailableCamerasReturn.AvailableCamera]:
         """Fetch available cameras for `scene_id`, skipping RPC in skip mode."""
         if self.skip:
-            return []
+            logger.info("Skip mode: sensorsim returning fake CAM")
+            # In skip mode, return fake cameras from extra_cameras config
+            # so that merge_local_and_sensorsim_cameras can work properly
+            local_overrides = self._camera_catalog.get_local_override_cameras()
+            fake_cameras = []
+            for cfg in local_overrides:
+                # Create a minimal AvailableCamera from config
+                # If config is complete, use it; otherwise create a minimal one
+                # that will be filled in by merge_local_and_sensorsim_cameras
+                camera = AvailableCamerasReturn.AvailableCamera(
+                    logical_id=cfg.logical_id,
+                )
+                # If config has all required fields, create a complete camera
+                if (
+                    cfg.rig_to_camera is not None
+                    and cfg.intrinsics is not None
+                    and cfg.resolution_hw is not None
+                    and cfg.shutter_type is not None
+                ):
+                    # Create camera definition from config and convert to proto
+                    from alpasim_runtime.camera_catalog import CameraDefinition
+
+                    camera_def = CameraDefinition.from_config(cfg)
+                    camera = camera_def.as_proto()
+                else:
+                    # Create minimal camera with placeholder values
+                    # These will be overridden by merge_local_and_sensorsim_cameras
+                    camera.intrinsics.logical_id = cfg.logical_id
+                    camera.intrinsics.resolution_h = cfg.resolution_hw[0] if cfg.resolution_hw else 1080
+                    camera.intrinsics.resolution_w = cfg.resolution_hw[1] if cfg.resolution_hw else 1920
+                    # Set shutter_type with default fallback
+                    try:
+                        camera.intrinsics.shutter_type = ShutterType.Value(
+                            cfg.shutter_type or "GLOBAL"
+                        )
+                    except ValueError:
+                        camera.intrinsics.shutter_type = ShutterType.GLOBAL
+                    # Set minimal intrinsics (opencv_pinhole with default values)
+                    # This is required for CameraDefinition.from_proto to work
+                    if cfg.intrinsics is None:
+                        pinhole = camera.intrinsics.opencv_pinhole_param
+                        pinhole.focal_length_x = camera.intrinsics.resolution_w
+                        pinhole.focal_length_y = camera.intrinsics.resolution_h
+                        pinhole.principal_point_x = camera.intrinsics.resolution_w / 2.0
+                        pinhole.principal_point_y = camera.intrinsics.resolution_h / 2.0
+                    # Set default rig_to_camera (identity)
+                    camera.rig_to_camera.quat.w = 1.0
+                    if cfg.rig_to_camera is not None:
+                        camera.rig_to_camera.vec.x = cfg.rig_to_camera.translation_m[0]
+                        camera.rig_to_camera.vec.y = cfg.rig_to_camera.translation_m[1]
+                        camera.rig_to_camera.vec.z = cfg.rig_to_camera.translation_m[2]
+                        camera.rig_to_camera.quat.x = cfg.rig_to_camera.rotation_xyzw[0]
+                        camera.rig_to_camera.quat.y = cfg.rig_to_camera.rotation_xyzw[1]
+                        camera.rig_to_camera.quat.z = cfg.rig_to_camera.rotation_xyzw[2]
+                        camera.rig_to_camera.quat.w = cfg.rig_to_camera.rotation_xyzw[3]
+                fake_cameras.append(camera)
+            logger.info(
+                f"Skip mode: returning {len(fake_cameras)} fake cameras from extra_cameras config"
+            )
+            return fake_cameras
 
         if scene_id in self._available_cameras:
             return self._copy_available_cameras(self._available_cameras[scene_id])
@@ -218,6 +278,20 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             delta=definition.rig_to_camera,
         )
 
+        # Create ego_pose (ego vehicle pose without rig_to_camera transform)
+        # This is used by MTGS renderer which needs the actual ego position
+        ego_pose = trajectory_to_pose_pair(
+            ego_trajectory,
+            delta=None,  # No rig_to_camera transform for ego pose
+        )
+
+        # Get rig_to_camera as grpc Pose for MTGS renderer
+        rig_to_camera_pose = (
+            definition.rig_to_camera.as_grpc_pose()
+            if definition.rig_to_camera is not None
+            else None
+        )
+
         return RGBRenderRequest(
             scene_id=scene_id,
             resolution_h=camera.render_resolution_hw[0],
@@ -226,6 +300,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             frame_start_us=start_us,
             frame_end_us=end_us,
             sensor_pose=sensor_pose,
+            ego_pose=ego_pose,  # Add ego_pose for MTGS renderer
+            rig_to_camera=rig_to_camera_pose,  # Add rig_to_camera for MTGS
             dynamic_objects=dynamic_objects,
             image_format=image_format,
             image_quality=95,
@@ -277,13 +353,15 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         )
 
         images_with_metadata = []
-        for rgb_response in response.rgb_responses:
+        # Match responses with requests to get metadata (timestamps, camera_id)
+        # RGBRenderReturn only contains image_bytes, so we need to get metadata from the request
+        for rgb_request, rgb_response in zip(request.rgb_requests, response.rgb_returns):
             images_with_metadata.append(
                 ImageWithMetadata(
-                    start_timestamp_us=rgb_response.start_timestamp_us,
-                    end_timestamp_us=rgb_response.end_timestamp_us,
+                    start_timestamp_us=rgb_request.frame_start_us,
+                    end_timestamp_us=rgb_request.frame_end_us,
                     image_bytes=rgb_response.image_bytes,
-                    camera_logical_id=rgb_response.camera_logical_id,
+                    camera_logical_id=rgb_request.camera_intrinsics.logical_id,
                 )
             )
 

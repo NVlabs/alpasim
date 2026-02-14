@@ -1,0 +1,290 @@
+enable_autoresume: false
+nr_workers: 1  
+
+endpoints:
+  controller:
+    n_concurrent_rollouts: 14
+    skip: true
+  do_shutdown: true
+  driver:
+    n_concurrent_rollouts: 14
+    skip: true
+  physics:
+    n_concurrent_rollouts: 14
+    skip: true
+  sensorsim:
+    n_concurrent_rollouts: 4
+    skip: false
+  sensorsim_cache_size: '4'
+  trafficsim:
+    n_concurrent_rollouts: 14
+    skip: true
+
+scenarios:
+  # - scene_id: 2021.08.30.16.16.44_veh-40_00779_01088-e5d2a01ab5b0562a
+  #   assert_zero_decision_delay: false
+  #   group_render_requests: true 
+  #   cameras:
+  #     - logical_id: CAM_F0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080  
+  #       width: 1920
+  #     - logical_id: CAM_L1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_B0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #   egomotion_noise:
+  #     cov_orientation_x: 0.0
+  #     cov_orientation_y: 0.0
+  #     cov_orientation_z: 0.0007
+  #     cov_x: 0.05
+  #     cov_y: 0.05
+  #     cov_z: 0.0
+  #     enabled: false
+  #     time_constant_orientation: 5.0
+  #     time_constant_position: 3.0
+  #   egopose_interval_us: 500000
+  #   control_timestep_us: 500000 
+  #   force_gt_duration_us: 20000000
+  #   min_traffic_duration_us: 5000000
+  #   n_rollouts: 1
+  #   n_sim_steps: 10 # max steps 10
+  #   physics_update_mode: NONE
+  #   planner_delay_us: 0
+  #   route_generator_type: MAP
+  #   send_av_messages: false
+  #   send_recording_ground_truth: false
+  #   time_start_offset_us: 00000
+
+  # - scene_id: 2021.09.29.19.02.14_veh-28_00964_01689-5d5cef2e5d6b5d6b
+  #   assert_zero_decision_delay: false
+  #   group_render_requests: true 
+  #   cameras:
+  #     - logical_id: CAM_F0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080  
+  #       width: 1920
+  #     - logical_id: CAM_L1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_B0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #   egomotion_noise:
+  #     cov_orientation_x: 0.0
+  #     cov_orientation_y: 0.0
+  #     cov_orientation_z: 0.0007
+  #     cov_x: 0.05
+  #     cov_y: 0.05
+  #     cov_z: 0.0
+  #     enabled: false
+  #     time_constant_orientation: 5.0
+  #     time_constant_position: 3.0
+  #   egopose_interval_us: 500000
+  #   control_timestep_us: 500000 
+  #   force_gt_duration_us: 20000000
+  #   min_traffic_duration_us: 5000000
+  #   n_rollouts: 1
+  #   n_sim_steps: 10 # max steps 10
+  #   physics_update_mode: NONE
+  #   planner_delay_us: 0
+  #   route_generator_type: MAP
+  #   send_av_messages: false
+  #   send_recording_ground_truth: false
+  #   time_start_offset_us: 00000
+  
+  - scene_id: 2021.09.29.19.02.14_veh-28_00964_01689-a3f2ea7187975b13
+    assert_zero_decision_delay: false
+    group_render_requests: true 
+    cameras:
+      - logical_id: CAM_F0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080  
+        width: 1920
+      - logical_id: CAM_L1
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L2
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R1
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R2
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_B0
+        first_frame_offset_us: 0
+        frame_interval_us: 500000
+        height: 1080
+        width: 1920
+    egomotion_noise:
+      cov_orientation_x: 0.0
+      cov_orientation_y: 0.0
+      cov_orientation_z: 0.0007
+      cov_x: 0.05
+      cov_y: 0.05
+      cov_z: 0.0
+      enabled: false
+      time_constant_orientation: 5.0
+      time_constant_position: 3.0
+    egopose_interval_us: 500000
+    control_timestep_us: 500000 
+    force_gt_duration_us: 20000000
+    min_traffic_duration_us: 5000000
+    n_rollouts: 1
+    n_sim_steps: 10 # max steps 10
+    physics_update_mode: NONE
+    planner_delay_us: 0
+    route_generator_type: MAP
+    send_av_messages: false
+    send_recording_ground_truth: false
+    time_start_offset_us: 00000
+  
+  # - scene_id: 2021.09.09.17.18.51_veh-48_00657_00876-baf1301534ea54d6
+  #   assert_zero_decision_delay: false
+  #   group_render_requests: true 
+  #   cameras:
+  #     - logical_id: CAM_F0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080  
+  #       width: 1920
+  #     - logical_id: CAM_L1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_L2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R1
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_R2
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #     - logical_id: CAM_B0
+  #       first_frame_offset_us: 0
+  #       frame_interval_us: 500000
+  #       height: 1080
+  #       width: 1920
+  #   egomotion_noise:
+  #     cov_orientation_x: 0.0
+  #     cov_orientation_y: 0.0
+  #     cov_orientation_z: 0.0007
+  #     cov_x: 0.05
+  #     cov_y: 0.05
+  #     cov_z: 0.0
+  #     enabled: false
+  #     time_constant_orientation: 5.0
+  #     time_constant_position: 3.0
+  #   egopose_interval_us: 500000
+  #   control_timestep_us: 500000 
+  #   force_gt_duration_us: 20000000
+  #   min_traffic_duration_us: 5000000
+  #   n_rollouts: 1
+  #   n_sim_steps: 10 # max steps 10
+  #   physics_update_mode: NONE
+  #   planner_delay_us: 0
+  #   route_generator_type: MAP
+  #   send_av_messages: false
+  #   send_recording_ground_truth: false
+  #   time_start_offset_us: 00000

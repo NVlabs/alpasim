@@ -406,6 +406,10 @@ class CameraCatalog:
             raise KeyError(
                 f"Camera '{logical_id}' is not defined for scene '{scene_id}'"
             )
+    
+    def get_local_override_cameras(self) -> list[CameraDefinitionConfig]:
+        """Return list of locally configured camera overrides."""
+        return list(self._local_overrides.values())
 
 
 __all__ = ["CameraCatalog", "CameraDefinition"]
