@@ -46,8 +46,3 @@ packages = [
     "data_generation",
     "mock-driver",
 ]
-
-[tool.pytest.ini_options]
-# Exclude asl_to_roadcast from regular tools tests - it has its own isolated test job
-# because it depends on maglev.av which requires internal PyPI access
-norecursedirs = ["asl_to_roadcast"]
