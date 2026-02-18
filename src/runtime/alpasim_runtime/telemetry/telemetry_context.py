@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 TelemetryContext for runtime metrics collection using Prometheus.
@@ -7,13 +7,14 @@ TelemetryContext for runtime metrics collection using Prometheus.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, Type
+from typing import Generator, Optional, Type
 
 from alpasim_runtime.event_loop_idle_profiler import get_event_loop_idle_stats
 from prometheus_client import CollectorRegistry, Gauge, Histogram, write_to_textfile
@@ -80,25 +81,25 @@ class TelemetryContext:
         os.makedirs(self.output_dir, exist_ok=True)
         self.registry = CollectorRegistry()
 
-        # RPC metrics
+        # RPC metrics (tag label allows filtering warmup/special operations)
         self.rpc_duration = Histogram(
             "rpc_duration_seconds",
             "RPC call duration",
-            ["service", "method"],
+            ["service", "method", "tag"],
             buckets=HISTOGRAM_BUCKETS["rpc_duration"],
             registry=self.registry,
         )
         self.rpc_blocking = Histogram(
             "rpc_blocking_seconds",
             "Time between gRPC I/O completion and coroutine resumption",
-            ["service", "method"],
+            ["service", "method", "tag"],
             buckets=HISTOGRAM_BUCKETS["rpc_blocking"],
             registry=self.registry,
         )
         self.rpc_queue_depth = Histogram(
             "rpc_queue_depth_at_start",
             "Queue depth when RPC was initiated",
-            ["service"],
+            ["service", "tag"],
             buckets=HISTOGRAM_BUCKETS["rpc_queue_depth"],
             registry=self.registry,
         )
@@ -217,3 +218,32 @@ def try_get_context() -> Optional[TelemetryContext]:
     Use when telemetry is optional, e.g. for functions that might be in tests.
     """
     return _current_context.get()
+
+
+# Task-local tag for labeling telemetry samples (e.g., "warmup")
+_current_tag: ContextVar[str] = ContextVar("telemetry_tag", default="default")
+
+
+def get_telemetry_tag() -> str:
+    """Get current telemetry tag."""
+    return _current_tag.get()
+
+
+@contextlib.contextmanager
+def tag_telemetry(tag: str) -> Generator[None, None, None]:
+    """
+    Context manager to tag telemetry samples with a label.
+
+    Tagged samples are still recorded but can be filtered in analysis.
+    Use this for operations like warmup that should be tracked separately.
+
+    Example:
+        with tag_telemetry("warmup"):
+            await some_warmup_operation()  # Recorded with tag="warmup"
+    """
+    old_tag = _current_tag.get()
+    _current_tag.set(tag)
+    try:
+        yield
+    finally:
+        _current_tag.set(old_tag)

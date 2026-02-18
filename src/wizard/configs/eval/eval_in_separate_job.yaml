@@ -1,0 +1,18 @@
+# @package _global_
+
+# Separate-Job Evaluation Configuration
+# =====================================
+# This config runs evaluation in separate containers after runtime completes,
+# instead of the default in-runtime evaluation.
+
+# Usage:
+#   python -m alpasim_wizard +eval=eval_in_separate_job ...
+
+# Enable separate eval and aggregation services
+wizard:
+  run_eval_services: ["eval"]
+  run_aggregation_services: ["post_eval_aggregation"]
+
+# Disable in-runtime evaluation
+eval:
+  run_in_runtime: false

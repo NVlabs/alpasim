@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -142,6 +142,8 @@ class MetricAggregationModifiersConfig:
 
 @dataclass
 class EvalConfig:
+    # Whether to run evaluation in runtime (after each rollout) or in separate job
+    run_in_runtime: bool = True
     # Configuration for scorers that have free parameters.
     scorers: ScorersConfig = MISSING
     aggregation_modifiers: MetricAggregationModifiersConfig = MISSING

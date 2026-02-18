@@ -28,15 +28,5 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
     NETRC=/root/.netrc uv sync --all-packages
 
-# Note: maglev.av has name collisions with PyAV (both use `import av`).
-# Patch torchvision to trigger its "av not available" fallback path.
-RUN for f in .venv/lib/python*/site-packages/torchvision/io/video.py \
-             .venv/lib/python*/site-packages/torchvision/io/video_reader.py; do \
-        [ -f "$f" ] && sed -i 's/import av$/raise ImportError("maglev.av collision")/' "$f"; \
-    done || true
-
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1
-
-
-#ENTRYPOINT ["uv", "run", "python", "-m", "alpasim_controller.server"]

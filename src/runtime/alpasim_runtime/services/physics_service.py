@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Physics service implementation."""
 
@@ -9,10 +9,10 @@ import logging
 from typing import Dict, List, Tuple, Type
 
 from alpasim_grpc.v0.common_pb2 import Pose
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionRequest
 from alpasim_grpc.v0.physics_pb2_grpc import PhysicsServiceStub
 from alpasim_runtime.config import PhysicsUpdateMode, ScenarioConfig
-from alpasim_runtime.logs import LogEntry
 from alpasim_runtime.services.service_base import ServiceBase
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_utils.qvec import QVec
@@ -42,17 +42,23 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         pose_future: QVec,
         traffic_poses: Dict[str, QVec],
         ego_aabb: AABB,
+        skip: bool = False,
     ) -> Tuple[QVec, Dict[str, QVec]]:
         """
         Calculate ground intersection for ego and traffic vehicles.
+
+        Args:
+            skip: If True, return traffic poses unchanged without
+                making a gRPC call. Use this when objects are following
+                trajectories that already have correct physics applied (e.g.,
+                recorded ground truth or when traffic sim is skipped).
 
         Returns:
             Tuple of (ego_pose, traffic_poses) after ground intersection
         """
 
-        if self.skip:
-            logger.info("Skip mode: physics returning unconstrained poses")
-            # In skip mode, return the future poses unchanged
+        if self.skip or skip:
+            # Return the future poses unchanged
             return pose_future, traffic_poses
 
         assert traffic_poses is not None or (
@@ -71,17 +77,13 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
             ego_aabb=ego_aabb,
         )
 
-        await self.session_info.log_writer.log_message(
-            LogEntry(physics_request=request)
-        )
+        await self.session_info.broadcaster.broadcast(LogEntry(physics_request=request))
 
         response = await profiled_rpc_call(
             "ground_intersection", "physics", self.stub.ground_intersection, request
         )
 
-        await self.session_info.log_writer.log_message(
-            LogEntry(physics_return=response)
-        )
+        await self.session_info.broadcaster.broadcast(LogEntry(physics_return=response))
 
         ego_response = QVec.from_grpc_pose(response.ego_pose.pose)
         traffic_responses = {

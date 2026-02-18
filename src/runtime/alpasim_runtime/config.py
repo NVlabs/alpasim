@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Defines the omegaconf .yaml configuration format for Alpasim runtime.
@@ -220,7 +220,6 @@ class ScenarioConfig:
 
     # Whether to send optional messages to the driver
     send_recording_ground_truth: bool = False
-    send_av_messages: bool = False
 
     # Actors that appear for less than this amount of time will be dropped
     # before the simulation starts. Set to 0 to disable filtering.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Post-eval aggregation: Aggregating results across all array jobs."""
 
@@ -7,7 +7,6 @@ import argparse
 import logging
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 
@@ -20,8 +19,11 @@ from eval.aggregation.modifiers import (
     RemoveTimestepsAfterEvent,
 )
 from eval.aggregation.processing import ProcessedMetricDFs
+from eval.metadata import get_metadata
 from eval.schema import EvalConfig
 from eval.video import VIDEO_FILE_NAME_FORMAT
+
+WIZARD_FILE = "wizard-config.yaml"
 
 # Configure the root logger first to affect all modules
 root_logger = logging.getLogger()
@@ -36,26 +38,222 @@ logger.setLevel(logging.INFO)
 CONCAT_VIDEO_NAME = "00_all_clips"
 
 
+def _collect_metrics_from_job_dir(job_dir: pathlib.Path) -> pl.DataFrame | None:
+    """
+    Collect metrics from a single job directory.
+
+    Both post-eval and runtime-eval write metrics to the same unified path:
+    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/metrics.parquet
+
+    Returns:
+        DataFrame with metrics from this job directory, or None if no metrics found.
+    """
+    rollouts_dir = job_dir / "rollouts"
+    if not rollouts_dir.exists():
+        return None
+
+    metrics_files = list(rollouts_dir.glob("**/metrics.parquet"))
+    if not metrics_files:
+        return None
+
+    # Use Polars glob pattern to read all parquet files at once
+    glob_pattern = str(rollouts_dir / "**" / "metrics.parquet")
+    try:
+        df = pl.read_parquet(glob_pattern)
+        logger.info("Loaded metrics from %d files in %s", len(metrics_files), job_dir)
+        return df
+    except (OSError, pl.exceptions.ComputeError, pl.exceptions.SchemaError) as e:
+        logger.warning("Failed to read metrics from %s: %s", glob_pattern, e)
+        return None
+
+
 def _aggregate_metrics(
     job_dirs: list[pathlib.Path],
     aggregate_dir: str | pathlib.Path,
     modifiers: list[MetricAggregationModifiers],
 ) -> ProcessedMetricDFs:
-    # Get all parquet files in the job directories
-    dfs = []
-    for job_dir in job_dirs:
-        file = job_dir / "eval" / "metrics_unprocessed.parquet"
-        dfs.append(pl.read_parquet(file))
-    df = pl.concat(dfs)
+    """
+    Aggregate metrics from job directories.
 
-    # Overwrite the run_uuid to be the same for all rows, coming from different
-    # array jobs.
+    Both post-eval and runtime-eval use the same unified metrics path:
+    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/metrics.parquet
+    """
+    all_dfs: list[pl.DataFrame] = []
+    for job_dir in job_dirs:
+        df = _collect_metrics_from_job_dir(job_dir)
+        if df is None:
+            logger.warning("No metrics found in %s", job_dir)
+        else:
+            all_dfs.append(df)
+
+    if not all_dfs:
+        raise ValueError(
+            "No metrics files found in any job directory. Ensure either post-eval "
+            "or in-runtime evaluation has completed successfully."
+        )
+
+    logger.info(
+        "Aggregating metrics from %d job directories with data (of %d total)",
+        len(all_dfs),
+        len(job_dirs),
+    )
+    df = pl.concat(all_dfs)
+
     return processing.aggregate_and_write_metrics_results_txt(
         df,
         force_same_run=True,
         output_path=str(aggregate_dir),
         additional_modifiers=modifiers,
     )
+
+
+def _run_aggregation_core(
+    job_dirs: list[pathlib.Path],
+    aggregate_dir: pathlib.Path,
+    cfg: EvalConfig,
+) -> ProcessedMetricDFs:
+    """
+    Core aggregation logic shared between runtime and CLI entry points.
+
+    Args:
+        job_dirs: List of job directories to aggregate.
+        aggregate_dir: Directory to write aggregated results.
+        cfg: Evaluation configuration.
+
+    Returns:
+        ProcessedMetricDFs containing aggregated metrics data.
+
+    Raises:
+        ValueError: If no metrics files are found.
+    """
+    os.makedirs(aggregate_dir, exist_ok=True)
+
+    modifiers = [
+        RemoveTimestepsAfterEvent(
+            pl.col("dist_to_gt_trajectory")
+            >= cfg.aggregation_modifiers.max_dist_to_gt_trajectory
+        ),
+    ]
+
+    processed_dfs = _aggregate_metrics(job_dirs, aggregate_dir, modifiers)
+    processed_dfs.save_to(aggregate_dir)
+
+    logger.info("Aggregation complete. Results saved to %s", aggregate_dir)
+
+    # Handle video aggregation
+    if cfg.video.render_video:
+        conditions = {
+            "collision_at_fault": pl.col("collision_at_fault") > 0.0,
+            "collision_rear": pl.col("collision_rear") > 0.0,
+            "offroad": pl.col("offroad") > 0.0,
+            "dist_to_gt_trajectory": pl.col("dist_to_gt_trajectory")
+            >= cfg.aggregation_modifiers.max_dist_to_gt_trajectory,
+        }
+        _aggregate_eval_videos(
+            job_dirs, aggregate_dir / "videos", cfg, processed_dfs, conditions
+        )
+    else:
+        logger.info(
+            "Skipping video aggregation as render_video is disabled in the config."
+        )
+
+    return processed_dfs
+
+
+def run_aggregation_from_runtime(
+    log_dir: str | pathlib.Path,
+    eval_config: EvalConfig,
+    array_job_dir: str | pathlib.Path | None = None,
+) -> bool:
+    """
+    Run metric aggregation from the runtime after all rollouts complete.
+
+    This function is designed to be called at the end of the runtime simulation loop.
+    It handles synchronization across SLURM array jobs using a file-based counter,
+    ensuring aggregation only runs once when the last job finishes.
+
+    Args:
+        log_dir: The log directory for this job (contains asl/, metrics/, etc.)
+        eval_config: The evaluation configuration
+        array_job_dir: Parent directory containing all array job directories.
+                       If None, defaults to log_dir (single job mode).
+
+    Returns:
+        True if aggregation was run or skipped (not last job).
+
+    Raises:
+        ValueError: If no job directories are found for aggregation.
+    """
+    log_dir = pathlib.Path(log_dir)
+    array_job_dir = pathlib.Path(array_job_dir) if array_job_dir else log_dir
+
+    # Check if we're the last job in the array
+    if not utils.incr_counter_and_check_aggregation_start(array_job_dir):
+        logger.info(
+            "Not the last job in array, skipping aggregation. "
+            "Aggregation will run when last job finishes."
+        )
+        return True
+
+    job_dirs = _discover_job_dirs(array_job_dir, log_dir)
+    if not job_dirs:
+        raise ValueError(
+            f"No job directories found for aggregation in {array_job_dir}. "
+            "This indicates a configuration error or missing wizard-config.yaml files."
+        )
+
+    logger.info(
+        "Running aggregation. Found %d job directories: %s",
+        len(job_dirs),
+        ", ".join([str(d) for d in job_dirs]),
+    )
+
+    aggregate_dir = array_job_dir / "aggregate"
+
+    _run_aggregation_core(job_dirs, aggregate_dir, eval_config)
+    return True
+
+
+def _discover_job_dirs(
+    array_job_dir: pathlib.Path,
+    log_dir: pathlib.Path | None = None,
+) -> list[pathlib.Path]:
+    """
+    Discover job directories within an array job directory.
+
+    In single job mode (log_dir provided and equals array_job_dir), returns
+    just array_job_dir without searching subdirectories.
+    In array job mode (log_dir not provided or different from array_job_dir),
+    finds all subdirectories containing wizard-config.yaml.
+
+    Args:
+        array_job_dir: Parent directory containing all array job directories.
+        log_dir: The log directory for this specific job. If None or different
+            from array_job_dir, array mode is used.
+
+    Returns:
+        List of job directories to aggregate.
+    """
+    # If log_dir is provided and equals array_job_dir, it's single job mode
+    if log_dir is not None and array_job_dir == log_dir:
+        return [array_job_dir]
+
+    # Array job mode - find subdirectories with wizard-config.yaml
+    job_dirs: list[pathlib.Path] = []
+    for d in array_job_dir.iterdir():
+        if d.is_dir() and (d / WIZARD_FILE).exists():
+            job_dirs.append(d)
+        else:
+            logger.info(
+                "Skipping directory %s - not recognized as job dir (wizard config missing)",
+                d,
+            )
+
+    # If no subdirectories found, fall back to using array_job_dir itself
+    # (handles CLI running locally without SLURM array)
+    if not job_dirs:
+        return [array_job_dir]
+    return sorted(job_dirs)
 
 
 def _speed_up_video(video_file: pathlib.Path, speed_factor: float) -> None:
@@ -131,22 +329,47 @@ def _aggregate_eval_videos(
     processed_dfs: ProcessedMetricDFs,
     conditions: dict[str, pl.Expr],
 ) -> None:
-    """Aggregate eval videos across all array jobs."""
+    """Aggregate eval videos across all array jobs.
+
+    Videos are saved next to ASL files in the unified path structure:
+    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/<video_name>.mp4
+
+    This function creates symlinks to all videos in the aggregate/videos/all/ directory.
+    """
     logger.info("Aggregating eval videos across all array jobs.")
     all_videos_dir = target_video_dir / "all"
     os.makedirs(all_videos_dir, exist_ok=True)
+
+    total_videos = 0
     for job_dir in job_dirs:
-        video_dir = job_dir / "eval" / "videos"
-        if not os.path.exists(video_dir):
-            logger.warning("Video directory %s does not exist", video_dir)
+        rollouts_dir = job_dir / "rollouts"
+        if not rollouts_dir.exists():
+            logger.warning("Rollouts directory %s does not exist", rollouts_dir)
             continue
-        video_files = [f for f in video_dir.glob("*.mp4")]
-        if len(video_files) == 0:
-            logger.warning("No videos found in %s", video_dir)
+
+        # Find all video files in rollouts/**/*.mp4
+        video_files = list(rollouts_dir.glob("**/*.mp4"))
+        if not video_files:
+            logger.warning("No videos found in %s", rollouts_dir)
             continue
+
         video_files.sort()
         for video_file in video_files:
-            shutil.copy(video_file, all_videos_dir / video_file.name)
+            # Use the basename as the symlink name. By design, video_file.name is
+            # "{clipgt_id}_{batch_id}_{rollout_id}.mp4" (VIDEO_FILE_NAME_FORMAT),
+            # which ensures global uniqueness across jobs; collisions are not expected.
+            symlink_path = all_videos_dir / video_file.name
+            symlink_path.unlink(missing_ok=True)
+            # Create relative symlink for portability across different mount points
+            relative_target = pathlib.Path(os.path.relpath(video_file, all_videos_dir))
+            symlink_path.symlink_to(relative_target)
+            total_videos += 1
+
+    logger.info(
+        "Found and linked %d videos from %d job directories",
+        total_videos,
+        len(job_dirs),
+    )
     if cfg.video.generate_combined_video:
         _concatenate_videos(all_videos_dir)
         _speed_up_video(
@@ -165,26 +388,27 @@ def _aggregate_eval_videos(
         filtered_df = processed_dfs.df_wide_avg_t.filter(condition)
         condition_folder = target_video_dir / "violations" / condition_name
         os.makedirs(condition_folder, exist_ok=True)
+        layouts_to_link = (
+            cfg.video.video_layouts if len(cfg.video.video_layouts) > 0 else ["default"]
+        )
         for row in filtered_df.iter_rows(named=True):
-            layout_id = (
-                cfg.video.video_layouts[0] if len(cfg.video.video_layouts) > 0 else 0
-            )
-            video_file_name = VIDEO_FILE_NAME_FORMAT.format(
-                clipgt_id=row["clipgt_id"],
-                batch_id=row["batch_id"],
-                rollout_id=row["rollout_id"],
-                camera_id=cfg.video.camera_id_to_render,
-                layout_id=layout_id,
-            )
-            (condition_folder / video_file_name).unlink(missing_ok=True)
-            # Create a relative symlink to the video in all_videos_dir to ensure the link will be
-            # valid even when running with different mount points.
-            relative_path = pathlib.Path(
-                os.path.relpath(all_videos_dir, condition_folder)
-            )
-            (condition_folder / video_file_name).symlink_to(
-                relative_path / video_file_name
-            )
+            for layout_id in layouts_to_link:
+                video_file_name = VIDEO_FILE_NAME_FORMAT.format(
+                    clipgt_id=row["clipgt_id"],
+                    batch_id=row["batch_id"],
+                    rollout_id=row["rollout_id"],
+                    camera_id=cfg.video.camera_id_to_render,
+                    layout_id=layout_id,
+                )
+                (condition_folder / video_file_name).unlink(missing_ok=True)
+                # Create a relative symlink to the video in all_videos_dir to ensure the link will be
+                # valid even when running with different mount points.
+                relative_path = pathlib.Path(
+                    os.path.relpath(all_videos_dir, condition_folder)
+                )
+                (condition_folder / video_file_name).symlink_to(
+                    relative_path / video_file_name
+                )
 
 
 def main() -> int:
@@ -210,65 +434,22 @@ def main() -> int:
         )
         return 0
 
-    # Check if we're running in an array job or single job.
-    if int(os.environ.get("SLURM_ARRAY_TASK_COUNT", 0)) > 0:
-        # Identify job directories by checking for the presence of
-        # `wizard-config.yaml`, which is written at the start of every job
-        # regardless of whether it eventually succeeds.  This approach avoids
-        # maintaining a hard-coded exclusion list and ensures that helper
-        # folders (e.g. `outputs`, `runs`, `aggregate`, etc.) are ignored automatically.
-        job_dirs: list[pathlib.Path] = []
-        WIZARD_FILE = "wizard-config.yaml"
-        for d in array_job_dir.iterdir():
-            if d.is_dir() and (d / WIZARD_FILE).exists():
-                job_dirs.append(d)
-            else:
-                logger.info(
-                    "Skipping directory %s – not recognized as job dir "
-                    "(wizard config missing)",
-                    d,
-                )
-        job_dirs.sort()
-    else:
-        job_dirs = sorted([array_job_dir])
+    # CLI mode: search for subdirectories with wizard-config.yaml
+    # Falls back to using array_job_dir itself if no subdirectories found
+    job_dirs = _discover_job_dirs(array_job_dir)
 
     logger.info(
-        "Running post-eval aggregation. Found %d job directories in %s: %s",
+        "Running aggregation. Found %d job directories in %s: %s",
         len(job_dirs),
         array_job_dir,
         ", ".join([str(d) for d in job_dirs]),
     )
 
     aggregate_dir = array_job_dir / "aggregate"
-    os.makedirs(aggregate_dir, exist_ok=True)
 
-    modifiers = [
-        RemoveTimestepsAfterEvent(
-            pl.col("dist_to_gt_trajectory")
-            >= cfg.aggregation_modifiers.max_dist_to_gt_trajectory
-        ),
-    ]
+    _run_aggregation_core(job_dirs, aggregate_dir, cfg)
 
-    processed_dfs = _aggregate_metrics(job_dirs, aggregate_dir, modifiers)
-    processed_dfs.save_to(aggregate_dir)
-    if cfg.video.render_video:
-        conditions = {
-            "collision_at_fault": pl.col("collision_at_fault") > 0.0,
-            "collision_rear": pl.col("collision_rear") > 0.0,
-            "offroad": pl.col("offroad") > 0.0,
-            "dist_to_gt_trajectory": pl.col("dist_to_gt_trajectory")
-            >= cfg.aggregation_modifiers.max_dist_to_gt_trajectory,
-        }
-        _aggregate_eval_videos(
-            job_dirs, aggregate_dir / "videos", cfg, processed_dfs, conditions
-        )
-    else:
-        logger.info(
-            "Skipping video aggregation as render_video is disabled in the config."
-        )
-
-    return_code = 0
-    return return_code
+    return 0
 
 
 if __name__ == "__main__":

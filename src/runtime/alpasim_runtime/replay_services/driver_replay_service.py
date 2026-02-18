@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Driver (Egodriver) replay service implementation.
@@ -53,8 +53,3 @@ class DriverReplayService(
     ) -> Any:
         """Validate ground truth"""
         return self.validate_request("submit_recording_ground_truth", request, context)
-
-    def submit_av_message(self, request: Any, context: grpc.ServicerContext) -> Any:
-        """Validate AV message (if supported)"""
-        # AV messages might not be in all ASL files, so allow missing
-        return self.validate_request("submit_av_message", request, context)

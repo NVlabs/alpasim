@@ -2,6 +2,7 @@
 
 defaults:
   - /stable_manifest/oss  # Add oss for images that need to be built
+  - /eval/eval_in_separate_job  # Include eval service definition
   - _self_  # Override the GPUs to null
 
 defines:
@@ -30,10 +31,6 @@ services:
     replicas_per_container: 1
     gpus: null
 
-  ddb:
-    replicas_per_container: 1
-    gpus: null
-
   eval:
     replicas_per_container: 1
     gpus: null
@@ -44,8 +41,8 @@ wizard:
   dry_run: true
   validate_mount_points: false
   log_dir: "./generated_configs"
-  # Include ddb and eval in the services list so they get added to docker-compose.yaml
-  run_eval_services: ["ddb", "eval"]
+  # Include eval in the services list so they get added to docker-compose.yaml
+  run_eval_services: ["eval"]
 
 scenes:
   scene_ids: []

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Wrapper for profiling gRPC calls with queue depth and blocking time tracking.
@@ -18,7 +18,7 @@ from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 from typing import Any, Awaitable, Callable, MutableMapping
 
-from .telemetry_context import try_get_context
+from .telemetry_context import get_telemetry_tag, try_get_context
 
 # Type alias for lock-like objects (context managers)
 LockLike = AbstractContextManager[bool]
@@ -131,16 +131,17 @@ async def profiled_rpc_call(
         duration = t_resume - t_start
 
         if ctx is not None:
-            ctx.rpc_queue_depth.labels(service=service_type).observe(
+            tag = get_telemetry_tag()
+            ctx.rpc_queue_depth.labels(service=service_type, tag=tag).observe(
                 queue_depth_at_start
             )
-            ctx.rpc_duration.labels(service=service_type, method=method_name).observe(
-                duration
-            )
+            ctx.rpc_duration.labels(
+                service=service_type, method=method_name, tag=tag
+            ).observe(duration)
 
             # Only record blocking time if callback was successfully registered
             if t_done is not None:
                 blocking = max(0, t_resume - t_done)
                 ctx.rpc_blocking.labels(
-                    service=service_type, method=method_name
+                    service=service_type, method=method_name, tag=tag
                 ).observe(blocking)

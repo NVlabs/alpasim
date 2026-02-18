@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 import os
+import traceback
 
 import matplotlib as mpl
 import matplotlib.animation as animation
@@ -14,8 +15,9 @@ import numpy as np
 import polars as pl
 from tqdm import tqdm
 
+from eval.aggregation import processing
 from eval.aggregation.processing import ProcessedMetricDFs
-from eval.data import CameraProjector, EvaluationResultContainer, SimulationResult
+from eval.data import CameraProjector, ScenarioEvalInput, SimulationResult
 from eval.schema import EvalConfig, MapElements, VideoLayout
 from eval.video_data import ShapelyMap
 from eval.video_reasoning_overlay_utils import render_reasoning_overlay_style_video
@@ -30,26 +32,41 @@ VIDEO_FILE_NAME_FORMAT = (
 )
 
 
-def render_and_save_video_for_eval_container(
-    evaluation_result_container: EvaluationResultContainer,
+def render_and_save_video(
+    simulation_result: SimulationResult,
     processed_metric_dfs: ProcessedMetricDFs,
     output_dir: str,
     cfg: EvalConfig,
+    clipgt_id: str,
+    batch_id: str,
+    rollout_id: str,
 ) -> None:
+    """
+    Render and save video for a simulation result.
+
+    This is the unified video rendering function that takes SimulationResult directly.
+
+    Args:
+        simulation_result: The simulation result to render.
+        processed_metric_dfs: Processed metrics for display in the video.
+        output_dir: Output directory for the video.
+        cfg: Evaluation configuration.
+        clipgt_id: Clip/ground truth identifier.
+        batch_id: Batch identifier.
+        rollout_id: Rollout identifier.
+    """
     logger.info(
-        "Rendering video for evaluation container %s ",
-        evaluation_result_container.file_path,
+        "Rendering video for %s/%s/%s",
+        clipgt_id,
+        batch_id,
+        rollout_id,
     )
 
-    clipgt_id, batch_id, rollout_id = (
-        evaluation_result_container.get_clipgt_batch_and_rollout_id()
-    )
-    os.makedirs(os.path.join(output_dir, "videos"), exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     for video_layout in cfg.video.video_layouts:
         output_path = os.path.join(
             output_dir,
-            "videos",
             VIDEO_FILE_NAME_FORMAT.format(
                 clipgt_id=clipgt_id,
                 batch_id=batch_id,
@@ -70,19 +87,22 @@ def render_and_save_video_for_eval_container(
             # Use reasoning overlay style rendering (camera, reasoning text overlay, trajectory chart)
             logger.info("Using reasoning overlay style video rendering")
             render_reasoning_overlay_style_video(
-                evaluation_result_container,
+                simulation_result,
                 processed_metric_dfs,
                 output_path,
                 cfg,
             )
         elif video_layout == VideoLayout.DEFAULT:
             # Use the default debug view rendering (bev map, camera, metrics)
-            anim_1, fps = create_video_animation_for_eval_container(
+            anim, fps = create_video_animation(
                 processed_metric_dfs,
-                evaluation_result_container,
+                simulation_result,
                 cfg,
+                clipgt_id=clipgt_id,
+                batch_id=batch_id,
+                rollout_id=rollout_id,
             )
-            anim_1.save(
+            anim.save(
                 output_path,
                 fps=fps,
                 dpi=100,
@@ -90,6 +110,63 @@ def render_and_save_video_for_eval_container(
             )
         else:
             raise ValueError(f"Unknown video layout: {video_layout}")
+
+
+def render_video_from_eval_result(
+    scenario_input: ScenarioEvalInput,
+    metrics_df: pl.DataFrame | None,
+    cfg: EvalConfig,
+    output_dir: str,
+    clipgt_id: str,
+    batch_id: str,
+    rollout_id: str,
+) -> bool:
+    """
+    Render video from evaluation result with full error handling.
+
+    This is a convenience function that handles the full video rendering workflow:
+    - Creates SimulationResult from ScenarioEvalInput
+    - Processes metrics for video display
+    - Renders and saves the video
+
+    Args:
+        scenario_input: The scenario evaluation input data.
+        metrics_df: The metrics DataFrame from evaluation (can be None).
+        cfg: Evaluation configuration.
+        output_dir: Directory to save the video.
+        clipgt_id: Clip/ground truth identifier.
+        batch_id: Batch identifier.
+        rollout_id: Rollout identifier.
+
+    Returns:
+        True if video was rendered successfully, False otherwise.
+    """
+    try:
+        logger.info("Rendering video for %s/%s/%s", clipgt_id, batch_id, rollout_id)
+
+        # Get SimulationResult for video rendering
+        simulation_result = SimulationResult.from_scenario_input(scenario_input, cfg)
+
+        # Process metrics for video (need ProcessedMetricDFs for video rendering)
+        unprocessed_metrics = processing.UnprocessedMetricsDFs(metrics_df)
+        processed_metrics = unprocessed_metrics.process()
+
+        render_and_save_video(
+            simulation_result=simulation_result,
+            processed_metric_dfs=processed_metrics,
+            output_dir=output_dir,
+            cfg=cfg,
+            clipgt_id=clipgt_id,
+            batch_id=batch_id,
+            rollout_id=rollout_id,
+        )
+
+        logger.info("Video saved to %s/videos/", output_dir)
+        return True
+    except Exception as e:
+        logger.error("Error rendering video: %s", e)
+        logger.error("Stacktrace: %s", traceback.format_exc())
+        return False
 
 
 def _setup_fig() -> tuple[plt.Figure, dict[str, plt.Axes]]:
@@ -177,13 +254,12 @@ def get_ego_transform(
 def render_table(
     ax: plt.Axes,
     processed_metric_dfs: ProcessedMetricDFs,
-    evaluation_result_container: EvaluationResultContainer,
+    clipgt_id: str,
+    batch_id: str,
+    rollout_id: str,
     time: int,
     metrics_table_entries: list[str] | None = None,
 ) -> mpl.table.Table:
-    clipgt_id, batch_id, rollout_id = (
-        evaluation_result_container.get_clipgt_batch_and_rollout_id()
-    )
 
     run_name = processed_metric_dfs.trajectory_uid_df["run_name"][0]
     # Prepare aggregated data
@@ -338,13 +414,28 @@ def update_table(
     return table
 
 
-def create_video_animation_for_eval_container(
+def create_video_animation(
     processed_metrics_dfs: ProcessedMetricDFs,
-    evaluation_result_container: EvaluationResultContainer,
+    sim_result: SimulationResult,
     cfg: EvalConfig,
+    clipgt_id: str = "unknown",
+    batch_id: str = "0",
+    rollout_id: str = "unknown",
 ) -> tuple[animation.FuncAnimation, float]:
+    """
+    Create a video animation for a simulation result.
 
-    sim_result = evaluation_result_container.sim_result
+    Args:
+        processed_metrics_dfs: Processed metrics for display in the video.
+        sim_result: The simulation result to visualize.
+        cfg: Evaluation configuration.
+        clipgt_id: Clip/ground truth identifier (for table display).
+        batch_id: Batch identifier (for table display).
+        rollout_id: Rollout identifier (for table display).
+
+    Returns:
+        Tuple of (animation, fps).
+    """
     timestamps_us = sim_result.timestamps_us
     camera = sim_result.cameras.camera_by_logical_id[cfg.video.camera_id_to_render]
     shapely_map = ShapelyMap.from_vec_map(sim_result.vec_map)
@@ -406,7 +497,9 @@ def create_video_animation_for_eval_container(
         table = render_table(
             axs["table"],
             processed_metrics_dfs,
-            evaluation_result_container,
+            clipgt_id,
+            batch_id,
+            rollout_id,
             timestamps_us[0],
             cfg.video.metrics_table_entries,
         )

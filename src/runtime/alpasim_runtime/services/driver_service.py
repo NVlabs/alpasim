@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Driver service implementation."""
 
@@ -22,17 +22,18 @@ from alpasim_grpc.v0.egodriver_pb2 import (
     RouteRequest,
 )
 from alpasim_grpc.v0.egodriver_pb2_grpc import EgodriverServiceStub
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.sensorsim_pb2 import AvailableCamerasReturn
-from alpasim_runtime.logs import LogEntry, LogWriter
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.services.service_base import (
     WILDCARD_SCENE_ID,
     ServiceBase,
     SessionInfo,
 )
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_runtime.types import ImageWithMetadata
 from alpasim_utils.polyline import Polyline
 from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     def session(  # type: ignore[override]
         self,
         uuid: str,
-        log_writer: LogWriter,
+        broadcaster: MessageBroadcaster,
         random_seed: int,
         sensorsim_cameras: list[AvailableCamera],
         scene_id: Optional[str] = None,
@@ -66,7 +67,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         """
         return super().session(
             uuid=uuid,
-            log_writer=log_writer,
+            broadcaster=broadcaster,
             random_seed=random_seed,
             sensorsim_cameras=sensorsim_cameras,
             scene_id=scene_id,
@@ -97,7 +98,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             rollout_spec=rollout_spec,
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(driver_session_request=request)
         )
 
@@ -134,7 +135,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             ),
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(driver_camera_image=request)
         )
 
@@ -165,7 +166,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             dynamic_state=dynamic_state,
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(driver_ego_trajectory=request)
         )
 
@@ -191,7 +192,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             route=grpc_route,
         )
 
-        await self.session_info.log_writer.log_message(LogEntry(route_request=request))
+        await self.session_info.broadcaster.broadcast(LogEntry(route_request=request))
 
         if self.skip:
             return
@@ -212,7 +213,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             ),
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(ground_truth_request=request)
         )
 
@@ -229,7 +230,11 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     async def drive(
         self, time_now_us: int, time_query_us: int, renderer_data: Optional[bytes]
     ) -> Trajectory:
-        """Request a drive decision for the current session."""
+        """Request a drive decision for the current session.
+
+        Returns:
+            Trajectory containing the selected trajectory for the ego vehicle.
+        """
         # Create request with both old and new fields for backward compatibility
         request = DriveRequest(
             session_uuid=self.session_info.uuid,
@@ -238,28 +243,35 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             renderer_data=renderer_data or b"",
         )
 
-        await self.session_info.log_writer.log_message(LogEntry(driver_request=request))
+        await self.session_info.broadcaster.broadcast(LogEntry(driver_request=request))
 
         if self.skip:
-            # Create a simple trajectory response
+            # Create a trajectory response with multiple future timestamps.
+            # This enables plan_deviation scorer to compute metrics by comparing
+            # overlapping timestamps between consecutive drive calls.
             from alpasim_utils.qvec import QVec
 
-            # Create QVec poses for the trajectory
+            # Generate timestamps extending 5 seconds into the future at 100ms intervals
+            num_points = 50
+            interval_us = 100_000  # 100ms
+            timestamps = np.array(
+                [time_now_us + i * interval_us for i in range(num_points)],
+                dtype=np.uint64,
+            )
+
+            # Create QVec poses - simple straight-line trajectory moving forward
             poses = QVec.stack(
                 [
                     QVec(
-                        vec3=np.array([0.0, 0.0, 0.0]),
+                        vec3=np.array([i * 0.5, 0.0, 0.0]),  # 0.5m per step = 5m/s
                         quat=np.array([0.0, 0.0, 0.0, 1.0]),
-                    ),
-                    QVec(
-                        vec3=np.array([0.0, 0.0, 0.0]),
-                        quat=np.array([0.0, 0.0, 0.0, 1.0]),
-                    ),
+                    )
+                    for i in range(num_points)
                 ]
             )
 
             trajectory = Trajectory(
-                timestamps_us=np.array([time_now_us, time_query_us], dtype=np.uint64),
+                timestamps_us=timestamps,
                 poses=poses,
             )
             response = DriveResponse(
@@ -270,6 +282,6 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
                 "drive", "driver", self.stub.drive, request
             )
 
-        await self.session_info.log_writer.log_message(LogEntry(driver_return=response))
+        await self.session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
         return Trajectory.from_grpc(response.trajectory)

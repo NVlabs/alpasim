@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Base classes for service architecture.
@@ -15,8 +15,8 @@ from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0.common_pb2 import Empty, VersionId
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.config import ScenarioConfig
-from alpasim_runtime.logs import LogWriter
 
 import grpc
 
@@ -32,7 +32,7 @@ class SessionInfo:
     """Common session information shared by all services."""
 
     uuid: str
-    log_writer: LogWriter
+    broadcaster: MessageBroadcaster
     additional_args: Dict[str, Any]
 
 
@@ -83,7 +83,7 @@ class ServiceBase(ABC, Generic[StubType]):
         self.stub = None
 
     def session(
-        self, uuid: str, log_writer: LogWriter, **kwargs: Any
+        self, uuid: str, broadcaster: MessageBroadcaster, **kwargs: Any
     ) -> "ServiceBase[StubType]":
         """Configure this service for session mode.
 
@@ -104,7 +104,7 @@ class ServiceBase(ABC, Generic[StubType]):
         # Set up session state
         assert self.session_info is None, "Session already set up"
         self.session_info = SessionInfo(
-            uuid=uuid, log_writer=log_writer, additional_args=kwargs
+            uuid=uuid, broadcaster=broadcaster, additional_args=kwargs
         )
         return self
 

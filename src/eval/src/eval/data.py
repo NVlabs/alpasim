@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import dataclasses
 import io
 import logging
 import pickle
 from enum import StrEnum
-from typing import Any, Iterable, Literal, Optional
+from typing import Callable, Iterable, Literal, Optional
 
 import matplotlib.image as mpimg
 import matplotlib.transforms as transforms
 import numpy as np
+import polars as pl
 import shapely
 from alpasim_grpc.v0.common_pb2 import AABB, Vec3
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse, RolloutCameraImage, Route
@@ -1569,11 +1570,97 @@ class Routes:
         return current_artists
 
 
+# =============================================================================
+# Evaluation Data Flow: ScenarioEvalInput -> SimulationResult
+# =============================================================================
+#
+# ScenarioEvalInput and SimulationResult serve different roles in the pipeline:
+#
+# ScenarioEvalInput (raw input):
+#   - A "transfer object" designed to be easy to construct from multiple sources
+#     (runtime memory via BoundRollout, or ASL files via asl_loader)
+#   - Uses simple types: raw Trajectory objects, explicit AABB dimensions as tuples
+#   - Many fields are optional (vec_map, cameras, routes, driver_responses)
+#   - Contains run metadata for aggregation (run_uuid, run_name, batch_id)
+#
+# SimulationResult (processed state):
+#   - A "computed object" with enriched data ready for scoring and video rendering
+#   - Uses RenderableTrajectory (includes RAABB with corner radius, rendering info)
+#   - Contains pre-computed ActorPolygons (spatial index for fast collision detection)
+#   - All fields are required (defaults created during conversion)
+#
+# The conversion (SimulationResult.from_scenario_input) is config-dependent:
+#   - Applies vehicle_shrink_factor from EvalConfig
+#   - Computes corner_radius from vehicle_corner_roundness
+#   - Pre-computes spatial indices for collision detection
+#
+# =============================================================================
+
+
+@dataclasses.dataclass
+class ScenarioEvalInput:
+    """
+    Raw input data for evaluating a completed scenario.
+
+    This is a "transfer object" containing data from a completed simulation.
+    It can be constructed from runtime memory (BoundRollout) or loaded from
+    ASL files (asl_loader). Uses simple types that are readily available from
+    data sources.
+
+    To run evaluation or render videos, convert to SimulationResult first:
+        sim_result = SimulationResult.from_scenario_input(scenario_input, cfg)
+    """
+
+    # Session metadata
+    session_metadata: RolloutMetadata.SessionMetadata
+
+    # Run metadata for aggregation (required)
+    run_uuid: str = dataclasses.field()
+    run_name: str = dataclasses.field()
+    batch_id: str = dataclasses.field()  # Usually "0" for single-batch runs
+
+    # Transformation from Rig frame to AABB center frame
+    ego_coords_rig_to_aabb_center: QVec
+
+    # Ego's bounding box dimensions
+    ego_aabb_x_m: float
+    ego_aabb_y_m: float
+    ego_aabb_z_m: float
+
+    # Actor trajectories (dict of actor_id -> trajectory)
+    # Trajectories should be in AABB frame (center of bounding box)
+    actor_trajectories: dict[str, tuple[Trajectory, tuple[float, float, float]]]
+    # Dict mapping actor_id to (trajectory, (aabb_x, aabb_y, aabb_z))
+
+    # Ground truth ego trajectory (recorded original trajectory)
+    ego_recorded_ground_truth_trajectory: Trajectory
+
+    # Driver responses (optional, needed for some metrics)
+    driver_responses: Optional[DriverResponses] = None
+
+    # Vector map (needed for offroad detection)
+    vec_map: Optional[VectorMap] = None
+
+    # Cameras data (optional, needed for image-based metrics)
+    cameras: Optional[Cameras] = None
+
+    # Routes data (optional)
+    routes: Optional[Routes] = None
+
+
 @dataclasses.dataclass
 class SimulationResult:
-    """Captures the simulation result for all timesteps.
+    """
+    Processed simulation state ready for scoring and video rendering.
 
-    This is the main class that is used to store the simulation results.
+    This is a "computed object" with enriched data derived from ScenarioEvalInput.
+    It contains RenderableTrajectory objects (with RAABB and rendering info) and
+    pre-computed ActorPolygons (spatial index for fast collision detection).
+
+    Create from raw input using the factory method:
+        sim_result = SimulationResult.from_scenario_input(scenario_input, cfg)
+
+    See the section comment above ScenarioEvalInput for the full data flow.
     """
 
     session_metadata: RolloutMetadata.SessionMetadata
@@ -1599,6 +1686,99 @@ class SimulationResult:
         """
         return self.actor_polygons.timestamps_us
 
+    @classmethod
+    def from_scenario_input(
+        cls, scenario_input: ScenarioEvalInput, cfg: EvalConfig
+    ) -> "SimulationResult":
+        """
+        Create a SimulationResult from ScenarioEvalInput.
+
+        This factory method converts raw input data into a fully processed
+        SimulationResult with RenderableTrajectory objects, pre-computed
+        actor polygons, and config-dependent vehicle parameters applied.
+
+        Args:
+            scenario_input: Raw input data containing trajectories, metadata, etc.
+            cfg: Evaluation configuration (used for vehicle shrink factor,
+                 corner roundness, etc.)
+
+        Returns:
+            SimulationResult ready for use in scoring and video rendering.
+        """
+        # Build actor trajectories as RenderableTrajectory
+        actor_trajectories: dict[str, RenderableTrajectory] = {}
+
+        for actor_id, (
+            trajectory,
+            aabb_dims,
+        ) in scenario_input.actor_trajectories.items():
+            # Centralized RAABB construction (apply shrink/roundness once)
+            raabb = RAABB.from_grpc(
+                AABB(size_x=aabb_dims[0], size_y=aabb_dims[1], size_z=aabb_dims[2]),
+                cfg.vehicle,
+            )
+            actor_trajectories[actor_id] = RenderableTrajectory.from_trajectory(
+                trajectory, raabb
+            )
+
+        # Create ego RAABB (centralized)
+        ego_raabb = RAABB.from_grpc(
+            AABB(
+                size_x=scenario_input.ego_aabb_x_m,
+                size_y=scenario_input.ego_aabb_y_m,
+                size_z=scenario_input.ego_aabb_z_m,
+            ),
+            cfg.vehicle,
+        )
+
+        # Create ego recorded ground truth trajectory
+        ego_recorded_ground_truth_trajectory = RenderableTrajectory.from_trajectory(
+            scenario_input.ego_recorded_ground_truth_trajectory, ego_raabb
+        )
+
+        # Create driver estimated trajectory (use EGO trajectory if not specified)
+        ego_trajectory = actor_trajectories.get("EGO")
+        if ego_trajectory is not None:
+            driver_estimated_trajectory = ego_trajectory
+        else:
+            driver_estimated_trajectory = RenderableTrajectory.from_trajectory(
+                Trajectory.create_empty(), ego_raabb
+            )
+
+        # Create driver responses if not provided
+        driver_responses = scenario_input.driver_responses
+        if driver_responses is None:
+            driver_responses = DriverResponses(
+                ego_coords_rig_to_aabb_center=scenario_input.ego_coords_rig_to_aabb_center,
+                ego_trajectory_local=(
+                    ego_trajectory if ego_trajectory else driver_estimated_trajectory
+                ),
+            )
+
+        # Create actor polygons from trajectories
+        actor_polygons = ActorPolygons.from_actor_trajectories(actor_trajectories)
+
+        # Create empty cameras and routes if not provided
+        cameras = (
+            scenario_input.cameras if scenario_input.cameras is not None else Cameras()
+        )
+        routes = (
+            scenario_input.routes if scenario_input.routes is not None else Routes()
+        )
+
+        return cls(
+            session_metadata=scenario_input.session_metadata,
+            ego_coords_rig_to_aabb_center=scenario_input.ego_coords_rig_to_aabb_center,
+            actor_trajectories=actor_trajectories,
+            driver_estimated_trajectory=driver_estimated_trajectory,
+            driver_responses=driver_responses,
+            ego_recorded_ground_truth_trajectory=ego_recorded_ground_truth_trajectory,
+            vec_map=scenario_input.vec_map,
+            actor_polygons=actor_polygons,
+            cameras=cameras,
+            routes=routes,
+        )
+
 
 class AggregationType(StrEnum):
     """How should the values of a metric be aggregated over time?"""
@@ -1608,6 +1788,43 @@ class AggregationType(StrEnum):
     MAX = "max"
     MIN = "min"
     LAST = "last"
+
+    def get_numpy_func(self) -> Callable[[np.ndarray], float]:
+        """Return the numpy function for this aggregation type."""
+        if self == AggregationType.MEAN:
+            return np.mean
+        elif self == AggregationType.MEDIAN:
+            return np.median
+        elif self == AggregationType.MAX:
+            return np.max
+        elif self == AggregationType.MIN:
+            return np.min
+        elif self == AggregationType.LAST:
+            return lambda x: x[-1]
+        else:
+            raise ValueError(f"Unknown aggregation type: {self}")
+
+    def get_polars_agg_expr(self, col_name: str) -> pl.Expr:
+        """Return the Polars aggregation expression for this aggregation type.
+
+        Args:
+            col_name: The column name to aggregate.
+
+        Returns:
+            A Polars expression that aggregates the column.
+        """
+        if self == AggregationType.MEAN:
+            return pl.col(col_name).mean()
+        elif self == AggregationType.MEDIAN:
+            return pl.col(col_name).median()
+        elif self == AggregationType.MAX:
+            return pl.col(col_name).max()
+        elif self == AggregationType.MIN:
+            return pl.col(col_name).min()
+        elif self == AggregationType.LAST:
+            return pl.col(col_name).last()
+        else:
+            raise ValueError(f"Unknown aggregation type: {self}")
 
 
 @dataclasses.dataclass
@@ -1633,33 +1850,79 @@ class MetricReturn:
     # Arbitrary info about the metric. Currently not used.
     info: str | None = None
 
+    def aggregate(self) -> float:
+        """Aggregate values over time according to the time_aggregation type.
 
-@dataclasses.dataclass
-class EvaluationResultContainer:
-    """This class is used to store evaluation results.
+        Only valid values are included in the aggregation.
 
-    It is initialized with `file_path`. `sim_result` is added when the ASL logs
-    are loaded and contain the parsed information.
-    `metric_results` are added when the metrics were computed.
-    The container is then passed to the metric aggregator, as well as video
-    generation.
+        Returns:
+            Aggregated metric value. Returns NaN if no valid values exist.
+
+        Note:
+            This method provides consistent aggregation logic that matches
+            the Polars-based aggregation in `processing.aggregate_and_write_metrics_results_txt`.
+        """
+        values = np.array(self.values, dtype=np.float64)
+        valid = np.array(self.valid, dtype=bool)
+        valid_values = values[valid]
+
+        if len(valid_values) == 0:
+            return float("nan")
+
+        return float(self.time_aggregation.get_numpy_func()(valid_values))
+
+
+def create_metrics_dataframe(
+    metric_results: list["MetricReturn"],
+    clipgt_id: str,
+    batch_id: str,
+    rollout_id: str,
+    run_uuid: str,
+    run_name: str,
+) -> pl.DataFrame:
     """
+    Create a polars DataFrame from metric results with run metadata.
 
-    file_path: str
-    sim_result: SimulationResult | None = None
-    metric_results: list[MetricReturn] = dataclasses.field(default_factory=list)
+    This is a shared helper used by both post-eval (main.py) and in-runtime
+    evaluation (scenario_evaluator.py) to ensure consistent DataFrame format.
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in self.__dict__ and getattr(self, name) is not None:
-            raise ValueError(f"{name} is already set")
-        super().__setattr__(name, value)
+    Args:
+        metric_results: List of MetricReturn objects with per-timestep metrics.
+        clipgt_id: Clip/ground truth identifier (typically scene_id).
+        batch_id: Batch identifier.
+        rollout_id: Rollout/session identifier.
+        run_uuid: Unique identifier for the evaluation run.
+        run_name: Human-readable name for the evaluation run.
 
-    def add_metric_results(self, metric_results: list[MetricReturn]) -> None:
-        """Add metric results to the container."""
-        self.metric_results.extend(metric_results)
+    Returns:
+        DataFrame with columns: name, timestamps_us, values, valid,
+        time_aggregation, clipgt_id, batch_id, rollout_id, run_uuid, run_name
+    """
+    dictionaries = []
+    for mr in metric_results:
+        # Use dataclasses.asdict for forward compatibility when MetricReturn fields change
+        mr_dict = dataclasses.asdict(mr)
+        # Convert values to float64 for consistency
+        mr_dict["values"] = np.array(mr_dict["values"], dtype=np.float64).tolist()
+        # Convert time_aggregation enum to string
+        mr_dict["time_aggregation"] = str(mr_dict["time_aggregation"])
+        # Remove fields not needed in the dataframe
+        mr_dict.pop("info", None)
+        # Add run metadata
+        mr_dict.update(
+            {
+                "clipgt_id": clipgt_id,
+                "batch_id": batch_id,
+                "rollout_id": rollout_id,
+                "run_uuid": run_uuid,
+                "run_name": run_name,
+            }
+        )
+        dictionaries.append(mr_dict)
 
-    def get_clipgt_batch_and_rollout_id(self) -> tuple[str, str, str]:
-        """Get the clipgt_id, batch_id, and rollout_id from the filename."""
-        clipgt_id, batch_id, rollout_id = self.file_path.split("/")[-3:]
-        rollout_id = rollout_id.split(".")[0]
-        return clipgt_id, batch_id, rollout_id
+    if not dictionaries:
+        return pl.DataFrame()
+
+    # pl.from_dicts() creates one row per dict with List columns.
+    # Explode to get one row per timestamp (long format) as expected by aggregation.
+    return pl.from_dicts(dictionaries).explode(["values", "timestamps_us", "valid"])

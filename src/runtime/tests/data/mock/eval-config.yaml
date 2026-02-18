@@ -1,0 +1,47 @@
+# Minimal eval config for mock tests
+run_in_runtime: true
+
+vec_map:
+  incl_road_edges: true
+  incl_traffic_signs: true
+  incl_wait_lines: true
+  max_num_lanes: 20
+  num_pts_per_lane: 20
+
+num_processes: 1
+
+vehicle:
+  vehicle_corner_roundness: 0.5
+  vehicle_shrink_factor: 0.02
+
+scorers:
+  min_ade:
+    time_deltas: [0.5, 1.0]
+    incl_z: false
+    target: GT
+  plan_deviation:
+    incl_z: false
+    avg_decay_rate: 0.1
+    min_timesteps: 5
+  image:
+    camera_logical_id: camera_front_wide_120fov
+
+aggregation_modifiers:
+  max_dist_to_gt_trajectory: 4.0
+
+database:
+  upload_metadata: false
+  upload_leaderboard: false
+  upload_full_metrics: false
+
+video:
+  render_video: false
+  camera_id_to_render: camera_front_wide_120fov
+  overlay_plans_on_camera: false
+  render_every_nth_frame: 1
+  generate_combined_video: false
+  combined_video_speed_factor: 1.0
+  map_video:
+    map_radius_m: 20
+    ego_loc: BOTTOM_CENTER
+    rotate_map_to_ego: true

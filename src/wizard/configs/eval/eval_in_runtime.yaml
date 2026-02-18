@@ -1,0 +1,20 @@
+# @package _global_
+
+# Eval-in-Runtime Configuration
+# ==============================
+# This config enables in-runtime evaluation, where metrics are computed
+# directly in the runtime after each rollout completes, instead of running
+# separate eval containers afterwards.
+#
+# Usage:
+#   python -m alpasim_wizard +eval=eval_in_runtime ...
+
+# Disable separate eval and aggregation services
+# Runtime will handle evaluation and aggregation directly
+wizard:
+  run_eval_services: []
+  run_aggregation_services: []
+
+# Enable in-runtime evaluation (this is the default)
+eval:
+  run_in_runtime: true

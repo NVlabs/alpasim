@@ -1,0 +1,57 @@
+# @package _global_
+# Config for running with an EXTERNAL driver. See docs/MANUAL_DRIVER.md for usage.
+
+defaults:
+  - /stable_manifest/oss
+  - _self_
+
+defines:
+  filesystem: ${repo-relative:"data"}
+
+wizard:
+  # Use localhost networking so containers can reach external services
+  debug_flags:
+    use_localhost: true
+
+  # Don't start a driver container - we're using an external one
+  run_sim_services:
+    ["sensorsim", "physics", "trafficsim", "controller", "runtime"]
+
+  # Skip evaluation and aggregation phases for interactive sessions
+  run_eval_services: []
+  run_aggregation_services: []
+
+  # External driver address (override this if your driver runs on a different port)
+  external_services:
+    driver:
+      - "localhost:6789"
+
+services:
+  # No driver service needed - it's external
+
+  sensorsim:
+    replicas_per_container: 1
+    gpus: [0]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [0]
+
+  controller:
+    replicas_per_container: 1
+    gpus: null
+
+# Override vavam's 2 Hz settings with 10 Hz for smoother interactive sessions
+runtime:
+  default_scenario_parameters:
+    egopose_interval_us: 100_000   # 10 Hz
+    control_timestep_us: 100_000   # 10 Hz
+    time_start_offset_us: 100_000  # Keep in sync with control_timestep
+
+    cameras:
+      - height: 1080
+        width: 1920
+        logical_id: camera_front_wide_120fov
+        frame_interval_us: 100_000  # 10 Hz frame updates
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000

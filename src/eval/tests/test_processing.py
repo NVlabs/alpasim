@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import pathlib
 import tempfile
@@ -60,7 +60,7 @@ def unified_metrics_df() -> pl.DataFrame:
     Required by DEFAULT_MODIFIERS:
     - collision_any, collision_front, collision_lateral (max aggregation)
     - offroad, img_is_black (max aggregation)
-    - dist_traveled_m (sum aggregation) - SCALED
+    - dist_traveled_m (max aggregation) - SCALED
     - progress (last aggregation)
 
     Test metrics:
@@ -106,7 +106,7 @@ def unified_metrics_df() -> pl.DataFrame:
         ("collision_lateral", "max", [0.0, 0.0, 0.0]),
         ("offroad", "max", [0.0, 0.0, 1.0]),
         ("img_is_black", "max", [0.0, 0.0, 0.0]),
-        ("dist_traveled_m", "sum", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
+        ("dist_traveled_m", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("progress", "last", [0.1, 0.5, 0.8]),
         ("metric_a", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("metric_b", "mean", [0.5, 1.5, 2.5]),  # Will be scaled by multipliers

@@ -39,9 +39,19 @@ class SlurmDeployment:
         self.deploy_simulation()
 
         # Deploy evaluation, then aggregation with dependencies
-        job_ids = self.deploy_evaluation()
-        logger.info(f"Evaluation services submitted job ids: {job_ids}")
-        self.deploy_aggregation(job_ids)
+        job_ids = []
+        if self.container_set.eval:
+            job_ids = self.deploy_evaluation()
+            logger.info(f"Evaluation services submitted job ids: {job_ids}")
+        else:
+            logger.info("Skipping evaluation phase (no eval services configured)")
+
+        if self.container_set.agg:
+            self.deploy_aggregation(job_ids)
+        else:
+            logger.info(
+                "Skipping aggregation phase (no aggregation services configured)"
+            )
 
     def deploy_simulation(self) -> List[int]:
         """Deploy simulation services (including runtime) on SLURM.

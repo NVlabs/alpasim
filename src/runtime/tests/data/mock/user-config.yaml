@@ -1,4 +1,5 @@
 nr_workers: 1
+
 endpoints:
   controller:
     n_concurrent_rollouts: 14

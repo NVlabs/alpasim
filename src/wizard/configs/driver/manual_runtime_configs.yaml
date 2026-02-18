@@ -1,0 +1,35 @@
+# @package _global_
+# Runtime configuration overrides for manual driver
+#
+# The manual driver is CPU-only and designed for human-in-the-loop control.
+# These settings optimize for human reaction time and visual feedback.
+
+runtime:
+  default_scenario_parameters:
+    # Longer force_gt to give human time to orient
+    force_gt_duration_us: 3_000_000  # 3 seconds
+
+    # Fewer steps since human driving is slower
+    n_sim_steps: 100
+    n_rollouts: 1
+
+    # Slower control loop to match human reaction time
+    egopose_interval_us: 200_000   # 5 Hz egomotion updates
+    control_timestep_us: 200_000   # 5 Hz control (drive() calls)
+
+    time_start_offset_us: 500_000  # 0.5s offset for scene loading
+
+    # Single camera for human to watch
+    cameras:
+      - height: 480
+        width: 854
+        logical_id: camera_front_wide_120fov
+        frame_interval_us: 100_000  # 10 Hz frame updates for smooth video
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+
+services:
+  driver:
+    # Manual driver doesn't need GPU
+    gpus: null
+    replicas_per_container: 1

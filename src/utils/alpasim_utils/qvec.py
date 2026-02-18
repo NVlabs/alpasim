@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Utility definitions for quaternion + translation vectors."""
 
 from __future__ import annotations
@@ -97,19 +100,6 @@ class QVec:
             ) + self.vec3
             quat = (rotation * R.from_quat(other.quat)).as_quat()
             return QVec(vec3=vec3, quat=quat)
-
-        from alpasim_utils.trajectory import DynamicState  # Avoid circular import
-
-        if isinstance(other, DynamicState):
-            linear_velocity = (
-                rotation.as_matrix() @ other.linear_velocity[..., None]
-            ).squeeze(-1)
-            angular_velocity = (
-                rotation.as_matrix() @ other.angular_velocity[..., None]
-            ).squeeze(-1)
-            return DynamicState(
-                angular_velocity=angular_velocity, linear_velocity=linear_velocity
-            )
 
         return NotImplemented
 

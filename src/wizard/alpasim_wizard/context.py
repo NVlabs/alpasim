@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Context management for AlpasimWizard."""
 
@@ -76,6 +76,16 @@ def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
     else:
         raise ValueError("Either scene_ids or test_suite_id must be set")
 
+    # Sort to ensure deterministic ordering. This is important for resume runs when
+    # limit_to_first_n but also makes our life a bit easier.
+    artifacts = sorted(artifacts, key=lambda x: x.scene_id)
+
+    # Apply limit_to_first_n if specified (positive value)
+    limit_n = cfg.scenes.limit_to_first_n
+    if limit_n > 0 and len(artifacts) > limit_n:
+        logger.info(f"Limiting scenes from {len(artifacts)} to first {limit_n}")
+        artifacts = artifacts[:limit_n]
+
     # Create sceneset directory if not using local USDZ directory
     if use_local_scenes:
         sceneset_dir_abs_path = os.path.abspath(str(cfg.scenes.local_usdz_dir))
@@ -123,7 +133,7 @@ def setup_directories(cfg: AlpasimConfig) -> None:
     logger.debug(f"Creating log directory at path: {log_dir}")
 
     # Create subdirectories
-    for subdir in ("asl", "metrics", "txt-logs", "controller"):
+    for subdir in ("rollouts", "telemetry", "txt-logs", "controller"):
         subdir_path = log_dir / subdir
         subdir_path.mkdir(parents=True, exist_ok=True, mode=0o777)
         os.chmod(subdir_path, 0o777)

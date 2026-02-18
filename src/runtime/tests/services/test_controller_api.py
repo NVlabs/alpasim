@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
-from alpasim_runtime.logs import LogWriter
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_utils.qvec import QVec
 from alpasim_utils.trajectory import Trajectory
@@ -38,7 +38,7 @@ def default_args():
 
 
 def test_create_run_controller_and_vehicle_request(default_args):
-    # Remove fallback_pose_local_to_rig_future and log_writer as they're not needed for request creation
+    # Remove fallback_pose_local_to_rig_future and dispatcher as they're not needed for request creation
     args_for_request = default_args.copy()
     del args_for_request["fallback_pose_local_to_rig_future"]
 
@@ -54,15 +54,15 @@ async def test_skip_controller_instance_run_controller_and_vehicle(default_args)
     """
     Check that the ControllerService in skip mode returns the fallback pose
     """
-    # Create a mock log writer
-    mock_log_writer = AsyncMock(spec=LogWriter)
+    # Create a mock broadcaster
+    mock_broadcaster = AsyncMock(spec=MessageBroadcaster)
 
     # Create controller service in skip mode
     controller = ControllerService(address="localhost:50051", skip=True)
 
     # Create a session with the controller
     async with controller.session(
-        uuid=default_args["session_uuid"], log_writer=mock_log_writer
+        uuid=default_args["session_uuid"], broadcaster=mock_broadcaster
     ):
         # Remove session_uuid from args since it's now accessed via session_info
         args = default_args.copy()

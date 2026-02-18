@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Generate metrics analysis plots from Prometheus .prom files.
@@ -467,7 +467,7 @@ def _load_service_config(metrics_path: Path) -> dict[str, dict[str, Any]] | None
     Returns:
         Dictionary mapping service names to their configuration, or None if not found
     """
-    # Look for wizard_config.yaml in log_dir (metrics_path is <log_dir>/metrics/metrics.prom)
+    # Look for wizard_config.yaml in log_dir (metrics_path is <log_dir>/telemetry/metrics.prom)
     config_path = metrics_path.parent.parent / "wizard-config.yaml"
 
     try:

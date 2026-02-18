@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from tempfile import TemporaryDirectory
 
 from alpasim_grpc.v0.logging_pb2 import LogEntry, RolloutMetadata
-from alpasim_runtime.logs import LogWriterManager
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_utils.logs import LogWriter, async_read_pb_log
 
 
@@ -22,9 +22,9 @@ async def test_log_is_written() -> None:
 
         asl_log_writer = LogWriter(file_path=asl_path)
 
-        log_writer_manager = LogWriterManager(log_writers=[asl_log_writer])
-        async with log_writer_manager:
-            await log_writer_manager.log_message(message=written_message)
+        broadcaster = MessageBroadcaster(handlers=[asl_log_writer])
+        async with broadcaster:
+            await broadcaster.broadcast(message=written_message)
 
         n_messages = 0
         async for read_message in async_read_pb_log(asl_path, raise_on_malformed=True):

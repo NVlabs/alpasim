@@ -59,15 +59,46 @@ tutorial/
 │           ├── dist_to_gt_trajectory
 │           │   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4 -> ../../all/clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4
 │           └── offroad
-├── asl
-│   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3
-│       └── 814f3c22-bb78-11f0-a5f3-2f64b47b8685
-│           ├── 0.asl
-│           └── _complete
-├── avmf-config.yaml
-├── controller
-│   └── alpasim_controller_814f3c22-bb78-11f0-a5f3-2f64b47b8685.csv
-├── docker-compose.yaml
+├── rollouts
+│   ├── clipgt-f7020b3e-3d61-4cb6-b157-2f4aac1a7d8d
+│   │   └── 86513b18-96c5-11ef-8b6f-b83fd26d88f0
+│   │       ├── rollout.asl
+│   │       ├── rollout_indexed
+│   │       │   ├── camera_front_tele_30fov.mp4
+│   │       │   ├── camera_front_wide_120fov.mp4
+│   │       │   ├── manifest.json
+│   │       │   ├── rclog-all.index
+│   │       │   └── rclog-all-indexed.log
+│   │       ├── rollout.rclog
+│   │       ├── metrics.parquet
+│   │       ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│   │       └── _complete
+│   ├── clipgt-fa369408-2787-41cb-b629-a7885d7c46e2
+│   │   └── 8656ecb6-96c5-11ef-8b6f-b83fd26d88f0
+│   │       ├── rollout.asl
+│   │       ├── rollout_indexed
+│   │       │   ├── camera_front_tele_30fov.mp4
+│   │       │   ├── camera_front_wide_120fov.mp4
+│   │       │   ├── manifest.json
+│   │       │   ├── rclog-all.index
+│   │       │   └── rclog-all-indexed.log
+│   │       ├── rollout.rclog
+│   │       ├── metrics.parquet
+│   │       ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│   │       └── _complete
+│   └── clipgt-fe127c3f-8b06-4c4f-9933-1e5089a1a731
+│       └── 864da3ea-96c5-11ef-8b6f-b83fd26d88f0
+│           ├── rollout.asl
+│           ├── rollout_indexed
+│           │   ├── camera_front_tele_30fov.mp4
+│           │   ├── camera_front_wide_120fov.mp4
+│           │   ├── manifest.json
+│           │   ├── rclog-all.index
+│           │   └── rclog-all-indexed.log
+│           ├── rollout.rclog
+│           ├── metrics.parquet
+│           ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│           └── _complete
 ├── driver
 │   └── vam-driver.yaml
 ├── driver-config.yaml
@@ -89,37 +120,43 @@ tutorial/
 
 Some noteworthy files and directories:
 
-- `asl` contains logs of simulation messages between components in each rollout and can be used to
-  analyze AV behavior and calculate metrics. The logs are organized into
-  `asl/{scenario.scene_id}/{rollout_id}.*` - in this case we have 1 scenes with one batch of a
-  single rollout.
+- `rollouts` contains logs of simulation behavior in each rollout, used to analyze AV behavior and
+  calculate metrics. The logs are organized into
+  `rollouts/{scenario.scene_id}/{batch_uuid}/rollout.*` - in this case we have 3 scenes with one
+  batch of a single rollout each. The subdivision into batches is historical and can be ignored for
+  most purposes.
   - `.asl` files which record the messages exchanged within the simulation. These are useful for
-    debugging the simulator behavior and replaying events.
-- `eval/` contains per-rollout evaluation results:
-  - `metrics_unprocessed.parquet` - Raw driving quality metrics for each rollout
-  - `videos/` - Video recordings of each rollout
-- `aggregate/` contains aggregated results across all rollouts:
+    debugging the simulator behavior and replaying events. More in
+    [asl log format](#asl-log-format).
+  - `metrics.parquet` contains per-rollout evaluation metrics.
+  - `{clipgt_id}_{batch_id}_{rollout_id}.mp4` evaluation videos (when video rendering is enabled),
+    where `clipgt_id=f"clipgt-{scene_id}"`, `batch_id="0"`, `rollout_id=rollout_uuid`.
+  - `_complete` is a marker file created when a rollout finishes successfully. Used by the
+    autoresume feature to track which rollouts completed and to remove incomplete rollout
+    directories on restart.
+
+* `aggregate/` contains aggregated results across all rollouts:
   - `metrics_results.txt` - Formatted table of driving scores (mean, std, quantiles)
   - `metrics_results.png` - Visual summary of driving quality metrics
   - `metrics_unprocessed.parquet` - Combined metrics from all rollouts
   - `videos/` - Videos organized by violation type (collision_at_fault, offroad, etc.)
-- `metrics/` contains performance profiling data (see
+* `telemetry/` contains performance profiling data (see
   [OPERATIONS.md](OPERATIONS.md#how-do-i-view-performance-metrics) for details):
   - `metrics.prom` - Prometheus metrics from simulation
   - `metrics_plot.png` - Performance visualization (CPU/GPU/RPC metrics)
-- `driver` is a directory with logs written by the driver service, useful to debug policy-internal
+* `driver` is a directory with logs written by the driver service, useful to debug policy-internal
   problems.
-- `wizard-config.yaml` contains the config the wizard used for this run **after applying the
+* `wizard-config.yaml` contains the config the wizard used for this run **after applying the
   inheritance of hydra**. This is useful for debugging configuration issues.
-- `generated-user-config-{ARRAY_ID}.yaml` contains an expanded version of the simulation config
+* `generated-user-config-{ARRAY_ID}.yaml` contains an expanded version of the simulation config
   provided by the user, possibly split into chunks when simulating on multiple nodes.
-- `trafficsim-config.yaml`. A copy of the traffic simulation config used for simulation, useful for
+* `trafficsim-config.yaml`. A copy of the traffic simulation config used for simulation, useful for
   debugging traffic simulation.
-- `generated-network-config.yaml` describes which services listen on which ports during simulation.
+* `generated-network-config.yaml` describes which services listen on which ports during simulation.
   Not useful unless debugging the simulator itself.
 
-If everything went correctly `asl` and `eval` are usually the only results of interest. For
-understanding driving quality metrics and performance tuning, see the
+If everything went correctly `rollouts` and `aggregate` are usually the only results of interest.
+For understanding driving quality metrics and performance tuning, see the
 [Operations Guide](OPERATIONS.md).
 
 ## Basic debugging
@@ -128,9 +165,10 @@ understanding driving quality metrics and performance tuning, see the
 > vehicle behavior within simulation)
 
 The console contains logs from all microservices, and is the first place one should look when
-something goes wrong. When an error happens (for example the `asl` directory does not appear), it's
-best to consult that log to see where the first errors occurred. The microservices may produce
+something goes wrong. When an error happens (for example the `rollouts` directory does not appear),
+it's best to consult that log to see where the first errors occurred. The microservices may produce
 additional logs that can be useful for debugging, but that is not covered here.
+
 
 # Level 2
 
@@ -163,6 +201,13 @@ by running the wizard as follows:
 ```bash
 alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.default_scenario_parameters.n_rollouts=8
 ```
+
+### Evaluation video layouts
+You can choose which video layouts to render via `eval.video.video_layouts`. Available layouts are `DEFAULT` (BEV map, camera, metrics) and `REASONING_OVERLAY` (first-person camera with reasoning text overlay and trajectory chart). To generate reasoning-overlay videos only, override when invoking the wizard, for example:
+```bash
+alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+```
+You can also set `eval.video.video_layouts=[DEFAULT,REASONING_OVERLAY]` to render both layouts per rollout.
 
 ## Driver
 
@@ -316,6 +361,7 @@ simulation behavior. [This notebook](/src/runtime/notebooks/replay_logs_alpamode
 example of reading an `asl` log and "replaying the stimuli" on a driver instance, allowing for
 reproducing behavior with your favorite debugger attached.
 
+
 # Level 3
 
 In level 3 we show how to circumvent the `alpasim_wizard` defined components: this enables use cases
@@ -325,6 +371,12 @@ idea behind the approach is to:
 - Use the `alpasim_wizard` to generate config files without actually running the simulation
 - Manually start the desired components with the generated config files
 - Use the `alpasim_wizard` generated config files to run the rest of the simulation as normal.
+
+## Manual Driver (Interactive Control)
+
+For interactive control of the ego vehicle with keyboard input, see
+[MANUAL_DRIVER.md](MANUAL_DRIVER.md). This allows you to drive through scenarios manually while
+visualizing the camera feed in real-time.
 
 ## Breakpoint debugging: example with the controller
 

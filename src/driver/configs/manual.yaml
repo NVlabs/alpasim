@@ -1,0 +1,38 @@
+# Standalone Manual Driver Configuration
+# Run with: uv run -m alpasim_driver.main --config-path=configs --config-name=manual
+#
+# This is a complete config that can run the driver without wizard.
+
+# Logging level
+log_level: INFO
+
+# Model configuration
+model:
+  model_type: MANUAL
+  checkpoint_path: "unused"  # Manual model doesn't need checkpoints
+  device: "cpu"              # Manual model is CPU-only
+
+# Server configuration
+host: "0.0.0.0"
+port: 6789
+
+# Inference configuration
+inference:
+  use_cameras: ["camera_front_wide_120fov"]
+  max_batch_size: 1
+  subsample_factor: 1
+  context_length: 1
+
+# Route configuration
+route:
+  default_command: 2  # straight
+  use_waypoint_commands: false
+
+# Output configuration (set to current directory or override)
+output_dir: "."
+
+# Trajectory optimization
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

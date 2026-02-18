@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Configuration schema for driver service supporting multiple model backends."""
 
 from dataclasses import dataclass, field
@@ -13,6 +16,7 @@ class ModelType(str, Enum):
     VAM = "vam"
     TRANSFUSER = "transfuser"
     ALPAMAYO_R1 = "alpamayo_r1"
+    MANUAL = "manual"
 
 
 @dataclass
@@ -37,6 +41,7 @@ class InferenceConfig:
     max_batch_size: int = MISSING  # Maximum batch size for inference
     subsample_factor: int = 1
     context_length: Optional[int] = None  # Override model's default context length
+    output_frequency_hz: int = 10  # Frequency of trajectory decisions (Hz)
 
 
 @dataclass

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Sensorsim service implementation."""
 
@@ -10,6 +10,7 @@ from asyncio import Lock
 from typing import Dict, Optional, Type
 
 from alpasim_grpc.v0.common_pb2 import Empty
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.sensorsim_pb2 import (
     AggregatedRenderRequest,
     AggregatedRenderReturn,
@@ -24,12 +25,12 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
 )
 from alpasim_grpc.v0.sensorsim_pb2_grpc import SensorsimServiceStub
 from alpasim_runtime.camera_catalog import CameraCatalog
-from alpasim_runtime.logs import LogEntry
 from alpasim_runtime.services.service_base import ServiceBase
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_runtime.types import Clock, ImageWithMetadata, RuntimeCamera
+from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.qvec import QVec
 from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         async with lock:
             if scene_id not in self._available_cameras:
                 request = AvailableCamerasRequest(scene_id=scene_id)
-                await self.session_info.log_writer.log_message(
+                await self.session_info.broadcaster.broadcast(
                     LogEntry(available_cameras_request=request)
                 )
 
@@ -102,7 +103,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                     request,
                 )
 
-                await self.session_info.log_writer.log_message(
+                await self.session_info.broadcaster.broadcast(
                     LogEntry(available_cameras_return=response)
                 )
 
@@ -268,7 +269,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             request.rgb_requests.append(rgb_request)
 
         # TODO(mwatson): Add requests/handling for lidars
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(aggregated_render_request=request)
         )
 
@@ -329,7 +330,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             ego_mask_id,
         )
 
-        await self.session_info.log_writer.log_message(LogEntry(render_request=request))
+        await self.session_info.broadcaster.broadcast(LogEntry(render_request=request))
 
         response: RGBRenderReturn = await profiled_rpc_call(
             "render_rgb", "sensorsim", self.stub.render_rgb, request

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Worker pool management for parallel rollout execution.
@@ -121,6 +121,8 @@ from alpasim_runtime.worker.ipc import (
 )
 from alpasim_runtime.worker.main import worker_async_main, worker_main
 
+from eval.schema import EvalConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +131,7 @@ async def run_workers(
     args: argparse.Namespace,
     jobs: list[RolloutJob],
     log_dir: str,
+    eval_config: EvalConfig,
 ) -> list[JobResult]:
     """
     Execute rollouts using a queue-based pattern.
@@ -181,6 +184,7 @@ async def run_workers(
             result_queue=result_queue,
             allocations=all_allocations[0],
             log_dir=log_dir,
+            eval_config=eval_config,
         )
     else:
         # Subprocess mode: spawn worker processes
@@ -191,6 +195,7 @@ async def run_workers(
             result_queue=result_queue,
             all_allocations=all_allocations,
             log_dir=log_dir,
+            eval_config=eval_config,
         )
 
     total_time = time.perf_counter() - start_time
@@ -210,6 +215,7 @@ async def _run_inline_worker(
     result_queue: Queue,
     allocations: ServiceAllocations,
     log_dir: str,
+    eval_config: EvalConfig,
 ) -> list[JobResult]:
     """
     Execute jobs inline in the parent process (W=1 mode).
@@ -230,6 +236,7 @@ async def _run_inline_worker(
         usdz_glob=args.usdz_glob,
         log_dir=log_dir,
         parent_pid=None,  # Disable orphan detection for inline mode
+        eval_config=eval_config,
     )
 
     # Send shutdown sentinel - worker will exit after processing all jobs
@@ -252,6 +259,7 @@ async def _run_subprocess_workers(
     result_queue: Queue,
     all_allocations: list[ServiceAllocations],
     log_dir: str,
+    eval_config: EvalConfig,
 ) -> list[JobResult]:
     """
     Execute jobs in spawned worker processes (W>1 mode).
@@ -304,6 +312,7 @@ async def _run_subprocess_workers(
             parent_pid=parent_pid,
             log_dir=log_dir,
             shared_rpc_tracking=shared_rpc_tracking,
+            eval_config=eval_config,
         )
         p = Process(
             target=worker_main,

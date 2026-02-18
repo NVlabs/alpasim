@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Unified driver implementation for Alpasim supporting multiple model backends."""
 
@@ -11,6 +11,7 @@ import logging
 import os
 import pickle
 import queue
+import socket
 import threading
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -59,6 +60,7 @@ from .frame_cache import FrameCache
 from .models import DriveCommand
 from .models.ar1_model import AR1Model
 from .models.base import BaseTrajectoryModel, ModelPrediction
+from .models.manual_model import ManualModel
 from .models.transfuser_model import TransfuserModel
 from .models.vam_model import VAMModel
 from .navigation import determine_command_from_route
@@ -74,6 +76,24 @@ from .trajectory_optimizer import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_external_ip() -> str:
+    """Get the external IP address of this machine.
+
+    Uses a UDP socket to determine which local interface would be used
+    to reach an external address (without actually sending any data).
+
+    Returns:
+        The external IP address as a string, or "unknown" if detection fails.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            # Connect to an external address (doesn't send data, just determines route)
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "unknown"
 
 
 def _quat_to_yaw(quaternion: Quat) -> float:
@@ -397,6 +417,7 @@ def _create_model(
     device: torch.device,
     camera_ids: list[str],
     context_length: int | None,
+    output_frequency_hz: int,
 ) -> BaseTrajectoryModel:
     """Factory method to create the appropriate model.
 
@@ -405,6 +426,7 @@ def _create_model(
         device: Torch device to load model on.
         camera_ids: List of camera logical IDs in order.
         context_length: Number of temporal frames (None uses model default).
+        output_frequency_hz: Trajectory output frequency in Hz.
 
     Returns:
         Model instance implementing BaseTrajectoryModel.
@@ -436,6 +458,12 @@ def _create_model(
             device=device,
             camera_ids=camera_ids,
             context_length=context_length or 4,
+        )
+    elif cfg.model_type == ModelType.MANUAL:
+        return ManualModel(
+            camera_ids=camera_ids,
+            output_frequency_hz=output_frequency_hz,
+            context_length=context_length or 1,
         )
     else:
         raise ValueError(f"Unknown model type: {cfg.model_type}")
@@ -478,6 +506,7 @@ class EgoDriverService(EgodriverServiceServicer):
             self._device,
             camera_ids=cfg.inference.use_cameras,
             context_length=cfg.inference.context_length,
+            output_frequency_hz=cfg.inference.output_frequency_hz,
         )
 
         # Get context length from model or config override
@@ -1074,16 +1103,64 @@ async def serve(cfg: DriverConfig) -> None:
     server.add_insecure_port(address)
 
     await server.start()
+    external_ip = _get_external_ip()
     logger.info(
-        "Starting %s driver on %s",
+        "Starting %s driver on %s (external IP: %s:%d)",
         cfg.model.model_type.value,
         address,
+        external_ip,
+        cfg.port,
     )
 
     try:
         await server.wait_for_termination()
     finally:
         await service.stop_worker()
+
+
+def _run_grpc_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None:
+    """Run the gRPC server in a background thread.
+
+    Used when the main thread is needed for GUI (e.g., ManualModel on macOS).
+
+    Args:
+        cfg: Driver configuration.
+        ready_event: Event to signal when the service is initialized.
+    """
+
+    async def serve_with_signal() -> None:
+        server = grpc.aio.server()
+        loop = asyncio.get_running_loop()
+
+        service = EgoDriverService(
+            cfg=cfg,
+            loop=loop,
+            grpc_server=server,
+        )
+        add_EgodriverServiceServicer_to_server(service, server)
+
+        address = f"{cfg.host}:{cfg.port}"
+        server.add_insecure_port(address)
+
+        await server.start()
+        external_ip = _get_external_ip()
+        logger.info(
+            "Starting %s driver on %s (external IP: %s:%d)",
+            cfg.model.model_type.value,
+            address,
+            external_ip,
+            cfg.port,
+        )
+
+        # Signal that the service (and model) is ready
+        ready_event.set()
+
+        try:
+            await server.wait_for_termination()
+        finally:
+            await service.stop_worker()
+
+    asyncio.run(serve_with_signal())
 
 
 @hydra.main(
@@ -1106,6 +1183,33 @@ def main(hydra_cfg: DriverConfig) -> None:
         os.makedirs(cfg.output_dir, exist_ok=True)
         config_filename = f"{cfg.model.model_type.value}-driver.yaml"
         OmegaConf.save(cfg, os.path.join(cfg.output_dir, config_filename), resolve=True)
+
+    # For ManualModel, run the GUI on the main thread and gRPC in a background
+    # thread. This is required on macOS (Cocoa), and we use the same approach
+    # on Linux for consistency and simpler maintenance.
+    if cfg.model.model_type == ModelType.MANUAL:
+        logger.info("Starting gRPC server in background thread (GUI mode)")
+
+        ready_event = threading.Event()
+        grpc_thread = threading.Thread(
+            target=_run_grpc_in_thread,
+            args=(cfg, ready_event),
+            name="grpc-server",
+            daemon=True,
+        )
+        grpc_thread.start()
+
+        # Wait for the service (and ManualModel) to be created
+        ready_event.wait(timeout=30.0)
+
+        # Run pygame loop on main thread using the singleton GUI instance
+        if ManualModel._gui_instance is not None:
+            ManualModel._gui_instance.run_main_loop()
+        else:
+            logger.warning("ManualModel GUI not initialized, waiting for gRPC thread")
+            grpc_thread.join()
+
+        return
 
     asyncio.run(serve(cfg))
 

@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.12.0"
+version = "0.21.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -19,13 +19,16 @@ members = [
   "src/driver",
 ]
 
-# This is a hacky workaround to skip installing flash attention
-# which is an AR1 dependency but does not declare its own dependencies
-# properly, leading to uv install errors.
-# TODO: make flash attention optional in alpamayo-r1 repo.
+# This is a hacky workaround to skip installing certain packages.
 [tool.uv]
 override-dependencies = [
-   "flash-attn; python_version < '0'",
+  # flash attention is an AR1 dependency but does not declare its own dependencies
+  # properly, leading to uv install errors.
+  # TODO: make flash attention optional in alpamayo-r1 repo.
+  "flash-attn; python_version < '0'",
+  # hyperqueue is a vam dependency for HPC job scheduling, only available on Linux x86_64.
+  # Not needed for local driver runs.
+  "hyperqueue; python_version < '0'",
 ]
 constraint-dependencies = [
   # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Traffic service implementation."""
 
@@ -13,6 +13,7 @@ import numpy as np
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.common_pb2 import Empty, PoseAtTime, VersionId
+from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.traffic_pb2 import (
     ObjectTrajectory,
     ObjectTrajectoryUpdate,
@@ -23,7 +24,7 @@ from alpasim_grpc.v0.traffic_pb2 import (
     TrafficSessionRequest,
 )
 from alpasim_grpc.v0.traffic_pb2_grpc import TrafficServiceStub
-from alpasim_runtime.logs import LogEntry, LogWriter
+from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.services.service_base import (
     WILDCARD_SCENE_ID,
     ServiceBase,
@@ -75,7 +76,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
     def session(  # type: ignore[override]
         self,
         uuid: str,
-        log_writer: LogWriter,
+        broadcaster: MessageBroadcaster,
         traffic_objs: TrafficObjects,
         scene_id: str,
         ego_aabb: AABB,
@@ -89,7 +90,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         """
         return super().session(
             uuid=uuid,
-            log_writer=log_writer,
+            broadcaster=broadcaster,
             traffic_objs=traffic_objs,
             scene_id=scene_id,
             ego_aabb=ego_aabb,
@@ -190,7 +191,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         )
 
         # Log and start session
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(traffic_session_request=session_request)
         )
 
@@ -226,6 +227,31 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         future_us: int,
     ) -> TrafficReturn:
         """Simulate traffic for a given ego pose update."""
+        # Skip expensive gRPC request construction when in skip mode
+        if self.skip:
+            logger.debug("Skip mode: replaying traffic from recorded data")
+
+            # In skip mode, return traffic positions from recorded trajectories
+            # without constructing the expensive TrafficRequest
+            object_trajectory_updates = []
+            for obj_id, obj in self._traffic_objs.items():
+                if obj_id == "EGO":
+                    continue  # Skip EGO in replay
+
+                # Get the trajectory at the requested timestamp
+                if future_us in obj.trajectory.time_range_us:
+                    traj = obj.trajectory.interpolate_to_timestamps(
+                        np.array([future_us], dtype=np.uint64)
+                    )
+                    object_trajectory_updates.append(
+                        ObjectTrajectoryUpdate(
+                            object_id=obj_id,
+                            trajectory=traj.to_grpc(),
+                        )
+                    )
+
+            return TrafficReturn(object_trajectory_updates=object_trajectory_updates)
+
         # Create ego trajectory update with the provided pose
         object_trajectory_updates = [
             ObjectTrajectoryUpdate(
@@ -247,41 +273,16 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
             object_trajectory_updates=object_trajectory_updates,
         )
 
-        await self.session_info.log_writer.log_message(
+        await self.session_info.broadcaster.broadcast(
             LogEntry(traffic_request=traffic_request)
         )
 
-        if self.skip:
-            logger.debug("Skip mode: replaying traffic from recorded data")
+        traffic_return = await profiled_rpc_call(
+            "simulate", "traffic", self.stub.simulate, traffic_request
+        )
 
-            # In skip mode, return traffic positions from recorded trajectories
-            object_trajectory_updates = []
-            for obj_id, obj in self._traffic_objs.items():
-                if obj_id == "EGO":
-                    continue  # Skip EGO in replay
-
-                # Get the trajectory at the requested timestamp
-                if future_us in obj.trajectory.time_range_us:
-                    traj = obj.trajectory.interpolate_to_timestamps(
-                        np.array([future_us], dtype=np.uint64)
-                    )
-                    object_trajectory_updates.append(
-                        ObjectTrajectoryUpdate(
-                            object_id=obj_id,
-                            trajectory=traj.to_grpc(),
-                        )
-                    )
-
-            traffic_return = TrafficReturn(
-                object_trajectory_updates=object_trajectory_updates
-            )
-        else:
-            traffic_return = await profiled_rpc_call(
-                "simulate", "traffic", self.stub.simulate, traffic_request
-            )
-
-        # Log response (in both skip and non-skip modes)
-        await self.session_info.log_writer.log_message(
+        # Log response
+        await self.session_info.broadcaster.broadcast(
             LogEntry(traffic_return=traffic_return)
         )
 

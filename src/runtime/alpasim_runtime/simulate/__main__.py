@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 The main entrypoint to start simulations with alpasim.
@@ -33,12 +33,15 @@ from alpasim_runtime.telemetry.plot_metrics import generate_metrics_plot
 from alpasim_runtime.telemetry.utils import merge_metrics_files
 from alpasim_runtime.validation import (
     gather_versions_from_addresses,
+    validate_array_job_config,
     validate_scenarios,
 )
 from alpasim_runtime.worker.ipc import RolloutJob
 from alpasim_runtime.worker.pool import run_workers
 
 import grpc
+from eval.aggregation.main import run_aggregation_from_runtime
+from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +75,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "--log-dir",
         type=str,
         required=True,
-        help="Root directory for all simulation outputs (asl/, metrics/, txt-logs/)",
+        help="Root directory for all simulation outputs (rollouts/, telemetry/, txt-logs/)",
     )
 
     parser.add_argument(
@@ -82,11 +85,25 @@ def create_arg_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Python logging level (e.g. DEBUG, INFO, WARNING, ERROR)",
     )
+    parser.add_argument(
+        "--array-job-dir",
+        type=str,
+        required=False,
+        default=None,
+        help="Parent directory for SLURM array jobs. Used for aggregation across jobs. "
+        "Defaults to --log-dir for single job runs.",
+    )
+    parser.add_argument(
+        "--eval-config",
+        type=str,
+        required=True,
+        help="Path to evaluation config file (mandatory). Controls in-runtime evaluation settings.",
+    )
 
     return parser
 
 
-def build_job_list(config: SimulatorConfig, asl_dir: str) -> list[RolloutJob]:
+def build_job_list(config: SimulatorConfig, rollouts_dir: str) -> list[RolloutJob]:
     """Build list of jobs to execute, respecting autoresume settings."""
     jobs = []
     for scenario in config.user.scenarios:
@@ -94,9 +111,9 @@ def build_job_list(config: SimulatorConfig, asl_dir: str) -> list[RolloutJob]:
 
         # Handle autoresume: skip already-completed rollouts
         if config.user.enable_autoresume:
-            remove_incomplete_rollouts(asl_dir, scenario.scene_id)
+            remove_incomplete_rollouts(rollouts_dir, scenario.scene_id)
             num_finished_rollouts = find_num_complete_rollouts(
-                asl_dir, scenario.scene_id
+                rollouts_dir, scenario.scene_id
             )
             if num_finished_rollouts > 0:
                 logger.info(
@@ -146,10 +163,11 @@ async def shutdown_services(config: SimulatorConfig) -> None:
 async def run_simulation(args: argparse.Namespace) -> bool:
     """Main simulation orchestration."""
     config = parse_config(args.user_config, args.network_config)
+    eval_config: EvalConfig = typed_parse_config(args.eval_config, EvalConfig)
 
     # Derive output directories from log_dir
-    asl_dir = os.path.join(args.log_dir, "asl")
-    metrics_dir = os.path.join(args.log_dir, "metrics")
+    rollouts_dir = os.path.join(args.log_dir, "rollouts")
+    telemetry_dir = os.path.join(args.log_dir, "telemetry")
 
     nr_workers = config.user.nr_workers
 
@@ -164,37 +182,55 @@ async def run_simulation(args: argparse.Namespace) -> bool:
     )
 
     await validate_scenarios(config)
-    jobs = build_job_list(config, asl_dir)
+    jobs = build_job_list(config, rollouts_dir)
 
     if not jobs:
         logger.info("No jobs to run (all rollouts already complete or no scenarios).")
-        return True
+        success = True
+    else:
+        try:
+            results = await run_workers(config, args, jobs, args.log_dir, eval_config)
+        finally:
+            await shutdown_services(config)
 
-    try:
-        results = await run_workers(config, args, jobs, args.log_dir)
-    finally:
-        await shutdown_services(config)
+        # Check for failures
+        success = all(r.success for r in results)
+        if not success:
+            failed = [r for r in results if not r.success]
+            logger.error("%d jobs failed:", len(failed))
+            for r in failed[:3]:
+                logger.error("  Job %s: %s", r.job_id, r.error)
+            if len(failed) > 3:
+                logger.error("  ... and %d more", len(failed) - 3)
 
-    # Check for failures
-    success = all(r.success for r in results)
-    if not success:
-        failed = [r for r in results if not r.success]
-        logger.error("%d jobs failed:", len(failed))
-        for r in failed[:3]:
-            logger.error("  Job %s: %s", r.job_id, r.error)
-        if len(failed) > 3:
-            logger.error("  ... and %d more", len(failed) - 3)
+        # Merge telemetry files
+        merge_metrics_files(telemetry_dir)
 
-    # Merge metrics files
-    merge_metrics_files(metrics_dir)
+        # Generate telemetry visualization plot
+        output_path = generate_metrics_plot(
+            metrics_path=Path(telemetry_dir) / "metrics.prom",
+            output_path=Path(args.log_dir) / "metrics_plot.png",
+            run_name=get_run_name(args.log_dir),
+        )
+        logger.info("Generated telemetry metrics plot: %s", output_path)
 
-    # Generate metrics visualization plot
-    output_path = generate_metrics_plot(
-        metrics_path=Path(metrics_dir) / "metrics.prom",
-        output_path=Path(args.log_dir) / "metrics_plot.png",
-        run_name=get_run_name(args.log_dir),
-    )
-    logger.info("Generated metrics plot: %s", output_path)
+    # Run aggregation if in-runtime evaluation is enabled
+    if success and eval_config.run_in_runtime:
+        logger.info("Running post-rollout aggregation for in-runtime evaluation...")
+        # Determine array job directory: CLI arg > log_dir
+        array_job_dir = args.array_job_dir or args.log_dir
+        aggregation_success = run_aggregation_from_runtime(
+            log_dir=args.log_dir,
+            eval_config=eval_config,
+            array_job_dir=array_job_dir,
+        )
+        if not aggregation_success:
+            logger.warning("Aggregation completed with errors")
+            success = False  # Propagate aggregation failure to exit code
+    elif not success:
+        logger.info("Rollouts failed, skipping aggregation")
+    else:
+        logger.info("In-runtime evaluation disabled, skipping aggregation")
 
     return success
 
@@ -208,6 +244,8 @@ if __name__ == "__main__":
         format="%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s",
         datefmt="%H:%M:%S",
     )
+
+    validate_array_job_config(args.array_job_dir)
 
     success = asyncio.run(run_simulation(args))
     logging.info("Alpasim finished.")

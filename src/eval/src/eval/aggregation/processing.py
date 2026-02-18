@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import os
 import pathlib
@@ -20,6 +20,7 @@ from eval.aggregation.modifiers import (
     RemoveTrajectoryWithEvent,
     get_removed_rows,
 )
+from eval.data import AggregationType
 
 DEFAULT_MODIFIERS = [
     AddCombinedEvent(
@@ -73,9 +74,9 @@ def add_rollout_and_trajectory_uids(
     df = df.with_columns(
         # Different scenes share the same rollout_uid within a run.
         # Allows for computing the std across rollouts, averaging over clips.
-        pl.concat_str(["run_uuid", "batch_id", "rollout_id"], separator="_").alias(
-            "rollout_uid"
-        ),
+        # Note: batch_id is excluded because it varies across jobs and doesn't
+        # indicate a different rollout - only rollout_id determines rollout identity.
+        pl.concat_str(["run_uuid", "rollout_id"], separator="_").alias("rollout_uid"),
         # Unique even across scenes, i.e. truely unique per rollout.
         pl.concat_str(
             ["run_uuid", "clipgt_id", "batch_id", "rollout_id"], separator="_"
@@ -582,7 +583,7 @@ def aggregate_and_write_metrics_results_txt(
     # Aggregate over time
     df_wide_avg_t = df_wide_modified.group_by(["trajectory_uid"]).agg(
         *[
-            getattr(pl.col(row["name"]), row["time_aggregation"])()
+            AggregationType(row["time_aggregation"]).get_polars_agg_expr(row["name"])
             for row in agg_function_df.iter_rows(named=True)
         ]
     )

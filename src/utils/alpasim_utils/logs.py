@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Implements methods for reading and writing logs as length-delimited protobuf
@@ -54,10 +54,11 @@ class LogWriter:
         await self.file_handle.close()
         self.file_handle = None
 
-    async def log_message(self, message: LogEntry) -> None:
+    async def on_message(self, message: LogEntry) -> None:
+        """Handle a LogEntry message by writing it to the log file."""
         if self.file_handle is None:
             raise RuntimeError(
-                "Using LogWriter.log_message outside of `async with log_writer`."
+                "Using LogWriter.on_message outside of `async with log_writer`."
             )
         await write_pb_stream(self.file_handle, message)
 

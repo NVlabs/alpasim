@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 A CLI utility for extracting camera frames from alpasim logs (.asl files) and saving as video or
@@ -32,6 +32,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
 SaveFormat: TypeAlias = Literal["mp4", "frames"]
 
@@ -74,7 +75,7 @@ async def convert_single_log(
     save_dir: str,
     format: SaveFormat,
 ) -> None:
-    frames_by_camera: dict[int, list[RolloutCameraImage.CameraImage]] = {}
+    frames_by_camera: dict[str, list[RolloutCameraImage.CameraImage]] = {}
 
     rollout_metadata: Optional[RolloutMetadata] = None
     drive_session_request: Optional[DriveSessionRequest] = None
@@ -88,23 +89,18 @@ async def convert_single_log(
             image: RolloutCameraImage.CameraImage = (
                 message.driver_camera_image.camera_image
             )
-            frames_by_camera.setdefault(image.camera_id, []).append(image)
+            frames_by_camera.setdefault(image.logical_id, []).append(image)
 
     if rollout_metadata is None:
         raise ValueError("RolloutMetadata not found in log; unknown rollout index.")
-    rollout_idx = rollout_metadata.rollout_index
 
     if drive_session_request is None:
         raise ValueError("DriveSessionRequest not found in log; unknown camera IDs.")
-    camera_defs = drive_session_request.rollout_specs[rollout_idx].vehicle.cameras
-    camera_idx_to_name: dict[int, str] = {
-        idx: camera.logical_name for idx, camera in enumerate(camera_defs)
-    }
 
     await aios.makedirs(save_dir, exist_ok=True)
 
-    for camera_idx, images in frames_by_camera.items():
-        camera_name = camera_idx_to_name[camera_idx]
+    for camera_logical_id, images in frames_by_camera.items():
+        camera_name = camera_logical_id
         save_path = f"{save_dir}/{camera_name}"
         images = sorted(images, key=lambda frame: frame.frame_start_us)
         timestamps_us = np.array([frame.frame_start_us for frame in images])
@@ -213,6 +209,8 @@ async def convert_multiple_logs(
 
     await asyncio.gather(*tasks)
 
+    logger.info(f"Converted {len(log_paths)} logs to {format=} in {log_save_dir=}.")
+
 
 EXAMPLE_USAGE = (
     'Example usage: python -m alpasim_utils.asl_to_frames "path/to/logs/**/*.asl"'
@@ -230,6 +228,16 @@ if __name__ == "__main__":
         choices=["mp4", "frames"],
         default="mp4",
     )
+    parser.add_argument(
+        "--log-save-dir",
+        type=str,
+        default=None,
+        help="Optional output directory. If not provided, saves alongside the .asl files.",
+    )
     args = parser.parse_args()
 
-    asyncio.run(convert_multiple_logs(args.asl_glob, format=args.format))
+    asyncio.run(
+        convert_multiple_logs(
+            args.asl_glob, format=args.format, log_save_dir=args.log_save_dir
+        )
+    )

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import argparse
 import faulthandler
 import math
 
 import pytest
+from alpasim_controller.mpc_controller import MPCImplementation
 from alpasim_controller.system_manager import SystemManager
 from alpasim_grpc.v0 import common_pb2, controller_pb2
 
@@ -54,8 +55,12 @@ def run_controller_and_vehicle_model_request(
 @pytest.mark.parametrize("dt_propagation_us", [100000, 500000])
 def test_alpasimvdc_one_step(dt_propagation_us) -> None:
     "Run a single step of the controller and vehicle model simulation."
-    backend = SystemManager(".")
-    response = backend.run_controller_and_vehicle_model(
+    system_manager = SystemManager(".")
+
+    # Must start session before running controller
+    system_manager.start_session(SESSION_UUID)
+
+    response = system_manager.run_controller_and_vehicle_model(
         run_controller_and_vehicle_model_request(dt_propagation_us)
     )
 
@@ -83,12 +88,39 @@ def test_alpasimvdc_one_step(dt_propagation_us) -> None:
     close_session_request = controller_pb2.VDCSessionCloseRequest(
         session_uuid=SESSION_UUID
     )
-    response = backend.close_session(close_session_request)
+    response = system_manager.close_session(close_session_request)
     assert response == common_pb2.Empty()
 
-    # and that we can't release the same thing twice
+    # closing the same session again should fail
     with pytest.raises(KeyError):
-        response = backend.close_session(close_session_request)
+        system_manager.close_session(close_session_request)
+
+
+def test_session_lifecycle() -> None:
+    """Test the full session lifecycle including edge cases."""
+    system_manager = SystemManager(".")
+
+    # Can't run controller without starting session
+    with pytest.raises(KeyError):
+        system_manager.run_controller_and_vehicle_model(
+            run_controller_and_vehicle_model_request()
+        )
+
+    # Can't close a session that doesn't exist
+    with pytest.raises(KeyError):
+        system_manager.close_session(
+            controller_pb2.VDCSessionCloseRequest(session_uuid="nonexistent")
+        )
+
+    # Start session, then close without running controller (early cleanup case)
+    system_manager.start_session(SESSION_UUID)
+    close_request = controller_pb2.VDCSessionCloseRequest(session_uuid=SESSION_UUID)
+    response = system_manager.close_session(close_request)
+    assert response == common_pb2.Empty()
+
+    # Session is now closed, can't close again
+    with pytest.raises(KeyError):
+        system_manager.close_session(close_request)
 
 
 def generate_run_controller_request(
@@ -134,21 +166,34 @@ def generate_run_controller_request(
     return request
 
 
-@pytest.mark.parametrize("slow", [True, False])
-def test_mini_sim(slow: bool) -> None:
+@pytest.mark.parametrize(
+    "slow,mpc_impl",
+    [
+        (False, MPCImplementation.LINEAR),
+        (True, MPCImplementation.LINEAR),
+        (False, MPCImplementation.NONLINEAR),
+        (True, MPCImplementation.NONLINEAR),
+    ],
+)
+def test_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
     "Run multiple steps of the controller and vehicle model simulation."
-    run_mini_sim(slow)
+    run_mini_sim(slow, mpc_impl)
 
 
-def run_mini_sim(slow: bool) -> None:
+def run_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
     """
     Simulate multiple steps of the simulation, with a constant velocity trajectory.
     """
-    backend = SystemManager(".")
+    system_manager = SystemManager(".", mpc_implementation=mpc_impl)
+    system_manager.start_session(SESSION_UUID)
 
     timestamp = 0
     state = common_pb2.StateAtTime()
-    state.pose.vec.y = 0.6  # small y offset
+    if mpc_impl == MPCImplementation.NONLINEAR:
+        state.pose.vec.y = 0.6  # small y offset
+    elif mpc_impl == MPCImplementation.LINEAR:
+        # TODO(mwatson): Linear MPC requires some gain scheduling for low speed tight maneuvers
+        state.pose.vec.y = 0.15  # small y offset
     state.pose.quat.w = 1.0
     state.state.linear_velocity.x = get_vx(slow)  # Initialize to reference velocity
 
@@ -167,7 +212,7 @@ def run_mini_sim(slow: bool) -> None:
                 KICK_VELOCITY
             )
             run_controller_and_vehicle_model_request.coerce_dynamic_state = True
-        response = backend.run_controller_and_vehicle_model(
+        response = system_manager.run_controller_and_vehicle_model(
             run_controller_and_vehicle_model_request
         )
 
@@ -213,5 +258,12 @@ if __name__ == "__main__":
     arg_parser.add_argument(
         "--slow", action="store_true", help="Run the slow mini simulation test"
     )
+    arg_parser.add_argument(
+        "--mpc-implementation",
+        type=MPCImplementation,
+        choices=list(MPCImplementation),
+        default=MPCImplementation.LINEAR,
+        help="MPC implementation: linear or nonlinear",
+    )
     args = arg_parser.parse_args()
-    run_mini_sim(args.slow)
+    run_mini_sim(args.slow, args.mpc_implementation)

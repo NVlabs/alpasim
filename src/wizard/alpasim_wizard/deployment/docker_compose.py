@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Docker Compose deployment strategy."""
 
@@ -9,7 +9,6 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from textwrap import dedent
 from typing import Any
 
 from ..context import WizardContext
@@ -75,26 +74,53 @@ class DockerComposeDeployment:
         Args:
             docker_compose_filepath: Path to the docker-compose.yaml file
         """
-        script_content = dedent(
-            f"""\
-            #!/bin/bash
-            set -e
+        # Build script dynamically based on which services are configured
+        script_lines = [
+            "#!/bin/bash",
+            "set -e",
+            "",
+        ]
 
-            # Run simulation profile
-            echo "Starting simulation phase..."
-            docker compose -f {docker_compose_filepath} --profile sim up
-
-            # Run evaluation profile
-            echo "Starting evaluation phase..."
-            docker compose -f {docker_compose_filepath} --profile eval up
-
-            # Run aggregation profile
-            echo "Starting aggregation phase..."
-            docker compose -f {docker_compose_filepath} --profile aggregation up
-
-            echo "All phases completed successfully!"
-            """
+        # Always run simulation phase (required)
+        script_lines.extend(
+            [
+                "# Run simulation profile",
+                'echo "Starting simulation phase..."',
+                f"docker compose -f {docker_compose_filepath} --profile sim up",
+                "",
+            ]
         )
+
+        # Only run evaluation phase if services are configured
+        if self.container_set.eval:
+            script_lines.extend(
+                [
+                    "# Run evaluation profile",
+                    'echo "Starting evaluation phase..."',
+                    f"docker compose -f {docker_compose_filepath} --profile eval up",
+                    "",
+                ]
+            )
+        else:
+            logger.info("Skipping evaluation phase (no eval services configured)")
+
+        # Only run aggregation phase if services are configured
+        if self.container_set.agg:
+            script_lines.extend(
+                [
+                    "# Run aggregation profile",
+                    'echo "Starting aggregation phase..."',
+                    f"docker compose -f {docker_compose_filepath} --profile aggregation up",
+                    "",
+                ]
+            )
+        else:
+            logger.info(
+                "Skipping aggregation phase (no aggregation services configured)"
+            )
+
+        script_lines.append('echo "All phases completed successfully!"')
+        script_content = "\n".join(script_lines) + "\n"
 
         run_script_path = Path(self.context.cfg.wizard.log_dir) / "run.sh"
         with open(run_script_path, "w") as f:
@@ -132,9 +158,7 @@ class DockerComposeDeployment:
         if not container.service_config.external_image:
             ret["build"] = {
                 "context": repo_root,
-                "dockerfile": (
-                    "src/ddb/Dockerfile" if ("ddb" in container.name) else "Dockerfile"
-                ),
+                "dockerfile": "Dockerfile",
                 "tags": [container.service_config.image],
             }
 
