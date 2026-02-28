@@ -108,6 +108,7 @@ def render_and_save_video(
                 dpi=100,
                 writer="ffmpeg",
             )
+            plt.close(anim._fig)
         else:
             raise ValueError(f"Unknown video layout: {video_layout}")
 
@@ -240,11 +241,12 @@ def get_ego_transform(
 ) -> transforms.Affine2D:
     ego_transform = transforms.Affine2D()
     if cfg.video.map_video.rotate_map_to_ego:
-        ego_yaw = (
-            sim_result.actor_trajectories["EGO"]
-            .interpolate_to_timestamps(np.array([time]))
-            .poses[0]
-            .yaw
+        ego_yaw = float(
+            np.asarray(
+                sim_result.actor_trajectories["EGO"]
+                .interpolate_to_timestamps(np.array([time]))
+                .yaws
+            )[0]
         )
         ego_transform = ego_transform.rotate(np.pi / 2 - ego_yaw)
 

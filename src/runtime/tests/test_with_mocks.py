@@ -17,15 +17,15 @@ async def test_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path):
             "camera_front_wide_120fov",
             "camera_front_tele_30fov",
         ):
-            cameras.append(
-                sensorsim_pb2.AvailableCamerasReturn.AvailableCamera(
+            camera = sensorsim_pb2.AvailableCamerasReturn.AvailableCamera(
+                logical_id=logical_id,
+                intrinsics=sensorsim_pb2.CameraSpec(
                     logical_id=logical_id,
-                    intrinsics=sensorsim_pb2.CameraSpec(
-                        logical_id=logical_id,
-                        shutter_type=sensorsim_pb2.ShutterType.GLOBAL,
-                    ),
-                )
+                    shutter_type=sensorsim_pb2.ShutterType.GLOBAL,
+                ),
             )
+            camera.rig_to_camera.quat.w = 1.0
+            cameras.append(camera)
         return cameras
 
     monkeypatch.setattr(

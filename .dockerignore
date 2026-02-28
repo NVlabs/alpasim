@@ -5,6 +5,7 @@
 !src/runtime/**
 !src/grpc/**
 !src/utils/**
+!src/utils_rs/**
 !src/ddb/**
 !src/eval/**
 !src/avmf/**

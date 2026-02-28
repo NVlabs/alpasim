@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from alpasim_utils import trajectory
+from alpasim_utils.geometry import Pose
 
 
 class VehicleModel:
@@ -127,7 +127,7 @@ class VehicleModel:
         self._state[3] = v_cg_x
         self._state[4] = v_cg_y
 
-    def advance(self, u: np.ndarray, dt: float) -> trajectory.QVec:
+    def advance(self, u: np.ndarray, dt: float) -> Pose:
         """Advance the vehicle model by dt seconds.
 
         Uses 2nd order Runge-Kutta integration with sub-stepping.
@@ -163,10 +163,11 @@ class VehicleModel:
 
         logging.debug("state (after prop): %s", self._state)
 
-        return trajectory.QVec(
-            vec3=np.array([self._state[0], self._state[1], 0]),
-            quat=np.array(
-                [0, 0, math.sin(self._state[2] / 2), math.cos(self._state[2] / 2)]
+        return Pose(
+            np.array([self._state[0], self._state[1], 0], dtype=np.float32),
+            np.array(
+                [0, 0, math.sin(self._state[2] / 2), math.cos(self._state[2] / 2)],
+                dtype=np.float32,
             ),
         )
 

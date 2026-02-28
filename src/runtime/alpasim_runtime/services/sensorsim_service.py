@@ -28,8 +28,7 @@ from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.services.service_base import ServiceBase
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_runtime.types import Clock, RuntimeCamera
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory, pose_to_grpc
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
@@ -181,7 +180,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         end_us = trigger.time_range_us.stop - 1
 
         def trajectory_to_pose_pair(
-            trajectory: Trajectory, delta: Optional[QVec]
+            trajectory: Trajectory, delta: Optional[Pose]
         ) -> PosePair:
             """
             Interpolate pose between trigger start and end and package as PosePair.
@@ -195,8 +194,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 end_pose = end_pose @ delta
 
             return PosePair(
-                start_pose=start_pose.as_grpc_pose(),
-                end_pose=end_pose.as_grpc_pose(),
+                start_pose=pose_to_grpc(start_pose),
+                end_pose=pose_to_grpc(end_pose),
             )
 
         dynamic_objects = [

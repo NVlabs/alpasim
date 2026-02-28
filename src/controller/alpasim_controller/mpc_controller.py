@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
-from alpasim_utils import trajectory
+from alpasim_utils.geometry import Trajectory
 
 
 class MPCImplementation(StrEnum):
@@ -61,7 +61,7 @@ class ControllerInput:
     """
 
     state: np.ndarray
-    reference_trajectory: trajectory.Trajectory
+    reference_trajectory: Trajectory
     timestamp_us: int
 
 

@@ -11,11 +11,17 @@ from typing import Any
 import numpy as np
 import torch
 from alpamayo_r1 import helper
+from alpamayo_r1.geometry.rotation import so3_to_yaw_torch
 from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
-from scipy.interpolate import interp1d
-from scipy.spatial.transform import Rotation, Slerp
+from alpasim_utils.geometry import Trajectory
 
-from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction
+from .base import (
+    BaseTrajectoryModel,
+    CameraImages,
+    DriveCommand,
+    ModelPrediction,
+    PredictionInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,28 +36,6 @@ CAMERA_NAME_TO_INDEX = {
     "camera_rear_right_70fov": 5,
     "camera_front_tele_30fov": 6,
 }
-
-
-def _adjust_orientation(quats: np.ndarray) -> np.ndarray:
-    """Adjust quaternion signs for interpolation consistency.
-
-    Ensures the dot product between consecutive quaternions is non-negative,
-    which is required for proper SLERP interpolation.
-
-    Args:
-        quats: Array of quaternions with shape (N, 4).
-
-    Returns:
-        Adjusted quaternions with consistent hemisphere.
-    """
-    N = quats.shape[0]
-    signs = np.ones(N)
-    for i in range(1, N):
-        if np.dot(quats[i - 1], quats[i]) < 0:
-            signs[i] = -signs[i - 1]
-        else:
-            signs[i] = signs[i - 1]
-    return quats * signs[:, None]
 
 
 def _format_trajs(pred_xyz: torch.Tensor) -> np.ndarray:
@@ -70,6 +54,84 @@ def _format_trajs(pred_xyz: torch.Tensor) -> np.ndarray:
 
     # Return only x, y coordinates
     return traj[:, :2]
+
+
+def build_ego_history(
+    poses: list[Any],
+    current_timestamp_us: int,
+    num_history_steps: int = 16,
+    history_time_step: float = 0.1,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build ego history tensors from pose data.
+
+    Constructs ego_history_xyz and ego_history_rot tensors in the rig frame relative
+    to the current pose (t0).
+
+    Args:
+        poses: List of PoseAtTime messages with timestamp_us and Pose in local frame.
+            Each pose must have .timestamp_us (int), .pose.vec.{x,y,z}, .pose.quat.{x,y,z,w}.
+            Quaternions must be unit-length (validated by the Trajectory constructor).
+        current_timestamp_us: Current timestamp (t0) in microseconds.
+        num_history_steps: Number of history steps to produce.
+        history_time_step: Time step between history frames in seconds.
+
+    Returns:
+        Tuple of (ego_history_xyz, ego_history_rot) in rig frame:
+            - ego_history_xyz: shape (1, 1, num_history_steps, 3) in rig frame
+            - ego_history_rot: shape (1, 1, num_history_steps, 3, 3) in rig frame
+    """
+    # 1. Extract raw pose data and sort by timestamp
+    pose_data = sorted([(p.timestamp_us, p.pose) for p in poses], key=lambda x: x[0])
+    timestamps_us = np.array([t for t, _ in pose_data], dtype=np.uint64)
+    ego_history_xyz_in_local = np.array(
+        [[p.vec.x, p.vec.y, p.vec.z] for _, p in pose_data], dtype=np.float32
+    )
+    ego_history_quat_rig_to_local = np.array(
+        [[p.quat.x, p.quat.y, p.quat.z, p.quat.w] for _, p in pose_data],
+        dtype=np.float32,
+    )
+
+    # 2. Build Trajectory and interpolate at target history timestamps
+    trajectory_of_rig_in_local = Trajectory(
+        timestamps_us, ego_history_xyz_in_local, ego_history_quat_rig_to_local
+    )
+
+    history_timestamps_us = np.array(
+        [
+            current_timestamp_us - int(i * history_time_step * 1_000_000)
+            for i in range(num_history_steps - 1, -1, -1)
+        ],
+        dtype=np.uint64,
+    )
+
+    interpolated_rig_in_local = trajectory_of_rig_in_local.interpolate(
+        history_timestamps_us
+    )
+
+    # 3. Transform to rig frame relative to t0 (last history step)
+    pose_local_to_rig_t0 = interpolated_rig_in_local.last_pose
+    interpolated_rig_in_rig_t0 = interpolated_rig_in_local.transform(
+        pose_local_to_rig_t0.inverse()
+    )
+
+    # 4. Extract positions and rotation matrices as numpy arrays
+    ego_history_xyz_in_rig_t0 = interpolated_rig_in_rig_t0.positions  # (N, 3)
+    ego_history_rot_rig_to_rig_t0 = (
+        interpolated_rig_in_rig_t0.rotation_matrices()  # (N, 3, 3)
+    )
+
+    # 5. Convert to torch tensors with batch dimensions: (B=1, n_traj_group=1, T, ...)
+    ego_history_xyz_tensor = (
+        torch.from_numpy(ego_history_xyz_in_rig_t0).float().unsqueeze(0).unsqueeze(0)
+    )
+    ego_history_rot_tensor = (
+        torch.from_numpy(ego_history_rot_rig_to_rig_t0)
+        .float()
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+
+    return ego_history_xyz_tensor, ego_history_rot_tensor
 
 
 class AR1Model(BaseTrajectoryModel):
@@ -154,115 +216,7 @@ class AR1Model(BaseTrajectoryModel):
         """AR1 reasons about navigation from context, no explicit command encoding."""
         return None
 
-    def _build_ego_history(
-        self,
-        poses: list[Any],  # List of PoseAtTime
-        current_timestamp_us: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build ego history tensors from pose data.
-
-        Constructs ego_history_xyz and ego_history_rot tensors in the rig frame relative to the
-        current pose (t0). Uses linear interpolation for positions and SLERP for rotations.
-
-        Args:
-            poses: List of PoseAtTime messages with timestamp_us and Pose in local frame.
-            current_timestamp_us: Current timestamp (t0) in microseconds.
-
-        Returns:
-            Tuple of (ego_history_xyz, ego_history_rot) in rig frame:
-                - ego_history_xyz: shape (1, 1, num_history_steps, 3) in rig frame
-                - ego_history_rot: shape (1, 1, num_history_steps, 3, 3) in rig frame
-        """
-        # 1. Extract raw pose data and sort by timestamp
-        pose_data = sorted(
-            [(p.timestamp_us, p.pose) for p in poses], key=lambda x: x[0]
-        )
-        timestamps_us = np.array([t for t, _ in pose_data], dtype=np.float64)
-        ego_history_xyz_in_local = np.array(
-            [[p.vec.x, p.vec.y, p.vec.z] for _, p in pose_data]
-        )
-        ego_history_quat_rig_to_local = np.array(
-            [[p.quat.x, p.quat.y, p.quat.z, p.quat.w] for _, p in pose_data]
-        )
-
-        # 2. Normalize and adjust quaternions for consistent interpolation
-        ego_history_quat_rig_to_local = ego_history_quat_rig_to_local / np.linalg.norm(
-            ego_history_quat_rig_to_local, axis=1, keepdims=True
-        )
-        ego_history_quat_rig_to_local = _adjust_orientation(
-            ego_history_quat_rig_to_local
-        )
-
-        # 3. Create interpolators
-        xyz_interp = interp1d(
-            timestamps_us,
-            ego_history_xyz_in_local,
-            axis=0,
-            kind="linear",
-            fill_value="extrapolate",
-        )
-        rot_interp = Slerp(
-            timestamps_us, Rotation.from_quat(ego_history_quat_rig_to_local)
-        )
-
-        # 4. Calculate target history timestamps (going backward from t0)
-        history_timestamps_us = np.array(
-            [
-                current_timestamp_us - int(i * self.HISTORY_TIME_STEP * 1_000_000)
-                for i in range(self.NUM_HISTORY_STEPS - 1, -1, -1)
-            ],
-            dtype=np.float64,
-        )
-
-        # Verify we have enough ego pose history to interpolate
-        if (
-            history_timestamps_us[0] < timestamps_us[0]
-            or history_timestamps_us[-1] > timestamps_us[-1]
-        ):
-            raise ValueError(
-                "Ego pose history is insufficient to interpolate. "
-                f"Required:  [{history_timestamps_us[0]}, {history_timestamps_us[-1]}], "
-                f"Available: [{timestamps_us[0]}, {timestamps_us[-1]}]"
-            )
-
-        # 5. Interpolate positions and rotations at target timestamps
-        ego_history_xyz_in_local = xyz_interp(history_timestamps_us)
-        ego_history_rot_rig_to_local = rot_interp(history_timestamps_us)
-        ego_history_quat_rig_to_local = ego_history_rot_rig_to_local.as_quat()
-
-        # 6. Transform to rig frame relative to t0 (last history step)
-        ego_xyz_rig_t0_in_local = ego_history_xyz_in_local[-1].copy()
-        ego_quat_rig_t0_to_local = ego_history_quat_rig_to_local[-1].copy()
-        ego_rot_rig_t0_to_local = Rotation.from_quat(ego_quat_rig_t0_to_local)
-        ego_rot_local_to_rig_t0 = ego_rot_rig_t0_to_local.inv()
-
-        # Transform positions and rotations to rig_t0 frame
-        ego_history_xyz_in_rig_t0 = ego_rot_local_to_rig_t0.apply(
-            ego_history_xyz_in_local - ego_xyz_rig_t0_in_local
-        )
-        ego_history_rot_rig_to_rig_t0 = (
-            ego_rot_local_to_rig_t0 * ego_history_rot_rig_to_local
-        ).as_matrix()
-
-        # 7. Convert to torch tensors with batch dimensions: (B=1, n_traj_group=1, T, ...)
-        ego_history_xyz_in_rig_t0_tensor = (
-            torch.from_numpy(ego_history_xyz_in_rig_t0)
-            .float()
-            .unsqueeze(0)
-            .unsqueeze(0)
-        )
-        ego_history_rot_rig_to_rig_t0_tensor = (
-            torch.from_numpy(ego_history_rot_rig_to_rig_t0)
-            .float()
-            .unsqueeze(0)
-            .unsqueeze(0)
-        )
-
-        return ego_history_xyz_in_rig_t0_tensor, ego_history_rot_rig_to_rig_t0_tensor
-
-    def _preprocess_images(
-        self, camera_images: dict[str, list[tuple[int, np.ndarray]]]
-    ) -> torch.Tensor:
+    def _preprocess_images(self, camera_images: CameraImages) -> torch.Tensor:
         """Preprocess multi-camera images for AR1.
 
         Args:
@@ -306,39 +260,24 @@ class AR1Model(BaseTrajectoryModel):
 
         return all_frames
 
-    def predict(
-        self,
-        camera_images: dict[str, list[tuple[int, np.ndarray]]],
-        command: DriveCommand,
-        speed: float,
-        acceleration: float,
-        ego_pose_at_time_history_local: list[Any] | None = None,
-    ) -> ModelPrediction:
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         """Generate trajectory prediction.
 
-        Args:
-            camera_images: Dict mapping camera_id to list of
-                (timestamp_us, image) tuples. List length must equal
-                context_length.
-            command: Canonical navigation command (unused by AR1).
-            speed: Current vehicle speed in m/s (unused by AR1).
-            acceleration: Current longitudinal acceleration (unused by AR1).
-            ego_pose_at_time_history_local: Optional list of PoseAtTime for building ego history.
-                PoseAtTime contains pairs of (timestamp_us, Pose) where Pose is 3D position and
-                orientation in local frame.
+        AR1 uses camera images and ego pose history. Command, speed,
+        and acceleration are unused.
 
         Returns:
             ModelPrediction with trajectory in rig frame.
         """
-        self._validate_cameras(camera_images)
+        self._validate_cameras(prediction_input.camera_images)
 
         # Check context length
         for cam_id in self._camera_ids:
-            if len(camera_images[cam_id]) != self._context_length:
+            if len(prediction_input.camera_images[cam_id]) != self._context_length:
                 logger.warning(
                     "AR1 expects %d frames per camera, got %d for %s",
                     self._context_length,
-                    len(camera_images[cam_id]),
+                    len(prediction_input.camera_images[cam_id]),
                     cam_id,
                 )
                 return ModelPrediction(
@@ -347,18 +286,10 @@ class AR1Model(BaseTrajectoryModel):
                 )
 
         # Check ego history length
-        if (
-            ego_pose_at_time_history_local is None
-            or len(ego_pose_at_time_history_local) < self.NUM_HISTORY_STEPS
-        ):
-            num_poses = (
-                0
-                if ego_pose_at_time_history_local is None
-                else len(ego_pose_at_time_history_local)
-            )
+        if len(prediction_input.ego_pose_history) < self.NUM_HISTORY_STEPS:
             logger.warning(
                 "Not enough pose history: %d < %d. Using zero history, output will be invalid.",
-                num_poses,
+                len(prediction_input.ego_pose_history),
                 self.NUM_HISTORY_STEPS,
             )
             return ModelPrediction(
@@ -368,14 +299,18 @@ class AR1Model(BaseTrajectoryModel):
 
         # Get current timestamp from the latest frame
         latest_timestamp = max(
-            max(ts for ts, _ in frames) for frames in camera_images.values()
+            max(ts for ts, _ in frames)
+            for frames in prediction_input.camera_images.values()
         )
-        ego_history_xyz, ego_history_rot = self._build_ego_history(
-            ego_pose_at_time_history_local, latest_timestamp
+        ego_history_xyz, ego_history_rot = build_ego_history(
+            prediction_input.ego_pose_history,
+            latest_timestamp,
+            self.NUM_HISTORY_STEPS,
+            self.HISTORY_TIME_STEP,
         )
 
         # Preprocess images
-        image_frames = self._preprocess_images(camera_images)
+        image_frames = self._preprocess_images(prediction_input.camera_images)
 
         # Create chat message using AR1's helper
         # Flatten camera and temporal dimensions for the message
@@ -417,8 +352,9 @@ class AR1Model(BaseTrajectoryModel):
         # Extract trajectory (x, y coordinates)
         trajectory_xy = _format_trajs(pred_xyz)
 
-        # Compute headings from trajectory
-        headings = self._compute_headings_from_trajectory(trajectory_xy)
+        # Headings from model output (yaw per waypoint from 3x3 rotation matrices)
+        rot_first = pred_rot[0, 0, 0, :, :, :]  # (T, 3, 3)
+        headings = so3_to_yaw_torch(rot_first).detach().cpu().numpy()
 
         # Log reasoning trace if available
         if "cot" in extra and len(extra["cot"]) > 0:

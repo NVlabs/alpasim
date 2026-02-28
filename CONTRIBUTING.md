@@ -154,8 +154,8 @@ position_rig_local = np.array(...)
 position_aabb_local = position_rig_local + rig_to_aabb_in_local
 
 # Poses
-pose_ego_rig_to_aabb = QVec(vec3=..., quat=...)
-pose_local_to_ego_rig = QVec(vec3=..., quat=...)
+pose_ego_rig_to_aabb = Pose(position=..., quaternion=...)
+pose_local_to_ego_rig = Pose(position=..., quaternion=...)
 
 position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
 

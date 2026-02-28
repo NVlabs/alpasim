@@ -59,7 +59,12 @@ import grpc.aio
 from .frame_cache import FrameCache
 from .models import DriveCommand
 from .models.ar1_model import AR1Model
-from .models.base import BaseTrajectoryModel, ModelPrediction
+from .models.base import (
+    BaseTrajectoryModel,
+    CameraImages,
+    ModelPrediction,
+    PredictionInput,
+)
 from .models.manual_model import ManualModel
 from .models.transfuser_model import TransfuserModel
 from .models.vam_model import VAMModel
@@ -674,15 +679,13 @@ class EgoDriverService(EgodriverServiceServicer):
 
         return float(speed), float(acceleration)
 
-    def _prepare_camera_images(
-        self, session: Session
-    ) -> dict[str, list[tuple[int, np.ndarray]]]:
+    def _prepare_camera_images(self, session: Session) -> CameraImages:
         """Collect raw images from frame caches for all cameras.
 
-        Returns dict mapping camera_id to list of (timestamp_us, image) tuples.
+        Returns dict mapping camera_id to list of CameraFrame tuples.
         List length equals context_length.
         """
-        camera_images: dict[str, list[tuple[int, np.ndarray]]] = {}
+        camera_images: CameraImages = {}
 
         for cam_id in self._model.camera_ids:
             frame_cache = session.frame_caches[cam_id]
@@ -737,27 +740,22 @@ class EgoDriverService(EgodriverServiceServicer):
     def _run_batch(self, batch: list[DriveJob]) -> list[ModelPrediction]:
         """Run inference for a batch of jobs using the model abstraction.
 
-        Each model handles its own preprocessing, tokenization (if applicable),
-        and inference internally.
+        Builds a PredictionInput per job and delegates to predict_batch(),
+        which models can override for GPU-level batching.
         """
-        responses: list[ModelPrediction] = []
-
+        inputs = []
         for job in batch:
-            camera_images = self._prepare_camera_images(job.session)
-
             speed, acceleration = self._get_speed_and_acceleration(job.session)
-
-            prediction = self._model.predict(
-                camera_images=camera_images,
-                command=job.command,
-                speed=speed,
-                acceleration=acceleration,
-                ego_pose_at_time_history_local=job.session.poses,
+            inputs.append(
+                PredictionInput(
+                    camera_images=self._prepare_camera_images(job.session),
+                    command=job.command,
+                    speed=speed,
+                    acceleration=acceleration,
+                    ego_pose_history=job.session.poses,
+                )
             )
-
-            responses.append(prediction)
-
-        return responses
+        return self._model.predict_batch(inputs)
 
     @async_log_call
     async def start_session(

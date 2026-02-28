@@ -20,6 +20,29 @@ if [[ $? -ne 0 ]]; then
     return 1
 fi
 
+# Check for Rust toolchain (required for utils_rs maturin build)
+if ! command -v cargo &> /dev/null; then
+    echo "⚠️  Rust toolchain (cargo) not found. It is required for building utils_rs."
+    read -p "Would you like to install it via rustup? [y/N] " -r
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "Installing Rust toolchain..."
+        curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 10 --max-time 300 https://sh.rustup.rs | sh -s -- -y
+        if [[ $? -ne 0 ]]; then
+            echo "❌ Failed to install Rust toolchain. Exiting."
+            return 1
+        fi
+        source "$HOME/.cargo/env"
+        if ! command -v cargo &> /dev/null; then
+            echo "❌ cargo not found in PATH after sourcing ~/.cargo/env. Exiting."
+            return 1
+        fi
+        echo "✅ Rust toolchain installed successfully."
+    else
+        echo "❌ Rust toolchain is required. Exiting."
+        return 1
+    fi
+fi
+
 # Setup GRPC
 echo "Setting up GRPC..."
 pushd "${REPO_ROOT}/src/grpc" > /dev/null
@@ -30,6 +53,9 @@ if [[ $? -ne 0 ]]; then
     return 1
 fi
 popd > /dev/null
+
+# refresh utils_rs package (it doesn't auto-update because it's a compiled extension)
+uv pip install --force-reinstall -e "${REPO_ROOT}/src/utils_rs"
 
 
 # Download vavam models if not already present

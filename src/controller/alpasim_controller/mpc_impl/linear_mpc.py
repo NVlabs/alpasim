@@ -23,7 +23,7 @@ from alpasim_controller.mpc_controller import (
     MPCGains,
 )
 from alpasim_controller.vehicle_model import VehicleModel
-from alpasim_utils import trajectory
+from alpasim_utils.geometry import Trajectory
 
 
 class LinearMPC(MPCController):
@@ -154,7 +154,7 @@ class LinearMPC(MPCController):
 
     def _interpolate_reference(
         self,
-        ref_trajectory: trajectory.Trajectory,
+        ref_trajectory: Trajectory,
         timestamp_us: int,
     ) -> np.ndarray:
         """Interpolate reference trajectory at MPC horizon timesteps.
@@ -178,14 +178,15 @@ class LinearMPC(MPCController):
         ref_range = ref_trajectory.time_range_us
         timestamps = np.clip(timestamps, ref_range.start, ref_range.stop - 1)
 
-        # Batch interpolate all poses at once
-        ref_poses = ref_trajectory.interpolate_to_timestamps(timestamps)
+        # Batch interpolate all poses at once using Trajectory
+        ref_interp = ref_trajectory.interpolate(timestamps.astype(np.uint64))
 
         # Extract x, y, yaw for all horizon steps
         for k in range(self.N_HORIZON + 1):
-            x_ref[k, self.IX] = ref_poses.poses[k].vec3[0]
-            x_ref[k, self.IY] = ref_poses.poses[k].vec3[1]
-            x_ref[k, self.IYAW] = ref_poses.poses[k].yaw
+            pose = ref_interp.get_pose(k)
+            x_ref[k, self.IX] = pose.vec3[0]
+            x_ref[k, self.IY] = pose.vec3[1]
+            x_ref[k, self.IYAW] = pose.yaw()
 
         return x_ref
 

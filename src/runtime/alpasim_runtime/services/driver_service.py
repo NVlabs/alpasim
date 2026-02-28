@@ -31,8 +31,14 @@ from alpasim_runtime.services.service_base import (
     SessionInfo,
 )
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
-from alpasim_utils.polyline import Polyline
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import (
+    Polyline,
+    Pose,
+    Trajectory,
+    polyline_to_grpc_route,
+    trajectory_from_grpc,
+    trajectory_to_grpc,
+)
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
@@ -162,7 +168,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         """
         request = RolloutEgoTrajectory(
             session_uuid=self.session_info.uuid,
-            trajectory=trajectory.to_grpc(),
+            trajectory=trajectory_to_grpc(trajectory),
             dynamic_state=dynamic_state,
         )
 
@@ -185,7 +191,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     ) -> None:
         """Submit a route for the current session."""
         # Convert the route polyline to gRPC Route format
-        grpc_route = route_polyline_in_rig.to_grpc_route(timestamp_us)
+        grpc_route = polyline_to_grpc_route(route_polyline_in_rig, timestamp_us)
 
         request = RouteRequest(
             session_uuid=self.session_info.uuid,
@@ -209,7 +215,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             session_uuid=self.session_info.uuid,
             ground_truth=GroundTruth(
                 timestamp_us=timestamp_us,
-                trajectory=trajectory.to_grpc(),
+                trajectory=trajectory_to_grpc(trajectory),
             ),
         )
 
@@ -249,7 +255,6 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             # Create a trajectory response with multiple future timestamps.
             # This enables plan_deviation scorer to compute metrics by comparing
             # overlapping timestamps between consecutive drive calls.
-            from alpasim_utils.qvec import QVec
 
             # Generate timestamps extending 5 seconds into the future at 100ms intervals
             num_points = 50
@@ -259,23 +264,23 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
                 dtype=np.uint64,
             )
 
-            # Create QVec poses - simple straight-line trajectory moving forward
-            poses = QVec.stack(
-                [
-                    QVec(
-                        vec3=np.array([i * 0.5, 0.0, 0.0]),  # 0.5m per step = 5m/s
-                        quat=np.array([0.0, 0.0, 0.0, 1.0]),
-                    )
-                    for i in range(num_points)
-                ]
-            )
+            # Create poses - simple straight-line trajectory moving forward
+            poses = [
+                Pose(
+                    position=np.array(
+                        [i * 0.5, 0.0, 0.0], dtype=np.float32
+                    ),  # 0.5m per step = 5m/s
+                    quaternion=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                )
+                for i in range(num_points)
+            ]
 
-            trajectory = Trajectory(
-                timestamps_us=timestamps,
+            trajectory = Trajectory.from_poses(
+                timestamps=timestamps,
                 poses=poses,
             )
             response = DriveResponse(
-                trajectory=trajectory.to_grpc(),
+                trajectory=trajectory_to_grpc(trajectory),
             )
         else:
             response = await profiled_rpc_call(
@@ -284,4 +289,4 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
         await self.session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
-        return Trajectory.from_grpc(response.trajectory)
+        return trajectory_from_grpc(response.trajectory)

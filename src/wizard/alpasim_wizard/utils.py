@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, cast
 
 import yaml
+from filelock import FileLock
 from omegaconf import OmegaConf
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,18 @@ def nre_image_to_nre_version(image: str) -> str:
     return match.group("version")
 
 
+def image_to_sqsh_basename(image: str) -> str:
+    """Return the canonical .sqsh basename for a docker image URL (e.g. for caching)."""
+    return os.path.basename(image).replace(":", "_").replace("-", "_") + ".sqsh"
+
+
 def image_url_to_sqsh_filename(image: str, squash_caches: list[str]) -> str:
-    """Converts a docker image URL to a canonical squash filename used for caching in ORD."""
-    sqsh_fname = os.path.basename(image).replace(":", "_").replace("-", "_") + ".sqsh"
+    """Converts a docker image URL to a canonical squash filename used for caching in ORD.
+
+    Looks up existing .sqsh in squash_caches; raises if not found.
+    Use ensure_sqsh_path() if you want the wizard to create the squash when missing.
+    """
+    sqsh_fname = image_to_sqsh_basename(image)
     sqsh_paths = [
         os.path.join(squash_cache, sqsh_fname) for squash_cache in squash_caches
     ]
@@ -66,6 +76,108 @@ def image_url_to_sqsh_filename(image: str, squash_caches: list[str]) -> str:
             return sqsh_path
 
     raise ValueError(f"Could not find file: {sqsh_fname} at {sqsh_paths=}.")
+
+
+def _image_to_enroot_uri(image: str) -> str:
+    """Convert docker image URL to enroot URI with auth placeholder (nvcr.io)."""
+    # enroot reads $oauthtoken from credentials; pass literal so enroot can substitute
+    if image.startswith("nvcr.io/"):
+        return "docker://$oauthtoken@nvcr.io#" + image[len("nvcr.io/") :]
+    # Other registries: pass through and rely on enroot credentials if configured
+    return f"docker://{image}"
+
+
+def ensure_sqsh_path(
+    image: str,
+    squash_caches: list[str],
+    enroot_config_path: str | None = None,
+) -> str:
+    """Resolve path to a .sqsh file for the given image, creating it if missing.
+
+    Searches squash_caches in order for an existing file. If not found, uses the
+    first writable directory in squash_caches to create the squash under a per-image
+    file lock so concurrent wizard instances do not race.
+
+    Args:
+        image: Full docker image URL (e.g. nvcr.io/nvidian/alpamayo/alpasim-runtime:0.3.1).
+        squash_caches: List of cache directories to search and, for the first writable one, create.
+        enroot_config_path: Directory containing .credentials for registry auth.
+            If None, uses ENROOT_CONFIG_PATH from the environment.
+
+    Returns:
+        Absolute path to the .sqsh file.
+
+    Raises:
+        ValueError: If no cache is writable, enroot is unavailable, or import fails.
+    """
+    sqsh_fname = image_to_sqsh_basename(image)
+    # Search for existing file
+    for cache_dir in squash_caches:
+        path = os.path.join(cache_dir, sqsh_fname)
+        if os.path.isfile(path):
+            return os.path.abspath(path)
+
+    # Find first writable cache directory
+    write_cache: str | None = None
+    for cache_dir in squash_caches:
+        try:
+            resolved = os.path.abspath(cache_dir)
+            if os.path.isdir(resolved):
+                if os.access(resolved, os.W_OK):
+                    write_cache = resolved
+                    break
+            else:
+                parent = os.path.dirname(resolved)
+                if os.path.isdir(parent) and os.access(parent, os.W_OK):
+                    os.makedirs(resolved, exist_ok=True)
+                    write_cache = resolved
+                    break
+        except OSError:
+            continue
+    if write_cache is None:
+        raise ValueError(
+            f"No writable squash cache found for {sqsh_fname}; "
+            f"checked: {squash_caches}. Create the .sqsh elsewhere or make a cache writable."
+        )
+
+    sqsh_path = os.path.join(write_cache, sqsh_fname)
+    lock_path = os.path.join(write_cache, ".lock_" + sqsh_fname + ".lock")
+
+    with FileLock(lock_path, timeout=-1):
+        # Recheck after acquiring lock (another process may have created it)
+        if os.path.isfile(sqsh_path):
+            return os.path.abspath(sqsh_path)
+
+        enroot_config = enroot_config_path or os.environ.get("ENROOT_CONFIG_PATH")
+        if not enroot_config or not os.path.isdir(enroot_config):
+            raise ValueError(
+                f"Cannot create {sqsh_fname}: ENROOT_CONFIG_PATH is not set or not a directory. "
+                "Set it to a directory containing .credentials for registry auth."
+            )
+
+        enroot_uri = _image_to_enroot_uri(image)
+        env = os.environ.copy()
+        env["ENROOT_CONFIG_PATH"] = enroot_config
+
+        logger.info("Creating squash file %s from %s", sqsh_path, image)
+        try:
+            subprocess.run(
+                ["enroot", "import", "--output", sqsh_path, enroot_uri],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise ValueError(
+                f"Cannot create {sqsh_fname}: enroot not found. Install enroot or run where it is available."
+            ) from e
+        except subprocess.CalledProcessError as e:
+            raise ValueError(
+                f"enroot import failed for {image}: {e.stderr or e.stdout or str(e)}"
+            ) from e
+
+        return os.path.abspath(sqsh_path)
 
 
 def _process_config_values_for_saving(node: Any) -> Any:
