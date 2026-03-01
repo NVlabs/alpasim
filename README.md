@@ -49,7 +49,7 @@ AlpaSim currently supports the following driver policies:
 - [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving
   policy
 - [Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
-  \- Latent TransFuser v6 ([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) policy developed
+  - Latent TransFuser v6 ([LTFv6](https://huggingface.co/ln2697/tfv6_navsim)) policy developed
   for [NAVSIM](https://github.com/autonomousvision/navsim) (provisional)
 
 Stay tuned for additional model support. [Contributions](#contributing) from the community are
