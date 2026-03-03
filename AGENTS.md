@@ -40,6 +40,24 @@ For detailed architecture, data flow diagrams, and navigation guides, see [docs/
 - Static checks: `pre-commit run --all-files` covers `black`, `ruff`, import sorting, and basic
   lint. Type-check runtime-heavy code via `uv run mypy src/runtime`.
 
+## utils_rs (Rust bindings)
+
+When modifying Rust code in `src/utils_rs/`, rebuild the package using:
+
+```bash
+uv pip install --force-reinstall -e src/utils_rs
+```
+
+Do NOT use `maturin develop` or similar commands. After editing, update `src/utils_rs/utils_rs.pyi` to reflect any API changes (new functions, changed signatures, etc.).
+
+## Running Python with uv
+
+This repository uses `uv` for Python environment management. Do not activate virtual environments explicitly.
+
+- Run Python: `uv run python -c "..."`, `uv run python script.py`
+- Run tests: `uv run pytest`, or for a module `uv run --project src/runtime pytest src/runtime/tests`
+- Use `--project src/<name>` to select a sub-environment (e.g. `uv run --project src/runtime python -c "..."`). Do not use `source .venv/bin/activate` then `python`; use `uv run` instead.
+
 ## Coding Style & Naming Conventions
 
 - Python 3.12+, 4-space indentation, limit files to UTF-8 ASCII unless data demands otherwise.
