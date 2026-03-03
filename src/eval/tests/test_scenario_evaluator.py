@@ -11,9 +11,8 @@ import pytest
 import pytest_asyncio
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_utils import logs
-from alpasim_utils.qvec import QVec
+from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import AABB
-from alpasim_utils.trajectory import Trajectory
 from conftest import SimpleScenarioEvaluator, create_test_eval_config
 
 from eval.accumulator import EvalDataAccumulator
@@ -24,31 +23,20 @@ from eval.schema import EvalConfig
 
 
 @pytest.fixture
-def identity_qvec() -> QVec:
-    """Create an identity QVec (no transformation)."""
-    return QVec(
-        vec3=np.array([0.0, 0.0, 0.0], dtype=np.float32),
-        quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-    )
-
-
-@pytest.fixture
 def simple_trajectory() -> Trajectory:
     """Create a simple straight-line trajectory."""
     n_points = 10
     timestamps = np.arange(0, n_points * 100_000, 100_000, dtype=np.uint64)
 
-    poses = QVec.stack(
-        [
-            QVec(
-                vec3=np.array([i * 1.0, 0.0, 0.0], dtype=np.float32),
-                quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-            )
-            for i in range(n_points)
-        ]
-    )
+    poses = [
+        Pose(
+            position=np.array([i * 1.0, 0.0, 0.0], dtype=np.float32),
+            quaternion=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+        )
+        for i in range(n_points)
+    ]
 
-    return Trajectory(timestamps_us=timestamps, poses=poses)
+    return Trajectory.from_poses(timestamps=timestamps, poses=poses)
 
 
 @pytest.fixture
@@ -67,7 +55,6 @@ def session_metadata() -> RolloutMetadata.SessionMetadata:
 @pytest.fixture
 def minimal_eval_input(
     session_metadata: RolloutMetadata.SessionMetadata,
-    identity_qvec: QVec,
     simple_trajectory: Trajectory,
 ) -> ScenarioEvalInput:
     """Create a minimal ScenarioEvalInput for testing."""
@@ -76,7 +63,7 @@ def minimal_eval_input(
         run_uuid="test-run-uuid",
         run_name="test-run",
         batch_id="0",
-        ego_coords_rig_to_aabb_center=identity_qvec,
+        ego_coords_rig_to_aabb_center=Pose.identity(),
         ego_aabb_x_m=4.5,
         ego_aabb_y_m=2.0,
         ego_aabb_z_m=1.5,
@@ -254,28 +241,23 @@ class TestCollisionDetection:
     def colliding_trajectory(self, simple_trajectory: Trajectory) -> Trajectory:
         """Create a trajectory that would collide with simple_trajectory."""
         # Derive from simple_trajectory: same timestamps, same x positions (will collide)
-        n_points = len(simple_trajectory.timestamps_us)
-        poses = QVec.stack(
-            [
-                QVec(
-                    vec3=np.array(
-                        [simple_trajectory.poses.vec3[i, 0], 0.0, 0.0],
-                        dtype=np.float32,
-                    ),
-                    quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-                )
-                for i in range(n_points)
-            ]
-        )
-        return Trajectory(
-            timestamps_us=simple_trajectory.timestamps_us.copy(),
+        n_points = len(simple_trajectory)
+        simple_positions = simple_trajectory.positions
+        poses = [
+            Pose(
+                position=np.array([simple_positions[i, 0], 0.0, 0.0], dtype=np.float32),
+                quaternion=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            )
+            for i in range(n_points)
+        ]
+        return Trajectory.from_poses(
+            timestamps=simple_trajectory.timestamps_us.copy(),
             poses=poses,
         )
 
     def test_collision_detection(
         self,
         session_metadata: RolloutMetadata.SessionMetadata,
-        identity_qvec: QVec,
         simple_trajectory: Trajectory,
         colliding_trajectory: Trajectory,
         default_eval_config: EvalConfig,
@@ -286,7 +268,7 @@ class TestCollisionDetection:
             run_uuid="test-run-uuid",
             run_name="test-run",
             batch_id="0",
-            ego_coords_rig_to_aabb_center=identity_qvec,
+            ego_coords_rig_to_aabb_center=Pose.identity(),
             ego_aabb_x_m=4.5,
             ego_aabb_y_m=2.0,
             ego_aabb_z_m=1.5,
@@ -341,17 +323,19 @@ def _build_rollout_metadata(simulation_data: dict[str, Any]) -> RolloutMetadata:
     metadata.transform_ego_coords_rig_to_aabb.quat.w = transform.quat[3]
 
     # Ground truth trajectory
-    gt_traj = simulation_data["gt_trajectory"]
-    for i in range(len(gt_traj.timestamps_us)):
+    gt_traj: Trajectory = simulation_data["gt_trajectory"]
+    gt_positions = gt_traj.positions
+    gt_quaternions = gt_traj.quaternions
+    for i in range(len(gt_traj)):
         pose_at_time = metadata.ego_rig_recorded_ground_truth_trajectory.poses.add()
         pose_at_time.timestamp_us = int(gt_traj.timestamps_us[i])
-        pose_at_time.pose.vec.x = float(gt_traj.poses.vec3[i, 0])
-        pose_at_time.pose.vec.y = float(gt_traj.poses.vec3[i, 1])
-        pose_at_time.pose.vec.z = float(gt_traj.poses.vec3[i, 2])
-        pose_at_time.pose.quat.x = float(gt_traj.poses.quat[i, 0])
-        pose_at_time.pose.quat.y = float(gt_traj.poses.quat[i, 1])
-        pose_at_time.pose.quat.z = float(gt_traj.poses.quat[i, 2])
-        pose_at_time.pose.quat.w = float(gt_traj.poses.quat[i, 3])
+        pose_at_time.pose.vec.x = float(gt_positions[i, 0])
+        pose_at_time.pose.vec.y = float(gt_positions[i, 1])
+        pose_at_time.pose.vec.z = float(gt_positions[i, 2])
+        pose_at_time.pose.quat.x = float(gt_quaternions[i, 0])
+        pose_at_time.pose.quat.y = float(gt_quaternions[i, 1])
+        pose_at_time.pose.quat.z = float(gt_quaternions[i, 2])
+        pose_at_time.pose.quat.w = float(gt_quaternions[i, 3])
 
     return metadata
 
@@ -363,21 +347,22 @@ def _build_actor_poses_messages(simulation_data: dict[str, Any]) -> list[ActorPo
     the EGO trajectory poses.
     """
     messages = []
-    ego_traj = simulation_data["ego_trajectory"]
+    ego_traj: Trajectory = simulation_data["ego_trajectory"]
+    ego_positions = ego_traj.positions
+    ego_quaternions = ego_traj.quaternions
 
-    for i in range(len(ego_traj.timestamps_us)):
+    for i in range(len(ego_traj)):
         actor_poses = ActorPoses()
         actor_poses.timestamp_us = int(ego_traj.timestamps_us[i])
-
         ego_pose = actor_poses.actor_poses.add()
         ego_pose.actor_id = "EGO"
-        ego_pose.actor_pose.vec.x = float(ego_traj.poses.vec3[i, 0])
-        ego_pose.actor_pose.vec.y = float(ego_traj.poses.vec3[i, 1])
-        ego_pose.actor_pose.vec.z = float(ego_traj.poses.vec3[i, 2])
-        ego_pose.actor_pose.quat.x = float(ego_traj.poses.quat[i, 0])
-        ego_pose.actor_pose.quat.y = float(ego_traj.poses.quat[i, 1])
-        ego_pose.actor_pose.quat.z = float(ego_traj.poses.quat[i, 2])
-        ego_pose.actor_pose.quat.w = float(ego_traj.poses.quat[i, 3])
+        ego_pose.actor_pose.vec.x = float(ego_positions[i, 0])
+        ego_pose.actor_pose.vec.y = float(ego_positions[i, 1])
+        ego_pose.actor_pose.vec.z = float(ego_positions[i, 2])
+        ego_pose.actor_pose.quat.x = float(ego_quaternions[i, 0])
+        ego_pose.actor_pose.quat.y = float(ego_quaternions[i, 1])
+        ego_pose.actor_pose.quat.z = float(ego_quaternions[i, 2])
+        ego_pose.actor_pose.quat.w = float(ego_quaternions[i, 3])
 
         messages.append(actor_poses)
 
@@ -413,7 +398,6 @@ class TestRuntimeVsPostEvalEquivalence:
     def simulation_data(
         self,
         simple_trajectory: Trajectory,
-        identity_qvec: QVec,
     ) -> dict[str, Any]:
         """Create simulation data usable by both runtime and post-eval paths.
 
@@ -425,19 +409,17 @@ class TestRuntimeVsPostEvalEquivalence:
         timestamps = np.arange(0, n_points * 100_000, 100_000, dtype=np.uint64)
 
         # Ego trajectory: moves along x-axis
-        ego_poses = QVec.stack(
-            [
-                QVec(
-                    vec3=np.array([i * 1.0, 0.0, 0.0], dtype=np.float32),
-                    quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-                )
-                for i in range(n_points)
-            ]
-        )
-        ego_trajectory = Trajectory(timestamps_us=timestamps, poses=ego_poses)
+        ego_poses = [
+            Pose(
+                position=np.array([i * 1.0, 0.0, 0.0], dtype=np.float32),
+                quaternion=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            )
+            for i in range(n_points)
+        ]
+        ego_trajectory = Trajectory.from_poses(timestamps=timestamps, poses=ego_poses)
 
         # Ground truth trajectory: same as ego for this test
-        gt_trajectory = Trajectory(timestamps_us=timestamps.copy(), poses=ego_poses)
+        gt_trajectory = ego_trajectory.clone()
 
         # Session metadata
         session_metadata = RolloutMetadata.SessionMetadata(
@@ -456,7 +438,7 @@ class TestRuntimeVsPostEvalEquivalence:
             "ego_trajectory": ego_trajectory,
             "gt_trajectory": gt_trajectory,
             "session_metadata": session_metadata,
-            "transform_ego_coords_ds_to_aabb": identity_qvec,
+            "transform_ego_coords_ds_to_aabb": Pose.identity(),
             "ego_aabb": ego_aabb,
             "rollout_uuid": "test-rollout-uuid-123",
             "scene_id": "test-scene-comparison",

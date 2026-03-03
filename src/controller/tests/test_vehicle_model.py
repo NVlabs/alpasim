@@ -168,8 +168,8 @@ class TestVehicleModelAdvance:
         assert model.state[0] == pytest.approx(vx * dt, abs=0.1)
         assert model.state[1] == pytest.approx(0.0, abs=0.01)
 
-    def test_advance_returns_qvec(self):
-        """advance() returns a QVec pose."""
+    def test_advance_returns_pose(self):
+        """advance() returns a Pose."""
         model = VehicleModel(np.array([10.0, 0.0]), 0.0)
 
         pose = model.advance(np.array([0.0, 0.0]), 0.1)

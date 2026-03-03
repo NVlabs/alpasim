@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 import asyncio
 import subprocess
 from io import BytesIO
@@ -42,7 +45,7 @@ def _config_overrides(cfg: DictConfig, tmp_path: Path, assets_dir: Path) -> Dict
 
 def _ensure_vavam_assets() -> Path:
     repo_root = _get_repo_root()
-    assets_dir = repo_root / "data" / "drivers"
+    assets_dir = repo_root / "data" / "drivers" / "vavam"
     required_files = [
         assets_dir / "VAM_width_768_pretrained_139k.pt",
         assets_dir / "VQ_ds16_16384_llamagen_encoder.jit",

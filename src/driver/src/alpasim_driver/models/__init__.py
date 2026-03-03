@@ -4,7 +4,14 @@
 """Model abstraction layer for trajectory prediction models."""
 
 from .ar1_model import AR1Model
-from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction
+from .base import (
+    BaseTrajectoryModel,
+    CameraFrame,
+    CameraImages,
+    DriveCommand,
+    ModelPrediction,
+    PredictionInput,
+)
 from .manual_model import ManualModel
 from .transfuser_model import TransfuserModel
 from .vam_model import VAMModel
@@ -12,9 +19,12 @@ from .vam_model import VAMModel
 __all__ = [
     "AR1Model",
     "BaseTrajectoryModel",
+    "CameraFrame",
+    "CameraImages",
     "DriveCommand",
     "ManualModel",
     "ModelPrediction",
+    "PredictionInput",
     "TransfuserModel",
     "VAMModel",
 ]

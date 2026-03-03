@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from alpasim_grpc.v0 import sensorsim_pb2
 from alpasim_runtime.camera_catalog import CameraCatalog, CameraDefinition
@@ -48,6 +50,7 @@ async def test_register_scene_appends_local_definition() -> None:
             shutter_type=sensorsim_pb2.ShutterType.GLOBAL,
         ),
     )
+    sensorsim_camera_front.rig_to_camera.quat.w = 1.0
     sensorsim_camera_local = sensorsim_pb2.AvailableCamerasReturn.AvailableCamera(
         logical_id="camera_local",
         intrinsics=sensorsim_pb2.CameraSpec(
@@ -55,6 +58,7 @@ async def test_register_scene_appends_local_definition() -> None:
             shutter_type=sensorsim_pb2.ShutterType.GLOBAL,
         ),
     )
+    sensorsim_camera_local.rig_to_camera.quat.w = 1.0
 
     sensorsim_cameras = [sensorsim_camera_front, sensorsim_camera_local]
 
@@ -79,9 +83,12 @@ async def test_register_scene_appends_local_definition() -> None:
             refreshed_def.intrinsics.SerializeToString()
             == original_def.intrinsics.SerializeToString()
         )
-        assert (
-            refreshed_def.rig_to_camera.as_grpc_pose().SerializeToString()
-            == original_def.rig_to_camera.as_grpc_pose().SerializeToString()
+
+        assert np.allclose(
+            refreshed_def.rig_to_camera.vec3, original_def.rig_to_camera.vec3
+        )
+        assert np.allclose(
+            refreshed_def.rig_to_camera.quat, original_def.rig_to_camera.quat
         )
 
 
@@ -97,6 +104,7 @@ async def test_register_scene_overwrites_intrinsics() -> None:
             shutter_type=sensorsim_pb2.ShutterType.GLOBAL,
         ),
     )
+    sensorsim_camera.rig_to_camera.quat.w = 1.0
 
     await catalog.merge_local_and_sensorsim_cameras("scene_b", [sensorsim_camera])
 

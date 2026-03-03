@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 import pygame
 
-from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction
+from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
 
 logger = logging.getLogger(__name__)
 
@@ -745,14 +745,7 @@ class ManualModel(BaseTrajectoryModel):
             # Heading at each time point (tangent to the arc)
             return angular_velocity * times
 
-    def predict(
-        self,
-        camera_images: dict[str, list[tuple[int, np.ndarray]]],
-        command: DriveCommand,
-        speed: float,
-        acceleration: float,
-        ego_pose_at_time_history_local: list[Any] | None = None,
-    ) -> ModelPrediction:
+    def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         """Generate trajectory prediction based on keyboard input.
 
         Called from the `ego-driver-worker` thread. This method synchronizes
@@ -760,28 +753,26 @@ class ManualModel(BaseTrajectoryModel):
         simulation timestamp before returning, ensuring responses are paced at
         "real-time" relative to the simulation.
 
-        Args:
-            camera_images: Dict mapping camera_id to list of (timestamp_us, image).
-            command: Navigation command (ignored - human decides).
-            speed: Current vehicle speed in m/s.
-            acceleration: Current longitudinal acceleration (unused).
-            ego_pose_at_time_history_local: Ego pose history (unused).
+        Manual model uses camera images for display only. Command, speed,
+        acceleration, and ego pose history are unused.
 
         Returns:
             ModelPrediction with curved trajectory in rig frame.
         """
-        del ego_pose_at_time_history_local  # Unused
-        del acceleration  # Unused
-
-        self._validate_cameras(camera_images)
+        self._validate_cameras(prediction_input.camera_images)
 
         # Get the most recent frame and timestamp from the first camera
         first_camera = self._camera_ids[0]
         latest_timestamp_us: int | None = None
         latest_frame: np.ndarray | None = None
 
-        if first_camera in camera_images and camera_images[first_camera]:
-            latest_timestamp_us, latest_frame = camera_images[first_camera][-1]
+        if (
+            first_camera in prediction_input.camera_images
+            and prediction_input.camera_images[first_camera]
+        ):
+            latest_timestamp_us, latest_frame = prediction_input.camera_images[
+                first_camera
+            ][-1]
 
         if ManualModel._gui_instance is not None and latest_timestamp_us is not None:
             # Wait until wall-clock time catches up to simulation time.
@@ -824,7 +815,7 @@ class ManualModel(BaseTrajectoryModel):
             effective_speed * 3.6,
             math.degrees(steering_angle),
             len(trajectory_xy),
-            command.name,
+            prediction_input.command.name,
         )
 
         return ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)

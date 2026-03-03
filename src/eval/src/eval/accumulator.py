@@ -22,8 +22,12 @@ import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
-from alpasim_utils.qvec import QVec
-from alpasim_utils.trajectory import Trajectory
+from alpasim_utils.geometry import (
+    Pose,
+    Trajectory,
+    pose_from_grpc,
+    trajectory_from_grpc,
+)
 from trajdata.maps import VectorMap
 
 from eval.data import (
@@ -66,7 +70,7 @@ class EvalDataAccumulator:
     _session_metadata: Optional[RolloutMetadata.SessionMetadata] = field(
         default=None, init=False
     )
-    _ego_coords_rig_to_aabb_center: Optional[QVec] = field(default=None, init=False)
+    _ego_coords_rig_to_aabb_center: Optional[Pose] = field(default=None, init=False)
     _ego_aabb_dims: Optional[tuple[float, float, float]] = field(
         default=None, init=False
     )
@@ -76,7 +80,7 @@ class EvalDataAccumulator:
     _actor_aabb_dims: dict[str, tuple[float, float, float]] = field(
         default_factory=dict, init=False
     )
-    _actor_trajectory_data: dict[str, list[tuple[int, QVec]]] = field(
+    _actor_trajectory_data: dict[str, list[tuple[int, Pose]]] = field(
         default_factory=dict, init=False
     )
 
@@ -155,7 +159,7 @@ class EvalDataAccumulator:
             self._actor_trajectory_data[actor_id] = []
 
         # Extract ego coordinate transformation
-        self._ego_coords_rig_to_aabb_center = QVec.from_grpc_pose(
+        self._ego_coords_rig_to_aabb_center = pose_from_grpc(
             metadata.transform_ego_coords_rig_to_aabb
         )
 
@@ -168,7 +172,7 @@ class EvalDataAccumulator:
         )
 
         # Parse and transform ground truth trajectory to AABB frame
-        self._gt_ego_trajectory = Trajectory.from_grpc(
+        self._gt_ego_trajectory = trajectory_from_grpc(
             metadata.ego_rig_recorded_ground_truth_trajectory
         ).transform(self._ego_coords_rig_to_aabb_center, is_relative=True)
 
@@ -183,7 +187,7 @@ class EvalDataAccumulator:
             actor_id = pose.actor_id
             if actor_id in self._actor_trajectory_data:
                 self._actor_trajectory_data[actor_id].append(
-                    (timestamp_us, QVec.from_grpc_pose(pose.actor_pose))
+                    (timestamp_us, pose_from_grpc(pose.actor_pose))
                 )
 
     def _build_actor_trajectories(
@@ -205,8 +209,8 @@ class EvalDataAccumulator:
             # Sort by timestamp and build trajectory
             pose_data.sort(key=lambda x: x[0])
             timestamps = np.array([p[0] for p in pose_data], dtype=np.uint64)
-            poses = QVec.stack([p[1] for p in pose_data])
-            trajectory = Trajectory(timestamps_us=timestamps, poses=poses)
+            poses = [p[1] for p in pose_data]
+            trajectory = Trajectory.from_poses(timestamps=timestamps, poses=poses)
 
             # Get AABB dims for this actor
             aabb_dims = self._actor_aabb_dims.get(

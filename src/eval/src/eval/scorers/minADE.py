@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 
@@ -106,9 +106,11 @@ class MinADEScorer(Scorer):
 
             relevant_sampled_trajectory_waypoints = np.array(
                 [
-                    sampled_trajectory.interpolate_to_timestamps(
-                        np.array(filtered_timestamps)
-                    ).poses.vec3
+                    np.asarray(
+                        sampled_trajectory.interpolate_to_timestamps(
+                            np.array(filtered_timestamps)
+                        ).positions
+                    )
                     for sampled_trajectory in driver_response_at_time.sampled_trajectories
                 ]
             )
@@ -116,7 +118,7 @@ class MinADEScorer(Scorer):
             # [nr_samples, T, 3]
             delta_xyz = (
                 relevant_sampled_trajectory_waypoints
-                - relevant_comparison_trajectory_part.poses.vec3[None]
+                - relevant_comparison_trajectory_part.positions[None]
             )
             # [nr_samples, T]
             distances = np.linalg.norm(

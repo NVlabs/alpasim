@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from typing import Literal
 
@@ -51,11 +51,8 @@ def _compute_off_lane(simulation_result: SimulationResult, ts: int) -> dict[
     str,
     float | list[vec_map_elements.RoadLane] | list[shapely.LineString] | list[float],
 ]:
-    ego_xyzh = (
-        simulation_result.actor_trajectories["EGO"]
-        .interpolate_to_timestamps(np.array([ts]))
-        .xyzh[0]
-    )
+    ego_pose = simulation_result.actor_trajectories["EGO"].interpolate_pose(ts)
+    ego_xyzh = np.array([*ego_pose.vec3, ego_pose.yaw()])
 
     possible_current_lanes = simulation_result.vec_map.get_current_lane(
         ego_xyzh, max_dist=6, max_heading_error=2 * np.pi

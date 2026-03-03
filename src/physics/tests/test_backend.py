@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import math
 
 import numpy as np
-import point_cloud_utils as pcu
 import pytest
 from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3
 from alpasim_physics.backend import PhysicsBackend
+from alpasim_physics.ply_io import save_mesh_vf
 from alpasim_physics.utils import aabb_to_ndarray, pose_grpc_to_ndarray
 
 
@@ -17,7 +17,7 @@ def default_aabb():
     return aabb_to_ndarray(aabb_grpc)
 
 
-def generate_planar_mesh(z_offset: float):
+def generate_planar_mesh(z_offset: float) -> bytes:
     # Define the range and resolution of the grid
     x_min, x_max = -20.0, 20.0  # X range
     y_min, y_max = -20.0, 20.0  # Y range
@@ -50,19 +50,13 @@ def generate_planar_mesh(z_offset: float):
 
     faces = np.array(faces)
 
-    # Save the mesh using point_cloud_utils
-    output_file = "/tmp/xy_plane_mesh.ply"
-    pcu.save_mesh_vf(output_file, vertices, faces)
-
-    return output_file
+    return save_mesh_vf(vertices, faces)
 
 
 @pytest.mark.parametrize("z_offset", [0.0, 0.5, -0.25])
 def test_update_pose_vertical_updates_on_planar_mesh(default_aabb, z_offset):
-    generated_ply = generate_planar_mesh(z_offset)
-    physics = PhysicsBackend(
-        env_mesh_ply=open(generated_ply, "rb").read(),
-    )
+    mesh_ply = generate_planar_mesh(z_offset)
+    physics = PhysicsBackend(env_mesh_ply=mesh_ply)
 
     POSE_Z_OFFSET = 0.3
 
@@ -89,10 +83,8 @@ def test_update_pose_vertical_updates_on_planar_mesh(default_aabb, z_offset):
 def test_update_pose_trans_and_rot_updates_on_planar_mesh(
     default_aabb, roll, pitch, pose_z_offset
 ):
-    generated_ply = generate_planar_mesh(0.0)
-    physics = PhysicsBackend(
-        env_mesh_ply=open(generated_ply, "rb").read(),
-    )
+    mesh_ply = generate_planar_mesh(0.0)
+    physics = PhysicsBackend(env_mesh_ply=mesh_ply)
 
     # create a pose that is slightly rotated and offset from the ground
     pose_z = default_aabb[2] / 2.0 + pose_z_offset
