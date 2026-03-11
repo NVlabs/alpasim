@@ -1,0 +1,28 @@
+# Lint: run pre-commit (same as GitLab CI lint stage).
+# Skips insert-license on --all-files to match GitLab behavior.
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    # Run on all PRs (matches GitLab merge_request_event for lint)
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit
+        run: |
+          SKIP=insert-license pre-commit run -c .pre-commit-config.yaml --all-files
