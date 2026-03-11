@@ -1,0 +1,29 @@
+name: Cleanup Dev Squash
+
+on:
+  pull_request:
+  schedule:
+    # Weekly on Sunday at 07:00 UTC. Adjust as needed.
+    - cron: "0 7 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup-dev-squash:
+    # Match GitLab intent: run on schedule, manual, and PRs targeting default branch.
+    if: github.event_name != 'pull_request' || github.base_ref == github.event.repository.default_branch
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Placeholder cleanup task
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "cleanup-dev-squash workflow is enabled."
+          echo "GitLab used cicd/gitlab/scripts/cleanup-dev-squash.py with internal SSH infra."
+          echo "Implement equivalent internal cleanup command here when ready."
