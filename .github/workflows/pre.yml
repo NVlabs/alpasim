@@ -1,0 +1,238 @@
+name: Pre Stage
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      pipeline_target:
+        description: "Pipeline target (currently informational)"
+        required: false
+        default: "Alpasim Test"
+      runtime_image:
+        description: "Optional runtime image override"
+        required: false
+      physics_image:
+        description: "Optional physics image override"
+        required: false
+      controller_image:
+        description: "Optional controller image override"
+        required: false
+      driver_image:
+        description: "Optional driver image override"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-variables:
+    runs-on: ubuntu-22.04
+    outputs:
+      changed_services: ${{ steps.prepare.outputs.changed_services }}
+      all_services: ${{ steps.prepare.outputs.all_services }}
+      docker_services: ${{ steps.prepare.outputs.docker_services }}
+      python_test_services: ${{ steps.prepare.outputs.python_test_services }}
+      docker_test_services: ${{ steps.prepare.outputs.docker_test_services }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare variables and detect changes
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          write_env() {
+            local key="$1"
+            local value="$2"
+            # %q produces shell-escaped values so spaces survive `source build.env`.
+            printf "%s=%q\n" "${key}" "${value}" >> build.env
+          }
+
+          ALL_SERVICES="runtime eval physics controller grpc utils driver"
+          DOCKER_SERVICES="runtime physics controller driver"
+          NON_BASE_DOCKER_SERVICES=""
+          PYTHON_TEST_SERVICES="grpc runtime wizard tools eval utils"
+          DOCKER_TEST_SERVICES="physics controller driver"
+          VALIDATION_GLOB_PATTERNS="rollouts/**/*.asl=ASL files not found, main job failed"
+          VALIDATION_EXPECTED_FILES="aggregate/metrics_results.txt=No aggregate metrics_results.txt found, aggregation did not complete successfully"
+          RCLONE_REMOTE_NAME="pbss-team-alpamayo"
+          RCLONE_REMOTE_TYPE="swift"
+          RCLONE_REMOTE_ENV_AUTH="false"
+          RCLONE_REMOTE_USER="team-alpamayo"
+          RCLONE_REMOTE_AUTH_URL="https://pdx.s8k.io/auth/v1.0"
+          RCLONE_REMOTE_AUTH_VERSION="1"
+          DEFAULT_ALPACKAGES_PATH="alpasim/artifacts/alpackages/25.10.08"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            CHANGED_FILES="$(git ls-files)"
+          else
+            CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          fi
+
+          CHANGED_SERVICES=""
+          for service in ${DOCKER_SERVICES}; do
+            # Keep behavior aligned with GitLab detect-changed-services.sh:
+            # service considered changed only when src/<service>/ changes.
+            if echo "${CHANGED_FILES}" | grep -Eq "^src/${service}/"; then
+              CHANGED_SERVICES="${CHANGED_SERVICES} ${service}"
+            fi
+          done
+          CHANGED_SERVICES="$(echo "${CHANGED_SERVICES}" | xargs || true)"
+
+          : > build.env
+          write_env "ALPASIM_ALL_SERVICES" "${ALL_SERVICES}"
+          write_env "ALPASIM_DOCKER_SERVICES" "${DOCKER_SERVICES}"
+          write_env "ALPASIM_NON_BASE_DOCKER_SERVICES" "${NON_BASE_DOCKER_SERVICES}"
+          write_env "ALPASIM_PYTHON_TEST_SERVICES" "${PYTHON_TEST_SERVICES}"
+          write_env "ALPASIM_DOCKER_TEST_SERVICES" "${DOCKER_TEST_SERVICES}"
+          write_env "ALPASIM_VALIDATION_GLOB_PATTERNS" "${VALIDATION_GLOB_PATTERNS}"
+          write_env "ALPASIM_VALIDATION_EXPECTED_FILES" "${VALIDATION_EXPECTED_FILES}"
+          write_env "ALPASIM_RCLONE_REMOTE_NAME" "${RCLONE_REMOTE_NAME}"
+          write_env "ALPASIM_RCLONE_REMOTE_TYPE" "${RCLONE_REMOTE_TYPE}"
+          write_env "ALPASIM_RCLONE_REMOTE_ENV_AUTH" "${RCLONE_REMOTE_ENV_AUTH}"
+          write_env "ALPASIM_RCLONE_REMOTE_USER" "${RCLONE_REMOTE_USER}"
+          write_env "ALPASIM_RCLONE_REMOTE_AUTH_URL" "${RCLONE_REMOTE_AUTH_URL}"
+          write_env "ALPASIM_RCLONE_REMOTE_AUTH_VERSION" "${RCLONE_REMOTE_AUTH_VERSION}"
+          write_env "ALPASIM_DEFAULT_ALPACKAGES_PATH" "${DEFAULT_ALPACKAGES_PATH}"
+          write_env "CHANGED_SERVICES" "${CHANGED_SERVICES}"
+
+          echo "all_services=${ALL_SERVICES}" >> "${GITHUB_OUTPUT}"
+          echo "docker_services=${DOCKER_SERVICES}" >> "${GITHUB_OUTPUT}"
+          echo "python_test_services=${PYTHON_TEST_SERVICES}" >> "${GITHUB_OUTPUT}"
+          echo "docker_test_services=${DOCKER_TEST_SERVICES}" >> "${GITHUB_OUTPUT}"
+          echo "changed_services=${CHANGED_SERVICES}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload build.env
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-env
+          path: build.env
+          retention-days: 7
+
+  bump-versions-plan:
+    # Safe first step: report what would be bumped on PRs to default branch.
+    # We can replace with commit/push behavior later.
+    if: github.event_name == 'pull_request' && github.base_ref == github.event.repository.default_branch
+    runs-on: ubuntu-22.04
+    needs: [prepare-variables]
+    steps:
+      - name: Download build.env
+        uses: actions/download-artifact@v4
+        with:
+          name: build-env
+
+      - name: Print bump plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build.env
+          echo "Changed services: ${CHANGED_SERVICES:-<none>}"
+          if [[ -z "${CHANGED_SERVICES:-}" ]]; then
+            echo "No changed docker services detected; nothing to bump."
+            exit 0
+          fi
+          for service in ${CHANGED_SERVICES}; do
+            echo "Would bump minor version for: ${service}"
+          done
+
+  prepare-images:
+    runs-on: ubuntu-22.04
+    needs: [prepare-variables]
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      RUNTIME_IMAGE_OVERRIDE: ${{ github.event.inputs.runtime_image || '' }}
+      PHYSICS_IMAGE_OVERRIDE: ${{ github.event.inputs.physics_image || '' }}
+      CONTROLLER_IMAGE_OVERRIDE: ${{ github.event.inputs.controller_image || '' }}
+      DRIVER_IMAGE_OVERRIDE: ${{ github.event.inputs.driver_image || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build.env
+        uses: actions/download-artifact@v4
+        with:
+          name: build-env
+
+      - name: Resolve image sources and tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build.env
+
+          write_env() {
+            local key="$1"
+            local value="$2"
+            printf "%s=%q\n" "${key}" "${value}" >> build.env
+          }
+
+          SHORT_SHA="$(echo "${{ github.sha }}" | cut -c1-8)"
+          IS_RELEASE_PIPELINE="false"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "${DEFAULT_BRANCH}" ]]; then
+            IS_RELEASE_PIPELINE="true"
+          fi
+
+          get_source_and_tag() {
+            local service="$1"
+            local changed="${CHANGED_SERVICES:-}"
+            local source="stable"
+            local tag="stable"
+
+            if echo "${changed}" | grep -Eq "(^| )${service}( |$)"; then
+              source="build"
+              if [[ "${IS_RELEASE_PIPELINE}" == "true" ]]; then
+                tag="release-${SHORT_SHA}"
+              else
+                tag="pr-${SHORT_SHA}"
+              fi
+            fi
+
+            echo "${source}" "${tag}"
+          }
+
+          append_service_vars() {
+            local service="$1"
+            local image_override="$2"
+            local service_upper
+            service_upper="$(echo "${service}" | tr '[:lower:]-' '[:upper:]_')"
+            read -r source tag < <(get_source_and_tag "${service}")
+
+            if [[ -n "${image_override}" ]]; then
+              source="override"
+              image="${image_override}"
+            else
+              image="nvcr.io/nvidian/alpamayo/alpasim-${service}:${tag}"
+            fi
+
+            write_env "${service_upper}_SOURCE" "${source}"
+            write_env "${service_upper}_IMAGE" "${image}"
+          }
+
+          append_service_vars "runtime" "${RUNTIME_IMAGE_OVERRIDE}"
+          append_service_vars "physics" "${PHYSICS_IMAGE_OVERRIDE}"
+          append_service_vars "controller" "${CONTROLLER_IMAGE_OVERRIDE}"
+          append_service_vars "driver" "${DRIVER_IMAGE_OVERRIDE}"
+
+          write_env "IS_RELEASE_PIPELINE" "${IS_RELEASE_PIPELINE}"
+          echo "Final build.env:"
+          cat build.env
+
+      - name: Upload final build.env
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-env-final
+          path: build.env
+          retention-days: 7
