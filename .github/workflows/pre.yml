@@ -214,7 +214,7 @@ jobs:
               source="override"
               image="${image_override}"
             else
-              image="nvcr.io/nvidian/alpamayo/alpasim-${service}:${tag}"
+              image="alpasim-${service}:${tag}"
             fi
 
             write_env "${service_upper}_SOURCE" "${source}"
@@ -236,3 +236,66 @@ jobs:
           name: build-env-final
           path: build.env
           retention-days: 7
+
+  build-health-check:
+    runs-on: ubuntu-22.04
+    needs: [prepare-images]
+    steps:
+      - name: Health check
+        run: echo "Build stage jobs are enabled in pre.yml."
+
+  build-services:
+    runs-on: self-hosted
+    needs: [prepare-images]
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [runtime, physics, controller, driver]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download final build.env
+        uses: actions/download-artifact@v4
+        with:
+          name: build-env-final
+
+      - name: Determine service build source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build.env
+          SERVICE="${{ matrix.service }}"
+          SERVICE_UPPER="$(echo "${SERVICE}" | tr '[:lower:]-' '[:upper:]_')"
+          SOURCE_VAR="${SERVICE_UPPER}_SOURCE"
+          IMAGE_VAR="${SERVICE_UPPER}_IMAGE"
+          SOURCE="${!SOURCE_VAR:-stable}"
+          IMAGE="${!IMAGE_VAR:-}"
+
+          echo "source=${SOURCE}" >> "${GITHUB_OUTPUT}"
+          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip non-build sources
+        if: steps.source.outputs.source != 'build'
+        run: |
+          echo "Skipping ${{ matrix.service }} (source=${{ steps.source.outputs.source }})"
+
+      - name: Build service image via wizard
+        if: steps.source.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          IMAGE="${{ steps.source.outputs.image }}"
+          LOG_DIR="${GITHUB_WORKSPACE}/wizard_logs"
+
+          git lfs pull --include="src/**/*" || true
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          python3 -m pip install uv
+          uv sync
+          uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
+
+          cd "${GITHUB_WORKSPACE}"
+          docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
