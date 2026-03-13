@@ -35,6 +35,7 @@ class DockerComposeDeployment:
 
         Note: This does not actually start the service. This can be done using
         ```bash
+        docker compose build
         docker compose --profile sim up
         docker compose --profile eval up
         docker compose --profile aggregation up
@@ -80,6 +81,16 @@ class DockerComposeDeployment:
             "set -e",
             "",
         ]
+
+        # Build local images if needed
+        script_lines.extend(
+            [
+                "# Build local images if needed",
+                'echo "Building local images..."',
+                f"docker compose -f {docker_compose_filepath} build",
+                "",
+            ]
+        )
 
         # Always run simulation phase (required)
         script_lines.extend(

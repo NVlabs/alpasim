@@ -410,6 +410,7 @@ the context of a full simulation.
 1. (Terminal 1) Start the rest of the simulation with docker compose:
 
    ```bash
+   docker compose -f docker-compose.yaml build
    docker compose -f docker-compose.yaml --profile sim up runtime-0 driver-0 physics-0 sensorsim-0
    ```
 
