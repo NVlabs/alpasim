@@ -1,0 +1,46 @@
+# Lint: run pre-commit for changed files.
+# Skips insert-license to match CI behavior in GitLab.
+name: Lint
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    # Run on all PRs (matches GitLab merge_request_event for lint)
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Required to diff against base SHA for pre-commit ranges.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit (pull_request)
+        if: github.event_name == 'pull_request'
+        run: |
+          SKIP=insert-license pre-commit run -c .pre-commit-config.yaml \
+            --from-ref "${{ github.event.pull_request.base.sha }}" \
+            --to-ref "${{ github.event.pull_request.head.sha }}"
+
+      - name: Run pre-commit (push)
+        if: github.event_name == 'push'
+        run: |
+          BEFORE_SHA="${{ github.event.before }}"
+          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            SKIP=insert-license pre-commit run -c .pre-commit-config.yaml --all-files
+          else
+            SKIP=insert-license pre-commit run -c .pre-commit-config.yaml \
+              --from-ref "$BEFORE_SHA" \
+              --to-ref "${{ github.sha }}"
+          fi

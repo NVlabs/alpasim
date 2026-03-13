@@ -1,0 +1,109 @@
+name: Test Stage
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      enable_infra_tests:
+        description: "Enable infra-coupled tests (docker/gpu/fake_lustre)"
+        required: false
+        default: "false"
+      enable_slurm_tests:
+        description: "Enable SLURM smoke tests"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  test-services-native:
+    name: test-native-${{ matrix.service }}
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [grpc, runtime, wizard, tools, eval, utils]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip setuptools wheel uv
+          git lfs pull --include="src/${{ matrix.service }}/tests/**/*" || true
+
+      - name: Compile gRPC protos
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/grpc
+          uv sync
+          uv run compile-protos
+
+      - name: Run ${{ matrix.service }} tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "src/${{ matrix.service }}"
+          uv sync --all-extras
+
+          set +e
+          uv run --all-extras pytest -vvs --tb=short
+          status=$?
+          set -e
+
+          if [[ $status -eq 5 ]]; then
+            echo "No tests collected for ${{ matrix.service }}; treating as success."
+            exit 0
+          fi
+
+          exit $status
+
+  # Equivalent to GitLab test-services-in-docker.
+  # Disabled by default until image handoff and infra runner labels are finalized.
+  test-services-in-docker:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_infra_tests == 'true' }}
+    name: test-docker-${{ matrix.service }}
+    runs-on: [self-hosted, gpu]
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [physics, controller, driver]
+    steps:
+      - run: echo "Disabled pending infra/image strategy migration."
+
+  # Equivalent to GitLab test-docker-compose (requires storage/fake_lustre).
+  # This must run only on runners that provide the fake lustre mount.
+  test-docker-compose:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_infra_tests == 'true' }}
+    name: test-docker-compose-${{ matrix.variant }}
+    runs-on: [self-hosted, gpu, storage-fake_lustre]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [docker_internal, docker_oss]
+    env:
+      OUTPUT_PATH: /raid/fake_lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
+      LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - run: echo "Disabled pending fake_lustre runner setup and script migration."
+
+  # Equivalent to GitLab test-slurm.
+  # Explicitly manual/opt-in due SLURM infra dependency.
+  test-slurm:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_slurm_tests == 'true' }}
+    name: test-slurm-${{ matrix.variant }}
+    runs-on: [self-hosted, slurm]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [slurm_internal, slurm_oss]
+    steps:
+      - run: echo "SLURM tests are not yet migrated. Add run-test-slurm equivalent next."
