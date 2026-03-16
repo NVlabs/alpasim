@@ -490,9 +490,9 @@ class USDZManager:
 
         Downloads are parallelized with a maximum of 5 concurrent downloads.
         """
-        missing_uuid_info: dict[
-            str, tuple[str, str | None]
-        ] = {}  # uuid -> (filepath, revision)
+        missing_uuid_info: dict[str, tuple[str, str | None]] = (
+            {}
+        )  # uuid -> (filepath, revision)
         for uuid in uuids:
             cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
             if not os.path.exists(cache_path):

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """CI test to validate scene and suite CSV files in the repository."""
 
