@@ -6,7 +6,7 @@
 
 scenes:
   scene_ids:
-    - clipgt-05bb8212-63e1-40a8-b4fc-3142c0e94646 # taken from huggingface
+    - clipgt-a309e228-26e1-423e-a44c-cb00aa7378cb # taken from huggingface (25.07 dataset)
 services:
   sensorsim:
     image: docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0
