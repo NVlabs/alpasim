@@ -2,7 +2,6 @@
 # Config for running with an EXTERNAL driver. See docs/MANUAL_DRIVER.md for usage.
 
 defaults:
-  - /stable_manifest/oss
   - _self_
 
 defines:
@@ -16,10 +15,6 @@ wizard:
   # Don't start a driver container - we're using an external one
   run_sim_services:
     ["sensorsim", "physics", "trafficsim", "controller", "runtime"]
-
-  # Skip evaluation and aggregation phases for interactive sessions
-  run_eval_services: []
-  run_aggregation_services: []
 
   # External driver address (override this if your driver runs on a different port)
   external_services:
@@ -43,8 +38,7 @@ services:
 
 # Override vavam's 2 Hz settings with 10 Hz for smoother interactive sessions
 runtime:
-  default_scenario_parameters:
-    egopose_interval_us: 100_000   # 10 Hz
+  simulation_config:
     control_timestep_us: 100_000   # 10 Hz
     time_start_offset_us: 100_000  # Keep in sync with control_timestep
 

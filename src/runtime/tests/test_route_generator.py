@@ -180,8 +180,8 @@ def test_route_generator_map(sample_artifact):  # noqa: F811
     waypoints_local = waypoints_rig.copy()  # equivalent since we are at the origin
 
     # per inspection of the map
-    expected_first_waypoint = np.array([4.21, -0.49, 0.0])
-    assert waypoints_rig[1] == pytest.approx(expected_first_waypoint, abs=1.0e-2)
+    expected_first_waypoint = np.array([0.00026, -0.0791, 0.0])
+    assert waypoints_rig[0] == pytest.approx(expected_first_waypoint, abs=1.0e-2)
 
     # shift in the y direction
     pose_local_to_rig = Pose(
@@ -191,7 +191,7 @@ def test_route_generator_map(sample_artifact):  # noqa: F811
     route_rig = route_generator.generate_route(0, pose_local_to_rig)
     waypoints_rig = route_rig.waypoints
     expected_first_waypoint += np.array([0.0, -1.0, 0.0])
-    assert waypoints_rig[1] == pytest.approx(expected_first_waypoint, abs=1.0e-2)
+    assert waypoints_rig[0] == pytest.approx(expected_first_waypoint, abs=1.0e-2)
 
     # move along the route and check that waypoints are extended past the end of the scene
     for i in range(len(waypoints_local)):

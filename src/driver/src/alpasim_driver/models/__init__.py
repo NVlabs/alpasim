@@ -13,7 +13,6 @@ from .base import (
     PredictionInput,
 )
 from .manual_model import ManualModel
-from .transfuser_model import TransfuserModel
 from .vam_model import VAMModel
 
 __all__ = [
@@ -25,6 +24,5 @@ __all__ = [
     "ManualModel",
     "ModelPrediction",
     "PredictionInput",
-    "TransfuserModel",
     "VAMModel",
 ]

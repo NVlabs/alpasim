@@ -3,7 +3,10 @@
 defaults:
   - config_schema
   - _self_
-  - stable_manifest/oss
+  - driver: [vavam, vavam_runtime_configs] # Driver and runtime configs
+  - trafficsim: null
+  - stable_manifest: oss
+  - optional scenes_catalog: internal # auto-override when internal plugin installed
 
 # \/ hydra-specific configuration of legacy behavior (off)
 hydra:
@@ -14,16 +17,18 @@ hydra:
 defines:
   filesystem: ???
   driver_model: ???
-  mpc_implementation: linear  # "linear" (OSQP, faster) or "nonlinear" (CasADi)
+  mpc_implementation: linear # "linear" (OSQP, faster) or "nonlinear" (CasADi)
 
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
+  alpackages: "${defines.filesystem}/alpackages"
+  trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
   helper: scripts
   vscode: sources/remote-vscode-server
   nre_cache_size: 4
-  physics_cache_size: 16  # should match or exceed concurrent scenes to avoid cache thrashing
+  physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
 
 # \/ the wizard.* section defines properties global to all alpasim modules
 wizard:
@@ -61,14 +66,6 @@ wizard:
   run_sim_services:
     ["driver", "sensorsim", "physics", "trafficsim", "controller", "runtime"]
 
-  # Services to run for evaluation (e.g., ["eval"])
-  # By default, evaluation runs in-runtime. Use +eval=eval_in_separate_job to run evaluation in a separate container.
-  run_eval_services: []
-
-  # Services to run for aggregation (e.g., ["post_eval_aggregation"])
-  # By default, aggregation runs in-runtime. Use +eval=eval_in_separate_job to run aggregation in a separate container.
-  run_aggregation_services: []
-
   # TODO: undocumented options
   run_mode: "BATCH"
   timeout: 600
@@ -81,7 +78,7 @@ wizard:
 
   # Used if `driver_code_hash` is set. Requires configured ssh keys for
   # pulling from gitlab, but can also point towards a local repo!
-  driver_code_repo: "ssh://git@gitlab-master.nvidia.com:12051/alpamayo/alpamayo.git"
+  driver_code_repo: null
 
   submitter: "unspecified" # An optional specifier of the submitter (used for tracking purposes)
   description: "unspecified" # An optional description of the run (used for tracking purposes)
@@ -91,28 +88,18 @@ wizard:
 
 scenes:
   # Selection method (set one of these two)
-  scene_ids: null        # List of scene IDs to use
-  test_suite_id: null    # Test suite ID to use (from suites_csv)
+  scene_ids: null # List of scene IDs to use
+  test_suite_id: null # Test suite ID to use (from suites_csv)
 
   # Limit the number of scenes to run (0 or negative means no limit)
   limit_to_first_n: 0
 
   # Paths
   scene_cache: "${defines.filesystem}/nre-artifacts"
-  scenes_csv: "${repo-relative:'data/scenes/sim_scenes.csv'}"
-  suites_csv: "${repo-relative:'data/scenes/sim_suites.csv'}"
-
-  artifact_compatibility_matrix:
-    # 1. the keys replace dots with underscores because of hydra limitations. They will be interpreted with `.replace('_', '.')`
-    # 2. a version a.b.c-deadbeef should not self-reference (include a_b_c-deadbeef) - this is a configuration error.
-    # 3. we use a dictionary instead of a list to enable easy partial overrides in hydra
-    #    * to add a new compatible version ad-hoc write `scenes.artifact_compatibility_matrix.current_version.new_version=true`
-    #    * to remove, write `scenes.artifact_compatibility_matrix.current_version.new_version=false`
-    "0_2_0":
-      "25_7_9-b85d0efd": true
-      "25_7_9-e633dd23": true
-      "25_7_8-fc8b0551": true
-      "0_2_578-e82c0193": true
+  scenes_csv:
+    - "${repo-relative:'data/scenes/sim_scenes.csv'}"
+  suites_csv:
+    - "${repo-relative:'data/scenes/sim_suites.csv'}"
 
 # \/ services.* defines the individual components of the simulation. Each of them is deployed from an image so the layout of
 # each item is similar. For the services that pull in local code (e.g., controller, runtime, eval) we mount the repo-relative
@@ -170,6 +157,7 @@ services:
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
       - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
     environments:
       - WARP_CACHE_PATH='/mnt/warp'
     command:
@@ -178,7 +166,7 @@ services:
       - "--port={port}" # arbitrary, needs to be updated in runtime-config.yaml
       - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
       - "--use-ground-mesh=true"
-      - "--cache-size=${defines.physics_cache_size}"  # should match or exceed concurrent scenes to avoid cache thrashing
+      - "--cache-size=${defines.physics_cache_size}" # should match or exceed concurrent scenes to avoid cache thrashing
       - "--log-level=${wizard.log_level}"
     replicas_per_container: 1
     gpus: [1]
@@ -195,6 +183,7 @@ services:
     volumes:
       - "${wizard.log_dir}/controller:/mnt/output"
       - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
     command:
       - "uv run python -m alpasim_controller.server"
       - "--port={port}"
@@ -202,7 +191,6 @@ services:
       - "--log-level=${wizard.log_level}"
     replicas_per_container: 1
     gpus: null
-
 
   # \/ the orchestrating container - only 1 needed irrespectively of however many other there are
   runtime:
@@ -219,6 +207,7 @@ services:
       - "${wizard.log_dir}:/mnt/log_dir"
       - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
       - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
     gpus: null # uses no GPUs
     command:
       - "uv run python -m alpasim_runtime.simulate"
@@ -230,38 +219,6 @@ services:
       - "--array-job-dir=/mnt/array_job_dir"
       - "--eval-config=/mnt/log_dir/eval-config.yaml"
     replicas_per_container: 1 # should only be one runtime orchestrator
-
-  # \/ the eval and post_eval_aggregation services are NOT used by the default eval-in-runtime mode,
-  # but we define the services here for completeness.
-  # Use +eval=eval_in_separate_job to run evaluation in a separate job using these containers.
-  eval:
-    image: ???
-    volumes:
-      - "${wizard.log_dir}:/mnt/log_dir"
-      - "${scenes.scene_cache}:/mnt/nre-data"
-      - "${repo-relative:'src'}:/repo/src"
-    replicas_per_container: 1
-    gpus: null
-    command:
-      - "uv run alpasim-eval"
-      - "--asl_search_glob=/mnt/log_dir/rollouts/**/*.asl"
-      - "--config_path=/mnt/log_dir/eval-config.yaml"
-      - "--trajdata_cache_dir=/mnt/trajdata_cache_dir"
-      - "--usdz_glob=/mnt/nre-data/{sceneset}/**/*.usdz"
-      - "--log-level=${wizard.log_level}"
-
-  post_eval_aggregation:
-    image: ${services.eval.image}
-    volumes:
-      - "${wizard.log_dir}:/mnt/log_dir"
-      - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
-      - "${repo-relative:'src'}:/repo/src"
-    replicas_per_container: 1
-    gpus: null
-    command:
-      - "uv run alpasim-aggregation"
-      - "--array_job_dir=/mnt/array_job_dir"
-      - "--config_path=/mnt/log_dir/eval-config.yaml"
 
 runtime:
   # Number of worker processes for parallel rollout execution.
@@ -296,20 +253,22 @@ runtime:
     sensorsim_cache_size: ${defines.nre_cache_size}
 
   enable_autoresume: false
+  # How many scenes (in particular maps) to cache in the worker local artifact cache.
+  artifact_cache_size: 10
 
-  default_scenario_parameters:
+  simulation_config:
     n_sim_steps: 200 # how many steps to simulate in a rollout
     n_rollouts: 1 # how many rollouts to simulate for that scenario
     force_gt_duration_us: 1_700_000 # 1.7s
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
 
-    egopose_interval_us: 100_000
     control_timestep_us: 100_000
+    pose_reporting_interval_us: 0 # 0 = controller reports only the final pose
 
     time_start_offset_us: 300_000
 
     ego_mask_rig_config_id: "hyperion_8_1" # which rig/directory in ego-hoods to use for ego masking
-    planner_delay_us: ???  # Overwritten in `oss.yaml` or `internal.yaml`
+    planner_delay_us: ??? # Overwritten in `oss.yaml` or `internal.yaml`
 
     # Actors present shorter than this (in micro-seconds) are ignored. Set to 0 to disable.
     min_traffic_duration_us: 3_000_000
@@ -317,18 +276,6 @@ runtime:
     assert_zero_decision_delay: true
 
     physics_update_mode: "EGO_ONLY"
-
-    egomotion_noise: # orders of magnitude loosely based on
-      # https://docs.google.com/spreadsheets/d/1W9y6uHFOqouLx-K7xp3gh43WaAYb3Z9uYckeCA2wCgw/edit?gid=1620097033#gid=1620097033
-      enabled: False # Note, if setting to true, it is likely that controller noise should be disabled to prevent double booking
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      time_constant_position: 3.0
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      time_constant_orientation: 5.0
 
     route_generator_type: "MAP" # "MAP" or "RECORDED"
 
@@ -358,9 +305,8 @@ runtime:
         first_frame_offset_us: -30_000
 
 eval:
-  # Whether to run evaluation in runtime (after each rollout) or in separate job
-  run_in_runtime: true
-
+  # Set to false to disable in-runtime evaluation (e.g., for debugging or performance testing)
+  enabled: true
   vec_map:
     incl_road_edges: true
     incl_traffic_signs: true
@@ -390,9 +336,9 @@ eval:
 
   video:
     render_video: True
-    video_layouts: ["DEFAULT"]  # ["DEFAULT", "REASONING_OVERLAY"]
+    video_layouts: ["DEFAULT"] # ["DEFAULT", "REASONING_OVERLAY"]
     camera_id_to_render: camera_front_wide_120fov
-    reasoning_text_refresh_interval_s: 1.0  # for reasoning overlay layout only
+    reasoning_text_refresh_interval_s: 1.0 # for reasoning overlay layout only
     overlay_plans_on_camera: True
     render_every_nth_frame: 1
     generate_combined_video: False

@@ -54,6 +54,7 @@ fi
 SCRIPT_PATH=$(scontrol show job "${UNIQUE_JOB_ID}" | awk -F= '/Command=/{print $2}')
 
 SCRIPT_DIR=$(readlink -f "$(dirname $SCRIPT_PATH)")
+REPO_ROOT_DIR=$(readlink -f "${SCRIPT_DIR}/../../..")
 
 # If LOGDIR is not specified, we generate a logdir in the folder where this script lives. If
 # a relative LOGDIR is specified, we assume the user wants to set the LOGDIR relative to where
@@ -86,6 +87,11 @@ exec > >(tee -a "${LOGDIR}/txt-logs/slurm.log") 2>&1
 
 # Create resume.sh script
 ORIG_SUBMIT_CMD=$(sacct -j ${SLURM_JOB_ID} -o submitline -P | head -n 2 | sed '1d')
+ORIG_ACCOUNT=${SLURM_JOB_ACCOUNT}
+
+if [[ -z "${ORIG_ACCOUNT}" ]]; then
+    ORIG_ACCOUNT=$(scontrol show job "${UNIQUE_JOB_ID}" | awk -F= '/Account=/{print $2}' | awk '{print $1}')
+fi
 
 if [ ! -f "${ARRAY_JOB_DIR}/resume.sh" ] && [[ -z "${SLURM_ARRAY_TASK_ID}" || "${SLURM_ARRAY_TASK_ID}" == "${SLURM_ARRAY_TASK_MIN}" ]]; then
     cat > ${ARRAY_JOB_DIR}/resume.sh <<RESUME_EOF
@@ -96,10 +102,19 @@ RESUME_EOF
     chmod +x ${ARRAY_JOB_DIR}/resume.sh
 fi
 
-# Install new dependencies if required.
-uv tool upgrade alpasim_wizard
-alpasim_wizard \
-    +deploy=${DEPLOY_TARGET} \
+# Create reeval.sh script
+if [ ! -f "${ARRAY_JOB_DIR}/reeval.sh" ] && [[ -z "${SLURM_ARRAY_TASK_ID}" || "${SLURM_ARRAY_TASK_ID}" == "${SLURM_ARRAY_TASK_MIN}" ]]; then
+    cat > ${ARRAY_JOB_DIR}/reeval.sh <<REEVAL_EOF
+#!/bin/bash
+# Re-evaluation script — recomputes eval + aggregation on this job folder
+uv run --project ${REPO_ROOT_DIR}/src/eval --python 3.12 alpasim-reeval "${ARRAY_JOB_DIR}" --slurm --account "${ORIG_ACCOUNT}" "\$@"
+REEVAL_EOF
+    chmod +x ${ARRAY_JOB_DIR}/reeval.sh
+fi
+
+uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
+    alpasim_wizard \
+    +deploy=ord_oss \
     wizard.log_dir=$LOGDIR \
     wizard.array_job_dir=$ARRAY_JOB_DIR \
     wizard.latest_symlink=true \

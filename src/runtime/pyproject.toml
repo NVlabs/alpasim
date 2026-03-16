@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 # Trivial comment to trigger CI build-services (for test-slurm dependency).
 [project]
 name = "alpasim-runtime"
-version = "1.60.0"
+version = "1.71.0"
 description = "Runtime of the Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 authors = [{name = "Michal Tyszkiewicz", email = "mtyszkiewicz@nvidia.com"}]
@@ -13,7 +13,7 @@ dependencies = [
     "aiofiles>=24.1.0",
     "alpasim-eval",  # Local eval package
     "alpasim-grpc",  # Local grpc package
-    "alpasim-utils",  # Local utils package
+    "alpasim-utils[geometry]",  # Local utils package + Rust geometry types
     "matplotlib>=3.8.0",  # Metrics plotting
     "mergedeep>=1.3.4",
     "numpy>=2.0.0",
@@ -29,7 +29,7 @@ dependencies = [
     "scipy>=1.15.0",
     "seaborn>=0.13.0",  # Metrics plotting
     "csaps>=1.2.0",
-    "trajdata-alpasim @ git+https://github.com/NVlabs/trajdata.git@alpasim",
+    "trajdata-alpasim==1.4.3",
     "pandas<3",  # pandas 3.x breaks trajdata
     "pytest>=7.0.0",
     "pytest-asyncio>=0.20.0",
@@ -41,16 +41,14 @@ dependencies = [
     "pyyaml>=6.0.2",
 ]
 
-[project.optional-dependencies]
-nb = [
-    "jupyter",
-    "ipykernel",
-]
-
 [tool.uv.sources]
 alpasim-eval = {workspace = true}
 alpasim-grpc = {workspace = true}
 alpasim-utils = {workspace = true}
+
+[tool.uv.sources.trajdata-alpasim]
+git = "https://github.com/NVlabs/trajdata"
+branch = "alpasim"
 
 [tool.setuptools.packages.find]
 include = [ "alpasim_runtime", "tests" ]

@@ -1,3 +1,4 @@
+artifact_cache_size: 10
 enable_autoresume: false
 endpoints:
   controller:
@@ -11,45 +12,36 @@ endpoints:
     skip: false
   sensorsim:
     n_concurrent_rollouts: 2
+  sensorsim_cache_size: '4'
   trafficsim:
     n_concurrent_rollouts: 14
     skip: false
-scenarios:
-  - assert_zero_decision_delay: true
-    cameras:
-      - logical_id: camera_front_wide_120fov
-        height: 320
-        width: 512
-        frame_interval_us: 100000
-        shutter_duration_us: 30000
-        first_frame_offset_us: -30000
-      - logical_id: camera_front_tele_30fov
-        height: 320
-        width: 512
-        frame_interval_us: 100000
-        shutter_duration_us: 30000
-        first_frame_offset_us: -30000
-    control_timestep_us: 100000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: false
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 100000
-    force_gt_duration_us: 1700000
-    min_traffic_duration_us: 3000000
-    n_rollouts: 1
-    n_sim_steps: 60
-    physics_update_mode: EGO_ONLY
-    planner_delay_us: 0
-    route_generator_type: MAP
-    scene_id: clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e
-    send_av_messages: false
-    send_recording_ground_truth: false
-    time_start_offset_us: 300000
-    vehicle: null
+nr_workers: 1
+scenes:
+  - scene_id: clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e
+simulation_config:
+  assert_zero_decision_delay: true
+  cameras:
+    - first_frame_offset_us: -30000
+      frame_interval_us: 100000
+      height: 320
+      logical_id: camera_front_wide_120fov
+      shutter_duration_us: 30000
+      width: 512
+    - first_frame_offset_us: -30000
+      frame_interval_us: 100000
+      height: 320
+      logical_id: camera_front_tele_30fov
+      shutter_duration_us: 30000
+      width: 512
+  control_timestep_us: 100000
+  ego_mask_rig_config_id: hyperion_8_1
+  force_gt_duration_us: 1700000
+  min_traffic_duration_us: 3000000
+  n_rollouts: 1
+  n_sim_steps: 60
+  physics_update_mode: EGO_ONLY
+  planner_delay_us: 0
+  route_generator_type: MAP
+  send_recording_ground_truth: false
+  time_start_offset_us: 300000

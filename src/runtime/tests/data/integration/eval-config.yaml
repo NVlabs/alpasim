@@ -1,0 +1,73 @@
+aggregation_modifiers:
+  max_dist_to_gt_trajectory: 4.0
+database:
+  leaderboard_table_name: alpasim_leaderboard_staging_v4
+  metrics_table_name: alpasim_eval_v2
+  sim_execution_table_name: alpasim_eval_execution_v2
+  upload_full_metrics: true
+  upload_leaderboard: true
+  upload_metadata: true
+enabled: true
+num_processes: 16
+scorers:
+  image:
+    camera_logical_id: camera_front_wide_120fov
+  min_ade:
+    incl_z: false
+    target: GT
+    time_deltas:
+      - 0.5
+      - 1.0
+      - 2.5
+      - 5.0
+  plan_deviation:
+    avg_decay_rate: 0.1
+    incl_z: false
+    min_timesteps: 5
+vec_map:
+  incl_road_edges: true
+  incl_traffic_signs: true
+  incl_wait_lines: true
+  max_num_lanes: 20
+  num_pts_per_lane: 20
+vehicle:
+  vehicle_corner_roundness: 0.5
+  vehicle_shrink_factor: 0.02
+video:
+  camera_id_to_render: camera_front_wide_120fov
+  combined_video_speed_factor: 0.33
+  generate_combined_video: false
+  map_video:
+    ego_loc: BOTTOM_CENTER
+    map_elements_to_plot:
+      - ROAD_LANE_CENTER
+      - ROAD_LANE_LEFT_EDGE
+      - ROAD_LANE_RIGHT_EDGE
+      - ROAD_EDGE
+      - STOP_LINE
+      - GT_LINESTRING
+      - EGO_GT_GHOST_POLYGON
+      - DRIVER_RESPONSES
+      - ROUTE
+      - AGENTS
+    map_radius_m: 20
+    rotate_map_to_ego: true
+  metrics_table_entries:
+    - offroad_or_collision_at_fault
+    - collision_any
+    - collision_at_fault
+    - collision_front
+    - collision_lateral
+    - collision_rear
+    - offroad
+    - dist_to_gt_trajectory
+    - dist_to_gt_location
+    - progress
+    - progress_rel
+    - safety_monitor_triggered
+  overlay_plans_on_camera: true
+  reasoning_text_refresh_interval_s: 1.0
+  render_every_nth_frame: 1
+  render_video: true
+  video_layouts:
+    - DEFAULT

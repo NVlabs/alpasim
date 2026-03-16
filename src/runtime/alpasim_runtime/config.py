@@ -7,19 +7,19 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Type, TypeVar, cast
 
-import yaml
 from alpasim_utils.scenario import VehicleConfig
+from alpasim_utils.yaml_utils import load_yaml_dict
 from omegaconf import MISSING, OmegaConf
 
 C = TypeVar("C")
 
 
-def typed_parse_config(path: str, config_type: Type[C]) -> C:
+def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
     """Reads a yaml file at `path` and parses it into a provided type using omegaconf."""
-    with open(path, "r") as yaml_content:
-        yaml_config = OmegaConf.create(yaml.safe_load(yaml_content))
+    yaml_config = OmegaConf.create(load_yaml_dict(path))
 
     schema = OmegaConf.structured(config_type)
     config: C = cast(C, OmegaConf.merge(schema, yaml_config))
@@ -160,31 +160,16 @@ class RouteGeneratorType(Enum):
 
 
 @dataclass
-class EgomotionNoiseModelConfig:
-    enabled: bool = False
-    cov_x: float = 0.05  # [m^2 / s]
-    cov_y: float = 0.05  # [m^2 / s]
-    cov_z: float = 0.0  # [m^2 / s]
-    time_constant_position: float = 3.0  # [s]
-    cov_orientation_x: float = 0.0  # [rad^2 / s]
-    cov_orientation_y: float = 0.0  # [rad^2 / s]
-    cov_orientation_z: float = 0.0007  # [rad^2 / s]
-    time_constant_orientation: float = 5.0  # [s]
-
-
-@dataclass
-class ScenarioConfig:
+class SimulationConfig:
     """
-    Groups the config parameters of a single scenario.
-    A full alpasim config includes an arbitrary number of scenarios to be simulated.
+    Shared simulation parameters — applies to all scenes.
     """
 
-    scene_id: str = MISSING
     n_sim_steps: int = MISSING
     n_rollouts: int = MISSING
 
     control_timestep_us: int = 100_000
-    egopose_interval_us: int = 100_000  # 10 Hz
+    pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
     force_gt_duration_us: int = 500_000  # 0.5s
     time_start_offset_us: int = (
         250_000  # 0.25s: there are often weird artifacts at the very start of a scene
@@ -212,10 +197,6 @@ class ScenarioConfig:
         0  # models time delays from image capture to planner output to controller
     )
 
-    egomotion_noise: EgomotionNoiseModelConfig = field(
-        default_factory=lambda: EgomotionNoiseModelConfig()
-    )
-
     route_generator_type: RouteGeneratorType = RouteGeneratorType.MAP
 
     # Whether to send optional messages to the driver
@@ -227,6 +208,14 @@ class ScenarioConfig:
 
     # Flag to enable grouping of render requests
     group_render_requests: bool = False
+
+
+@dataclass
+class SceneConfig:
+    """Scene to simulate and number of rollouts to run for it."""
+
+    scene_id: str = MISSING
+    n_rollouts: Optional[int] = None  # None = use SimulationConfig.n_rollouts
 
 
 @dataclass
@@ -248,11 +237,15 @@ class UserEndpointConfig:
 class UserSimulatorConfig:
     """The section of simulator config created manually by the user"""
 
-    scenarios: list[ScenarioConfig] = MISSING
+    simulation_config: SimulationConfig = MISSING
+    scenes: list[SceneConfig] = MISSING
     enable_autoresume: bool = False
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
+    # Max worker-local artifact cache size.
+    # None = unlimited, 0 = disable cache and always reload artifacts.
+    artifact_cache_size: Optional[int] = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.

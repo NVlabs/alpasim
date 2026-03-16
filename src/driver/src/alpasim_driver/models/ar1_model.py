@@ -15,6 +15,7 @@ from alpamayo_r1.geometry.rotation import so3_to_yaw_torch
 from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
 from alpasim_utils.geometry import Trajectory
 
+from ..schema import ModelConfig
 from .base import (
     BaseTrajectoryModel,
     CameraImages,
@@ -147,6 +148,24 @@ class AR1Model(BaseTrajectoryModel):
     DEFAULT_CONTEXT_LENGTH = 4
     # Default output frequency (Hz)
     OUTPUT_FREQUENCY_HZ = 10
+    IMAGE_INPUT_FREQUENCY_HZ = 10  # Expected input frame rate per camera
+
+    @classmethod
+    def from_config(
+        cls,
+        model_cfg: ModelConfig,
+        device: torch.device,
+        camera_ids: list[str],
+        context_length: int | None,
+        output_frequency_hz: int,
+    ) -> "AR1Model":
+        """Create AR1Model from driver configuration."""
+        return cls(
+            checkpoint_path=model_cfg.checkpoint_path,
+            device=device,
+            camera_ids=camera_ids,
+            context_length=context_length or cls.DEFAULT_CONTEXT_LENGTH,
+        )
 
     def __init__(
         self,
@@ -216,6 +235,55 @@ class AR1Model(BaseTrajectoryModel):
         """AR1 reasons about navigation from context, no explicit command encoding."""
         return None
 
+    def _select_frames_at_target_rate(
+        self,
+        frames: list[tuple[int, np.ndarray]],
+    ) -> list[tuple[int, np.ndarray]]:
+        """Select frames that best approximate 10Hz spacing.
+
+        When more frames are available than context_length (e.g. cameras
+        producing frames faster than 10Hz), selects the subset whose
+        timestamps most closely match evenly-spaced intervals at
+        IMAGE_INPUT_FREQUENCY_HZ, anchored at the most recent frame.
+
+        Args:
+            frames: List of (timestamp_us, image) tuples for a single camera.
+
+        Returns:
+            List of up to context_length (timestamp_us, image) tuples in
+            chronological order.
+        """
+        if len(frames) <= self._context_length:
+            return frames
+
+        sorted_frames = sorted(frames, key=lambda x: x[0])
+        t0 = sorted_frames[-1][0]
+        interval_us = int(1_000_000 / self.IMAGE_INPUT_FREQUENCY_HZ)
+
+        # Target timestamps from oldest to newest
+        targets = [
+            t0 - (self._context_length - 1 - i) * interval_us
+            for i in range(self._context_length)
+        ]
+
+        selected: list[tuple[int, np.ndarray]] = []
+        used_indices: set[int] = set()
+
+        for target_ts in targets:
+            best_idx = -1
+            best_dist = float("inf")
+            for idx, (ts, _) in enumerate(sorted_frames):
+                if idx in used_indices:
+                    continue
+                dist = abs(ts - target_ts)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+            used_indices.add(best_idx)
+            selected.append(sorted_frames[best_idx])
+
+        return selected
+
     def _preprocess_images(self, camera_images: CameraImages) -> torch.Tensor:
         """Preprocess multi-camera images for AR1.
 
@@ -271,13 +339,20 @@ class AR1Model(BaseTrajectoryModel):
         """
         self._validate_cameras(prediction_input.camera_images)
 
+        # Downsample frames to approximate 10Hz spacing when cameras produce
+        # frames faster than the model's expected input rate.
+        camera_images = {
+            cam_id: self._select_frames_at_target_rate(frames)
+            for cam_id, frames in prediction_input.camera_images.items()
+        }
+
         # Check context length
         for cam_id in self._camera_ids:
-            if len(prediction_input.camera_images[cam_id]) != self._context_length:
+            if len(camera_images[cam_id]) != self._context_length:
                 logger.warning(
                     "AR1 expects %d frames per camera, got %d for %s",
                     self._context_length,
-                    len(prediction_input.camera_images[cam_id]),
+                    len(camera_images[cam_id]),
                     cam_id,
                 )
                 return ModelPrediction(
@@ -285,23 +360,49 @@ class AR1Model(BaseTrajectoryModel):
                     headings=np.zeros(self._pred_num_waypoints),
                 )
 
-        # Check ego history length
-        if len(prediction_input.ego_pose_history) < self.NUM_HISTORY_STEPS:
+        # Check ego history covers the required time span for interpolation.
+        # We need at least 2 poses spanning (NUM_HISTORY_STEPS-1)*HISTORY_TIME_STEP
+        # seconds back from the current timestamp. The interpolation in
+        # _build_ego_history will fill in the 16 target samples from these poses.
+        required_span_us = (self.NUM_HISTORY_STEPS - 1) * self.HISTORY_TIME_STEP * 1e6
+        if (
+            prediction_input.ego_pose_history is None
+            or len(prediction_input.ego_pose_history) < 2
+        ):
+            num_poses = (
+                0
+                if prediction_input.ego_pose_history is None
+                else len(prediction_input.ego_pose_history)
+            )
             logger.warning(
-                "Not enough pose history: %d < %d. Using zero history, output will be invalid.",
-                len(prediction_input.ego_pose_history),
-                self.NUM_HISTORY_STEPS,
+                "Not enough pose history: %d < 2. Returning empty trajectory.",
+                num_poses,
             )
             return ModelPrediction(
-                trajectory_xy=np.zeros((self._pred_num_waypoints, 2)),
-                headings=np.zeros(self._pred_num_waypoints),
+                trajectory_xy=np.zeros((0, 2)),
+                headings=np.zeros(0),
             )
 
         # Get current timestamp from the latest frame
         latest_timestamp = max(
-            max(ts for ts, _ in frames)
-            for frames in prediction_input.camera_images.values()
+            max(ts for ts, _ in frames) for frames in camera_images.values()
         )
+        earliest_required_us = latest_timestamp - required_span_us
+        earliest_available_us = min(
+            p.timestamp_us for p in prediction_input.ego_pose_history
+        )
+        if earliest_available_us > earliest_required_us:
+            logger.warning(
+                "Pose history too short: available span %.1fms < required %.1fms. "
+                "Returning empty trajectory.",
+                (latest_timestamp - earliest_available_us) / 1e3,
+                required_span_us / 1e3,
+            )
+            return ModelPrediction(
+                trajectory_xy=np.zeros((0, 2)),
+                headings=np.zeros(0),
+            )
+
         ego_history_xyz, ego_history_rot = build_ego_history(
             prediction_input.ego_pose_history,
             latest_timestamp,
@@ -310,7 +411,7 @@ class AR1Model(BaseTrajectoryModel):
         )
 
         # Preprocess images
-        image_frames = self._preprocess_images(prediction_input.camera_images)
+        image_frames = self._preprocess_images(camera_images)
 
         # Create chat message using AR1's helper
         # Flatten camera and temporal dimensions for the message

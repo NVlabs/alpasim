@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import argparse
 import asyncio
@@ -28,6 +28,10 @@ async def print_asl(
             if just_types:
                 print(log_entry.WhichOneof("log_entry"))
             else:
+                if log_entry.WhichOneof("log_entry") == "driver_camera_image":
+                    log_entry.driver_camera_image.camera_image.image_bytes = (
+                        b"<image data redacted>"
+                    )
                 print(log_entry)
 
         message_i += 1

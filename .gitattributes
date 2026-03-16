@@ -6,4 +6,3 @@ src/ddb/tests/test-case.rclog filter=lfs diff=lfs merge=lfs -text
 **/*.usdz filter=lfs diff=lfs merge=lfs -text
 src/runtime/tests/data/integration/0.asl filter=lfs diff=lfs merge=lfs -text
 src/tools/tests/data/last.usdz filter=lfs diff=lfs merge=lfs -text
-images/alpasim-architecture.png filter=lfs diff=lfs merge=lfs -text

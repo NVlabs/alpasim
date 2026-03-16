@@ -1,18 +1,100 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-"""
-Integration tests for AlpaSim runtime using pytest-grpc with separate servers for each service.
-This properly tests the runtime's ability to connect to different services on
-different ports.
+"""Manual integration replay test for runtime request determinism.
 
-See alpasim_runtime/replay_services/README.md for instructions on how to generate
-the needed files to be replayed.
+This test boots one replay gRPC server per service and re-runs runtime against
+recorded artifacts. It asserts that runtime emits requests matching the ASL
+recording exactly (ignoring expected dynamic fields).
 
-To run the test, run:
+How to refresh replay artifacts (ASL/USDZ/YAML)
+------------------------------------------------
+Regenerate these files in `src/runtime/tests/data/integration/` when runtime
+behavior intentionally changes and this test needs a new baseline:
+
+- `rollout.asl`
+- `generated-network-config.yaml`
+- `generated-user-config-0.yaml`
+- `eval-config.yaml`
+- one scene USDZ file (UUID-named, e.g. `9c264c49-82a8-4344-ada1-d93791120c27.usdz`)
+
+1) Generate a fresh local rollout (from `src/wizard`):
+
+```bash
+RUN_DIR=/path/to/output/.wizard
+uv run python -m alpasim_wizard \
+    wizard.log_dir=${RUN_DIR} \
+    +deploy=local \
+    runtime.endpoints.trafficsim.skip=False \
+    +controller_ndas=noisefree_no_latency \
+    scenes.scene_ids="[clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e]" \
+    runtime.simulation_config.n_sim_steps=60
 ```
-pytest -m 'manual'
+
+2) Copy the generated artifacts from the run output into
+`src/runtime/tests/data/integration/`, using the file names listed above.
+
+3) If the scene changed, update the USDZ file accordingly:
+
+- Add the new `.usdz` matching the scene/map UUID.
+- Remove the old one if obsolete.
+- Update `REQUIRED_TEST_FILES["usdz"]` in this file to the new name.
+
+3a) Trim the USDZ to the minimum runtime inputs (recommended):
+
+The raw wizard USDZ can be very large because it includes neural rendering
+artifacts that replay tests do not use. For this test, runtime only needs:
+
+- `metadata.yaml` (scene_id and metadata)
+- `rig_trajectories.json` (ego trajectory and XODR transform)
+- `sequence_tracks.json` (traffic trajectories)
+- map data (`map.xodr` for this scene; alternatively `map_data/` or `clipgt/`)
+
+Example repack command (replace `SRC_USDZ`/`DST_USDZ`):
+
+```bash
+python - <<'PY'
+import zipfile
+
+SRC_USDZ = "/path/to/full.usdz"
+DST_USDZ = "/path/to/trimmed.usdz"
+KEEP = [
+    "metadata.yaml",
+    "rig_trajectories.json",
+    "sequence_tracks.json",
+    "map.xodr",
+]
+
+with zipfile.ZipFile(SRC_USDZ, "r") as zin, zipfile.ZipFile(
+    DST_USDZ, "w", compression=zipfile.ZIP_STORED
+) as zout:
+    for name in KEEP:
+        data = zin.read(name)
+        info = zin.getinfo(name)
+        new_info = zipfile.ZipInfo(filename=name, date_time=info.date_time)
+        new_info.external_attr = info.external_attr
+        new_info.compress_type = zipfile.ZIP_STORED
+        zout.writestr(new_info, data)
+PY
 ```
+
+If your scene has `map_data/` or `clipgt/` but no `map.xodr`, keep those map
+directories instead.
+
+4) Track large artifacts with Git LFS:
+
+```bash
+git lfs track "src/runtime/tests/data/integration/*.asl"
+git lfs track "src/runtime/tests/data/integration/*.usdz"
+```
+
+5) Validate the updated baseline:
+
+```bash
+uv run pytest src/runtime/tests/test_runtime_integration_replay.py -m manual
+```
+
+Reference: `src/runtime/alpasim_runtime/replay_services/README.md`.
 """
 
 import argparse
@@ -20,8 +102,7 @@ import logging
 import subprocess
 from concurrent import futures
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Type
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict, Generator, Optional, Tuple, Type
 
 import pytest
 import yaml
@@ -58,7 +139,8 @@ REQUIRED_TEST_FILES = {
     "asl": "rollout.asl",
     "network_config": "generated-network-config.yaml",
     "user_config": "generated-user-config-0.yaml",
-    "usdz": "6ea1c7a3-98b7-4adc-b774-4d9526371a0b.usdz",  # At least one USDZ file
+    "eval_config": "eval-config.yaml",
+    "usdz": "9c264c49-82a8-4344-ada1-d93791120c27.usdz",  # At least one USDZ file
 }
 
 
@@ -166,6 +248,12 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
     log_dir = tmp_path / "output"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Create run_metadata.yaml required by get_run_name()
+    run_metadata = log_dir / "run_metadata.yaml"
+    run_metadata.write_text("run_name: integration_replay_test\n")
+
+    eval_config_path = test_data_dir / REQUIRED_TEST_FILES["eval_config"]
+
     print("network_config:")
     print(yaml.dump(network_config, default_flow_style=False, indent=2))
     print("user_config:")
@@ -174,6 +262,7 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
     return {
         "user_config": str(test_user_config),
         "network_config": str(test_network_config),
+        "eval_config": str(eval_config_path),
         "usdz_glob": str(test_data_dir / "*.usdz"),
         "log_dir": str(log_dir),
     }
@@ -182,10 +271,10 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
 @pytest.fixture(scope="function")
 def all_services(
     asl_reader: Optional[ASLReader], runtime_configs: Dict[str, str]
-) -> None:
+) -> Generator[None, None, None]:
     """Create and start all service servers."""
     # Load network config to get service ports
-    network_config = yaml.safe_load(open(runtime_configs["network_config"]))
+    network_config = yaml.safe_load(Path(runtime_configs["network_config"]).read_text())
 
     servers = {}
 
@@ -216,37 +305,27 @@ def all_services(
         server.stop(0)
 
 
-@patch("concurrent.futures.ProcessPoolExecutor")
 @pytest.mark.manual
 async def test_run_simulation_full(
-    mock_executor_class: MagicMock,
     runtime_configs: Dict[str, str],
     asl_reader: Any,
     all_services: None,  # Needed to start the services
 ) -> None:
-    """Test the complete run_simulation flow with multiple servers."""
-    # Mock the process pool to run in-thread for testing
-    mock_executor = MagicMock()
-    mock_executor_class.return_value.__enter__.return_value = mock_executor
+    """Test the complete run_simulation flow with replay servers.
 
-    # Make submit() run the function immediately in the same thread
-    def immediate_submit(func: Any, *args: Any, **kwargs: Any) -> MagicMock:
-        future = MagicMock()
-        try:
-            result = func(*args, **kwargs)
-            future.result.return_value = result
-        except Exception as e:
-            future.result.side_effect = e
-        return future
-
-    mock_executor.submit.side_effect = immediate_submit
-
-    # Create args namespace as if from command line
+    Verifies that re-running the runtime against recorded ASL responses
+    produces identical requests, confirming deterministic behavior after
+    code changes.
+    """
+    # Create args namespace matching what create_arg_parser() produces
     args = argparse.Namespace(
         user_config=runtime_configs["user_config"],
         network_config=runtime_configs["network_config"],
         usdz_glob=runtime_configs["usdz_glob"],
         log_dir=runtime_configs["log_dir"],
+        eval_config=runtime_configs["eval_config"],
+        array_job_dir=None,
+        log_level="INFO",
     )
 
     # Run the full simulation

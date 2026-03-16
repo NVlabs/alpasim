@@ -4,30 +4,25 @@
 """Configuration schema for driver service supporting multiple model backends."""
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Optional
 
 from omegaconf import MISSING
-
-
-class ModelType(str, Enum):
-    """Supported model types."""
-
-    VAM = "vam"
-    TRANSFUSER = "transfuser"
-    ALPAMAYO_R1 = "alpamayo_r1"
-    MANUAL = "manual"
 
 
 @dataclass
 class ModelConfig:
     """Unified model configuration for all model types.
 
+    ``model_type`` is the entry-point name registered under the
+    ``alpasim.models`` group (e.g. ``"ar1"``, ``"vam"``, ``"transfuser"``,
+    ``"manual"``).  The driver resolves it at runtime via the plugin
+    registry, so new models can be added without changing driver code.
+
     Note: dtype is not exposed in config - each model hardcodes its expected dtype.
     VAM uses float16, Transfuser uses its TrainingConfig's torch_float_type.
     """
 
-    model_type: ModelType = MISSING  # Type of model to use (VAM or TRANSFUSER)
+    model_type: str = MISSING  # Entry-point name in the alpasim.models registry
     checkpoint_path: str = MISSING  # Path to model checkpoint (.pt/.pth)
     device: str = MISSING  # Device to run inference on (cuda/cpu)
     tokenizer_path: Optional[str] = None  # Only required for VAM

@@ -69,18 +69,17 @@ def test_alpasimvdc_one_step(dt_propagation_us) -> None:
     TOLERANCE_EST = 1e-1 * scale  # higher noise for estimation
 
     # sanity check that the integration is approximately working
-    assert response.HasField("pose_local_to_rig")
-    assert response.pose_local_to_rig.pose.vec.x == pytest.approx(
+    assert len(response.states) > 0
+    final = response.states[-1]
+    assert final.pose_local_to_rig.vec.x == pytest.approx(
         X_ORIGINAL + get_vx() * dt_propagation_us / 1e6, abs=TOLERANCE_GT
     )
-    assert response.pose_local_to_rig.pose.vec.y == pytest.approx(
-        Y_ORIGINAL, abs=TOLERANCE_GT
-    )
+    assert final.pose_local_to_rig.vec.y == pytest.approx(Y_ORIGINAL, abs=TOLERANCE_GT)
 
-    assert response.pose_local_to_rig_estimated.pose.vec.x == pytest.approx(
+    assert final.pose_local_to_rig_estimated.vec.x == pytest.approx(
         X_ORIGINAL + get_vx() * dt_propagation_us / 1e6, abs=TOLERANCE_EST
     )
-    assert response.pose_local_to_rig_estimated.pose.vec.y == pytest.approx(
+    assert final.pose_local_to_rig_estimated.vec.y == pytest.approx(
         Y_ORIGINAL, abs=TOLERANCE_EST
     )
 
@@ -216,20 +215,21 @@ def run_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
             run_controller_and_vehicle_model_request
         )
 
-        timestamp = response.pose_local_to_rig.timestamp_us
+        final = response.states[-1]
+        timestamp = final.timestamp_us
 
         state = common_pb2.StateAtTime()
-        state.timestamp_us = response.pose_local_to_rig.timestamp_us
-        state.pose.CopyFrom(response.pose_local_to_rig.pose)
+        state.timestamp_us = final.timestamp_us
+        state.pose.CopyFrom(final.pose_local_to_rig)
         if i == IDX_KICK:
             # Note: the API doesn't return the velocity, so we have to check the
             # displacement
             dt_us = (
-                response.pose_local_to_rig.timestamp_us
+                final.timestamp_us
                 - run_controller_and_vehicle_model_request.state.timestamp_us
             )
             dx = (
-                response.pose_local_to_rig.pose.vec.x
+                final.pose_local_to_rig.vec.x
                 - run_controller_and_vehicle_model_request.state.pose.vec.x
             )
             approx_velocity = dx / (dt_us * 1e-6)
@@ -242,8 +242,8 @@ def run_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
     assert state.pose.vec.y == pytest.approx(0.0, abs=0.1)
 
     # sanity check noise effects
-    gt_position_in_local = response.pose_local_to_rig.pose.vec
-    estimated_position_in_local = response.pose_local_to_rig_estimated.pose.vec
+    gt_position_in_local = final.pose_local_to_rig.vec
+    estimated_position_in_local = final.pose_local_to_rig_estimated.vec
     assert gt_position_in_local.x == pytest.approx(
         estimated_position_in_local.x, abs=1.0e-5
     )

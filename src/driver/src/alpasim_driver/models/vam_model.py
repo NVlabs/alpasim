@@ -18,6 +18,7 @@ import torch.serialization
 from vam.action_expert import VideoActionModelInference
 from vam.datalib.transforms import NeuroNCAPTransform
 
+from ..schema import ModelConfig
 from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,26 @@ class VAMModel(BaseTrajectoryModel):
     # NeuroNCAPTransform expects 900x1600 input
     EXPECTED_HEIGHT = 900
     EXPECTED_WIDTH = 1600
+
+    @classmethod
+    def from_config(
+        cls,
+        model_cfg: ModelConfig,
+        device: torch.device,
+        camera_ids: list[str],
+        context_length: int | None,
+        output_frequency_hz: int,
+    ) -> "VAMModel":
+        """Create VAMModel from driver configuration."""
+        if model_cfg.tokenizer_path is None:
+            raise ValueError("VAM model requires tokenizer_path")
+        return cls(
+            checkpoint_path=model_cfg.checkpoint_path,
+            tokenizer_path=model_cfg.tokenizer_path,
+            device=device,
+            camera_ids=camera_ids,
+            context_length=context_length or 8,
+        )
 
     def __init__(
         self,

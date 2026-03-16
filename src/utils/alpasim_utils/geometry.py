@@ -24,7 +24,7 @@ from alpasim_grpc.v0 import common_pb2 as grpc_types
 from alpasim_grpc.v0 import egodriver_pb2 as ego_grpc
 
 # Re-export Rust types directly - no Python wrappers needed
-from utils_rs import Polyline, Pose, Trajectory
+from utils_rs import DynamicTrajectory, Polyline, Pose, Trajectory
 
 __all__ = [
     # Pose
@@ -44,6 +44,11 @@ __all__ = [
     "trajectory_velocities_cubic",
     "trajectory_accelerations_cubic",
     "trajectory_yaw_rates_cubic",
+    # DynamicTrajectory
+    "DynamicTrajectory",
+    "dynamic_state_to_array",
+    "dynamic_states_to_array",
+    "array_to_dynamic_states",
 ]
 
 
@@ -229,3 +234,53 @@ def trajectory_yaw_rates_cubic(
         deriv=1,
         smoothing_factor=smoothing_factor,
     )
+
+
+# =============================================================================
+# DynamicTrajectory helpers
+# =============================================================================
+
+_DYNAMIC_STATE_FIELDS = (
+    "linear_velocity",
+    "angular_velocity",
+    "linear_acceleration",
+    "angular_acceleration",
+)
+
+
+def dynamic_state_to_array(state: grpc_types.DynamicState) -> np.ndarray:
+    """Convert a DynamicState protobuf to a (12,) f64 array."""
+    row = np.empty(12, dtype=np.float64)
+    for i, fname in enumerate(_DYNAMIC_STATE_FIELDS):
+        vec = getattr(state, fname)
+        row[i * 3 : i * 3 + 3] = (vec.x, vec.y, vec.z)
+    return row
+
+
+def dynamic_states_to_array(states: list[grpc_types.DynamicState]) -> np.ndarray:
+    """Convert a list of DynamicState protobufs to an (N, 12) f64 array."""
+    arr = np.empty((len(states), 12), dtype=np.float64)
+    for j, state in enumerate(states):
+        for i, fname in enumerate(_DYNAMIC_STATE_FIELDS):
+            vec = getattr(state, fname)
+            arr[j, i * 3 : i * 3 + 3] = (vec.x, vec.y, vec.z)
+    return arr
+
+
+def array_to_dynamic_states(arr: np.ndarray) -> list[grpc_types.DynamicState]:
+    """Convert an (N, 12) f64 array to a list of DynamicState protobufs."""
+    results: list[grpc_types.DynamicState] = []
+    for row in arr:
+        results.append(
+            grpc_types.DynamicState(
+                **{
+                    fname: grpc_types.Vec3(
+                        x=row[i * 3],
+                        y=row[i * 3 + 1],
+                        z=row[i * 3 + 2],
+                    )
+                    for i, fname in enumerate(_DYNAMIC_STATE_FIELDS)
+                }
+            )
+        )
+    return results

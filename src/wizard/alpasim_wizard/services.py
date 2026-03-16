@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Service manager for organizing and building services."""
 
@@ -171,7 +171,9 @@ class ContainerDefinition:
         if getattr(context.cfg.wizard, "validate_mount_points", False):
             for volume in volumes:
                 if not volume.host_exists():
-                    raise OSError(f"{volume=} does not exist on host")
+                    raise FileNotFoundError(
+                        f"Mount point does not exist: {volume.host}"
+                    )
 
         # Generate container UUID from first service instance
         container_idx = (
@@ -250,13 +252,7 @@ class ContainerSet:
     """Container organization for deployment strategies."""
 
     sim: list[ContainerDefinition] = field(default_factory=list)
-    eval: list[ContainerDefinition] = field(default_factory=list)
-    agg: list[ContainerDefinition] = field(default_factory=list)
     runtime: list[ContainerDefinition] = field(default_factory=list)
-
-    def all_containers(self) -> list[ContainerDefinition]:
-        """Get all containers in execution order."""
-        return self.sim + self.runtime + self.eval + self.agg
 
 
 def create_gpu_assigner(gpu_ids: Optional[List[int]]) -> Iterator[Optional[int]]:
@@ -327,7 +323,7 @@ def build_container_set(
         ):
             raise RuntimeError(
                 f"Service {service_name} requested GPUs {service_config.gpus} "
-                f"but only 0 .. {num_gpus-1} are available."
+                f"but only 0 .. {num_gpus - 1} are available."
             )
 
         # Determine number of containers
@@ -387,8 +383,6 @@ def build_container_set(
 
     # Build containers for each service type
     sim_containers = []
-    eval_containers = []
-    agg_containers = []
     runtime_containers = []
 
     # Simulation services
@@ -419,23 +413,9 @@ def build_container_set(
                     build_service_containers(name, config, cfg.runtime)
                 )
 
-    # Evaluation services
-    for name in cfg.wizard.run_eval_services or []:
-        if config := getattr(cfg.services, name, None):
-            eval_containers.extend(build_service_containers(name, config))
-
-    # Aggregation services
-    for name in cfg.wizard.run_aggregation_services or []:
-        if config := getattr(cfg.services, name, None):
-            agg_containers.extend(build_service_containers(name, config))
-
     logger.info("Built %d simulation containers", len(sim_containers))
-    logger.info("Built %d evaluation containers", len(eval_containers))
-    logger.info("Built %d aggregation containers", len(agg_containers))
 
     return ContainerSet(
         sim=sim_containers,
-        eval=eval_containers,
-        agg=agg_containers,
         runtime=runtime_containers,
     )

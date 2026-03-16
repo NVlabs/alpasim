@@ -1,7 +1,10 @@
 # @package _global_
 
+# 4-camera configuration for Alpamayo-R1
+# Based on working 4cam_1080.yaml pattern
+
 runtime:
-  default_scenario_parameters:
+  simulation_config:
     cameras:
     - # Front wide camera
       # NRE will resize to match original aspect ratio.

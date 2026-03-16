@@ -48,7 +48,7 @@ impl Trajectory {
     /// Raises:
     ///     ValueError: If timestamps are not strictly increasing or shapes don't match.
     #[new]
-    fn new(
+    pub(crate) fn new(
         py: Python<'_>,
         timestamps: PyObject,
         positions: PyObject,
@@ -164,7 +164,7 @@ impl Trajectory {
 
     /// Create an empty Trajectory.
     #[staticmethod]
-    fn create_empty() -> Self {
+    pub(crate) fn create_empty() -> Self {
         Self { poses: Vec::new() }
     }
 
@@ -177,10 +177,7 @@ impl Trajectory {
     /// Returns:
     ///     A new Trajectory instance.
     #[staticmethod]
-    fn from_poses(
-        timestamps: PyReadonlyArray1<'_, u64>,
-        poses: Vec<Pose>,
-    ) -> PyResult<Self> {
+    fn from_poses(timestamps: PyReadonlyArray1<'_, u64>, poses: Vec<Pose>) -> PyResult<Self> {
         let ts = timestamps.as_slice()?;
         let n = ts.len();
 
@@ -198,7 +195,10 @@ impl Trajectory {
                 if ts[i] <= ts[i - 1] {
                     return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                         "timestamps must be strictly increasing, but ts[{}]={} <= ts[{}]={}",
-                        i, ts[i], i - 1, ts[i - 1]
+                        i,
+                        ts[i],
+                        i - 1,
+                        ts[i - 1]
                     )));
                 }
             }
@@ -210,7 +210,9 @@ impl Trajectory {
             .map(|(&t, p)| TimestampedPose::new(t, *p))
             .collect();
 
-        Ok(Self { poses: timestamped_poses })
+        Ok(Self {
+            poses: timestamped_poses,
+        })
     }
 
     /// Append a new pose with absolute coordinates.
@@ -218,7 +220,7 @@ impl Trajectory {
     /// Args:
     ///     timestamp: Timestamp in microseconds (must be > last timestamp)
     ///     pose: The Pose to append
-    fn update_absolute(&mut self, timestamp: u64, pose: &Pose) -> PyResult<()> {
+    pub(crate) fn update_absolute(&mut self, timestamp: u64, pose: &Pose) -> PyResult<()> {
         // Validate timestamp is strictly increasing
         if let Some(last) = self.poses.last() {
             if timestamp <= last.timestamp_us {
@@ -287,27 +289,21 @@ impl Trajectory {
     /// Get the last pose. Raises IndexError if empty.
     #[getter]
     fn last_pose(&self) -> PyResult<Pose> {
-        self.poses
-            .last()
-            .map(|tp| tp.pose)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyIndexError, _>(
-                    "Cannot get last_pose of empty trajectory",
-                )
-            })
+        self.poses.last().map(|tp| tp.pose).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyIndexError, _>(
+                "Cannot get last_pose of empty trajectory",
+            )
+        })
     }
 
     /// Get the first pose. Raises IndexError if empty.
     #[getter]
     fn first_pose(&self) -> PyResult<Pose> {
-        self.poses
-            .first()
-            .map(|tp| tp.pose)
-            .ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyIndexError, _>(
-                    "Cannot get first_pose of empty trajectory",
-                )
-            })
+        self.poses.first().map(|tp| tp.pose).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyIndexError, _>(
+                "Cannot get first_pose of empty trajectory",
+            )
+        })
     }
 
     /// Positions as 2D numpy array of shape (N, 3).
@@ -434,7 +430,7 @@ impl Trajectory {
     }
 
     /// Concatenate another trajectory to the end.
-    fn concat(&self, other: &Trajectory) -> PyResult<Self> {
+    pub(crate) fn concat(&self, other: &Trajectory) -> PyResult<Self> {
         if other.poses.is_empty() {
             return Ok(self.clone());
         }
@@ -473,7 +469,7 @@ impl Trajectory {
     /// Returns:
     ///     A new Trajectory with transformed poses.
     #[pyo3(signature = (transform, is_relative = false))]
-    fn transform(&self, transform: &Pose, is_relative: bool) -> Self {
+    pub(crate) fn transform(&self, transform: &Pose, is_relative: bool) -> Self {
         if self.poses.is_empty() {
             return Self::create_empty();
         }
@@ -546,7 +542,11 @@ impl Trajectory {
     /// Returns:
     ///     2D numpy array of shape (N, 3) with velocity vectors.
     #[pyo3(signature = (method = "centered"))]
-    fn velocities<'py>(&self, py: Python<'py>, method: &str) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    fn velocities<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         self.compute_position_derivative(py, 1, method)
     }
 
@@ -558,7 +558,11 @@ impl Trajectory {
     /// Returns:
     ///     2D numpy array of shape (N, 3) with acceleration vectors.
     #[pyo3(signature = (method = "centered"))]
-    fn accelerations<'py>(&self, py: Python<'py>, method: &str) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    fn accelerations<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         self.compute_position_derivative(py, 2, method)
     }
 
@@ -594,7 +598,11 @@ impl Trajectory {
     /// Returns:
     ///     1D numpy array of shape (N,) with yaw acceleration values.
     #[pyo3(signature = (method = "centered"))]
-    fn yaw_accelerations<'py>(&self, py: Python<'py>, method: &str) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    fn yaw_accelerations<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+    ) -> PyResult<Bound<'py, PyArray1<f32>>> {
         self.compute_yaw_derivative(py, 2, method)
     }
 
@@ -606,7 +614,7 @@ impl Trajectory {
     ///
     /// Returns:
     ///     A new Trajectory with the interpolated poses at the given timestamps.
-    fn interpolate(
+    pub(crate) fn interpolate(
         &self,
         target_timestamps: PyReadonlyArray1<'_, u64>,
     ) -> PyResult<Trajectory> {
@@ -731,7 +739,7 @@ impl Trajectory {
     ///
     /// Returns:
     ///     A new Trajectory clipped to the specified range.
-    fn clip(&self, start_us: u64, end_us: u64) -> PyResult<Self> {
+    pub(crate) fn clip(&self, start_us: u64, end_us: u64) -> PyResult<Self> {
         if start_us > end_us {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "start_us must be <= end_us",
@@ -778,7 +786,7 @@ impl Trajectory {
     ///
     /// The trajectories must be continuous: either they have one overlapping
     /// timestamp (with matching pose) or self ends before other starts.
-    fn append(&self, other: &Trajectory) -> PyResult<Self> {
+    pub(crate) fn append(&self, other: &Trajectory) -> PyResult<Self> {
         if self.poses.is_empty() {
             return Ok(other.clone());
         }
@@ -825,6 +833,18 @@ impl Trajectory {
 }
 
 impl Trajectory {
+    /// Expose internal poses for sibling crate modules (not Python-facing).
+    #[inline]
+    pub fn poses_ref(&self) -> &[TimestampedPose] {
+        &self.poses
+    }
+
+    /// Construct from a pre-validated Vec of TimestampedPose (internal use).
+    #[inline]
+    pub fn from_entries(poses: Vec<TimestampedPose>) -> Self {
+        Self { poses }
+    }
+
     /// Create from a single pose (internal use).
     fn from_single_pose(timestamp: u64, pose: &Pose) -> Self {
         Self {
@@ -833,7 +853,7 @@ impl Trajectory {
     }
 
     /// Interpolate a single pose (internal, no Python wrapper).
-    fn interpolate_pose_internal(&self, at_us: u64) -> PyResult<Pose> {
+    pub(crate) fn interpolate_pose_internal(&self, at_us: u64) -> PyResult<Pose> {
         if self.poses.is_empty() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Cannot interpolate on empty trajectory",

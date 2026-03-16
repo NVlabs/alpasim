@@ -48,8 +48,12 @@ class ScenesConfig:
 
     # Paths
     scene_cache: str = MISSING
-    scenes_csv: str = MISSING
-    suites_csv: str = MISSING
+    scenes_csv: list[str] = MISSING
+    suites_csv: list[str] = MISSING
+
+    # Relative path within scene_cache to the sceneset directory for this run.
+    # Set automatically by the wizard; used by reeval to locate the correct USDZs.
+    sceneset_path: Optional[str] = None
 
     # Optional: path to a local directory containing *.usdz files.
     # When set, the wizard will scan this directory to generate in-memory
@@ -61,13 +65,6 @@ class ScenesConfig:
 
     # used to override services.sensorsim.image for the USDZ database service if NRE is not enabled
     nre_version_string: Optional[str] = None
-
-    # maps (nre_version, artifact_version) -> is_compatible
-    # 1. versions are version strings with dots replaced by _, i.e. 0_2_335-deadbeef
-    #    underscores will be replaced by dots when used as keys in the config
-    # 2. all versions are assumed to be compatible with themselves. Including
-    #    `artifact_compatibility_matrix.0_2_335-deadbeef.0_2_335-deadbeef` is an error
-    artifact_compatibility_matrix: dict[str, dict[str, bool]] = MISSING
 
 
 class RunMethod(Enum):
@@ -120,8 +117,6 @@ class WizardConfig:
     timeout: int = MISSING
     nr_retries: int = 3
     run_sim_services: Optional[list[str]] = MISSING
-    run_eval_services: Optional[list[str]] = MISSING
-    run_aggregation_services: Optional[list[str]] = MISSING
     debug_flags: DebugFlags = field(default_factory=DebugFlags)
 
     # Set GPU & CPU partition preferences for slurm runs.
@@ -146,8 +141,6 @@ class ServicesConfig:
     trafficsim: Optional[ServiceConfig] = MISSING
     controller: Optional[ServiceConfig] = MISSING
     runtime: RuntimeServiceConfig = MISSING
-    eval: Optional[ServiceConfig] = None
-    post_eval_aggregation: Optional[ServiceConfig] = None
 
 
 @dataclass

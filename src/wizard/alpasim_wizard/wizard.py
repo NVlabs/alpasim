@@ -74,7 +74,7 @@ class AlpasimWizard:
 
         # Do this for all run methods to generate docker compose config files.
         docker_compose_deployment = DockerComposeDeployment(self.context)
-        docker_compose_deployment.generate_docker_compose_and_run_script()
+        docker_compose_deployment.generate_docker_compose()
         slurm_deployment = SlurmDeployment(self.context)
         # Use docker compose container set for DOCKER_COMPOSE and NONE
         # (NONE generates docker-compose files that will be run manually)
@@ -96,7 +96,8 @@ class AlpasimWizard:
             docker_compose_deployment.deploy_all_services()
         elif self.context.cfg.wizard.run_method == RunMethod.NONE:
             logger.info(
-                "Scripts generated but not executed. Run %s/run.sh to start the simulation",
+                "Config generated but not executed. "
+                "Run 'docker compose up' in %s to start the simulation",
                 self.context.cfg.wizard.log_dir,
             )
 

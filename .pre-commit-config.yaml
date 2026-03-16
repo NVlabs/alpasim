@@ -1,8 +1,19 @@
 default_language_version:
   python: python3
 
-exclude: ^(.gitlab-ci.yml|cicd/gitlab/|src/grpc|tools/migration_assistant.py) # TODO(alpasim): enable in future
+exclude: ^(.gitlab-ci.yml|plugins/internal/cicd/gitlab/|src/grpc|plugins/internal/src/tools/migration_assistant.py) # TODO(alpasim): enable in future
 repos:
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        name: Insert license header (Python; only for changed files on --all-files)
+        files: \.py$
+        entry: python tools/precommit/insert_license_changed_only.py
+        args:
+          - --license-filepath=.license-header.txt
+          - --comment-style=#
+          - --use-current-year
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
@@ -16,15 +27,7 @@ repos:
       - id: check-toml
       - id: check-case-conflict
       - id: check-added-large-files
-        args: ["--maxkb=1024"]
-  - repo: https://github.com/executablebooks/mdformat
-    rev: 0.7.21
-    hooks:
-      - id: mdformat
-        args: ["--wrap", "100"]
-        additional_dependencies:
-          - mdformat-gfm  # GitHub Flavored Markdown support
-          - mdformat-myst  # Handle math blocks and front matter
+        args: ["--maxkb=3072"]
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
@@ -48,4 +51,4 @@ repos:
         files: ^src/wizard/.*\.py$
         args:
           - --config-file=mypy.ini
-        additional_dependencies: ["types-PyYAML", "hydra-core", "GitPython", "pandas","pandas-stubs", "types-aiofiles"]
+        additional_dependencies: ["types-PyYAML", "hydra-core", "GitPython", "pandas", "pandas-stubs", "polars>=1.0.0", "types-aiofiles"]

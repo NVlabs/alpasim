@@ -19,7 +19,6 @@ from eval.aggregation.modifiers import (
     RemoveTimestepsAfterEvent,
 )
 from eval.aggregation.processing import ProcessedMetricDFs
-from eval.metadata import get_metadata
 from eval.schema import EvalConfig
 from eval.video import VIDEO_FILE_NAME_FORMAT
 
@@ -145,10 +144,11 @@ def _run_aggregation_core(
         conditions = {
             "collision_at_fault": pl.col("collision_at_fault") > 0.0,
             "collision_rear": pl.col("collision_rear") > 0.0,
-            "offroad": pl.col("offroad") > 0.0,
             "dist_to_gt_trajectory": pl.col("dist_to_gt_trajectory")
             >= cfg.aggregation_modifiers.max_dist_to_gt_trajectory,
         }
+        if "offroad" in processed_dfs.df_wide_avg_t.columns:
+            conditions["offroad"] = pl.col("offroad") > 0.0
         _aggregate_eval_videos(
             job_dirs, aggregate_dir / "videos", cfg, processed_dfs, conditions
         )

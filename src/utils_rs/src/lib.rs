@@ -9,10 +9,12 @@
 use pyo3::prelude::*;
 
 mod array_utils;
+mod dynamic_trajectory;
 mod polyline;
 mod pose;
 mod trajectory;
 
+pub use dynamic_trajectory::DynamicTrajectory;
 pub use polyline::Polyline;
 pub use pose::Pose;
 pub use trajectory::Trajectory;
@@ -26,6 +28,7 @@ fn version() -> &'static str {
 /// A Python module implemented in Rust.
 #[pymodule]
 fn utils_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<DynamicTrajectory>()?;
     m.add_class::<Polyline>()?;
     m.add_class::<Pose>()?;
     m.add_class::<Trajectory>()?;

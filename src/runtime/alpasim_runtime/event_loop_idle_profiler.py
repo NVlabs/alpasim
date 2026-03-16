@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 import asyncio
 import logging
 from time import perf_counter
@@ -13,9 +16,6 @@ EVENT_LOOP_WORK_SECONDS = 0.0
 
 # Track the end time of the last select() call to measure work time
 _LAST_SELECT_END: Optional[float] = None
-
-# Track which loops have been patched (by id) to avoid double-patching
-_PATCHED_LOOP_IDS: set[int] = set()
 
 
 def install_event_loop_idle_profiler(
@@ -36,13 +36,6 @@ def install_event_loop_idle_profiler(
     """
     global _LAST_SELECT_END
 
-    loop_id = id(loop)
-    if loop_id in _PATCHED_LOOP_IDS:
-        logger.debug(
-            "Event loop idle profiler already installed on this loop, skipping"
-        )
-        return
-
     loop_cls_name = loop.__class__.__name__
     selector = getattr(loop, "_selector", None)
 
@@ -50,6 +43,14 @@ def install_event_loop_idle_profiler(
         logger.warning(
             f"Event loop idle profiler: loop '{loop_cls_name}' has no _selector attribute. "
             "Profiling disabled."
+        )
+        return
+
+    # Check if this selector is already patched by looking for our marker attribute.
+    # This is more robust than tracking loop IDs, which can be reused after GC.
+    if getattr(selector, "_idle_profiler_patched", False):
+        logger.debug(
+            "Event loop idle profiler already installed on this loop, skipping"
         )
         return
 
@@ -88,7 +89,7 @@ def install_event_loop_idle_profiler(
         return events
 
     selector.select = profiling_select
-    _PATCHED_LOOP_IDS.add(loop_id)
+    selector._idle_profiler_patched = True
     logger.info("Event loop idle profiler installed")
 
 
@@ -123,19 +124,15 @@ def reset_event_loop_idle_stats() -> None:
     Reset all event loop statistics to zero.
 
     Useful for testing or when starting a new measurement period.
-    Also clears the set of patched loop IDs to allow re-patching loops
-    that may reuse memory addresses from previously garbage-collected loops.
     """
     global EVENT_LOOP_IDLE_SECONDS
     global EVENT_LOOP_SELECT_CALLS
     global EVENT_LOOP_POLL_SECONDS
     global EVENT_LOOP_WORK_SECONDS
     global _LAST_SELECT_END
-    global _PATCHED_LOOP_IDS
 
     EVENT_LOOP_IDLE_SECONDS = 0.0
     EVENT_LOOP_SELECT_CALLS = 0
     EVENT_LOOP_POLL_SECONDS = 0.0
     EVENT_LOOP_WORK_SECONDS = 0.0
     _LAST_SELECT_END = None
-    _PATCHED_LOOP_IDS = set()

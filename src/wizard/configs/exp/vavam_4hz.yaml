@@ -2,8 +2,7 @@
 # Experiment config overrides to run vavam at 4Hz (double the default 2Hz frequency)
 
 runtime:
-  default_scenario_parameters:
-    egopose_interval_us: 250_000        # 4Hz (halved from 500_000)
+  simulation_config:
     control_timestep_us: 250_000        # 4Hz (halved from 500_000)
     time_start_offset_us: 250_000       # Keep in sync with above
 

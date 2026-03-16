@@ -8,7 +8,7 @@ log_level: INFO
 
 # Model configuration
 model:
-  model_type: MANUAL
+  model_type: manual
   checkpoint_path: "unused"  # Manual model doesn't need checkpoints
   device: "cpu"              # Manual model is CPU-only
 

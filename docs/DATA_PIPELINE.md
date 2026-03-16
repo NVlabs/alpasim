@@ -23,7 +23,7 @@ three types of messages:
 
 ### Reading asl logs
 
-`alpasim-grpc` provides [async_read_pb_log](//src/utils/alpasim_utils/logs.py) for reading `asl`
+`alpasim-grpc` provides [async_read_pb_log](/src/utils/alpasim_utils/logs.py) for reading `asl`
 logs as a stream of messages. An example usage to print the first 20 messages in a log (since
 `async_read_pb_log` is an async function it needs to be executed from a jupyter notebook or
 submitted to an async runtime loop):

@@ -3,7 +3,7 @@
 This tutorial makes three assumptions
 
 1. It targets an AlpaSim user rather than an AlpaSim developer
-1. It treats docker compose\` as the primary execution environment.
+1. It treats docker compose as the primary execution environment.
 1. It focuses on letting the user do simple things quick and leaves detail for later. This is
    reflected in subdivision into three levels of complexity.
 
@@ -28,14 +28,14 @@ docker/enroot.
 
 Let's start by executing a run with default settings.
 
-1. Follow [instructions in onboarding](/docs/ONBOARDING.md) to ensure necessary dependencies have
+1. Follow [onboarding](ONBOARDING.md) to ensure necessary dependencies have
    been installed
 1. Set up your environment with:
    - `source setup_local_env.sh`
    - This will compile protos, download an example driver model, ensure you have a valid Hugging
      Face token, and install the `alpasim_wizard` command line tool.
 1. Run the wizard to create the necessary config files, download the scene (if necessary), and run a
-   simulation _ `alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial` _ This will create a
+   simulation _ `uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial` _ This will create a
    `tutorial/` directory with all necessary config files and run the simulation
 
 ## Results structure
@@ -140,7 +140,7 @@ Some noteworthy files and directories:
   - `metrics_results.png` - Visual summary of driving quality metrics
   - `metrics_unprocessed.parquet` - Combined metrics from all rollouts
   - `videos/` - Videos organized by violation type (collision_at_fault, offroad, etc.)
-* `telemetry/` contains performance profiling data (see
+* `metrics/` contains performance profiling data (see
   [OPERATIONS.md](OPERATIONS.md#how-do-i-view-performance-metrics) for details):
   - `metrics.prom` - Prometheus metrics from simulation
   - `metrics_plot.png` - Performance visualization (CPU/GPU/RPC metrics)
@@ -192,20 +192,20 @@ The important configurable fields of `runtime` are:
 - `save_dir` - the name of the directory where to save `asl` logs. It needs to be kept in sync with
   wizard mount points. certain modules
 - `endpoints` - used to configure simulator scaling properties
-- `default_scenario_parameters` - specify all the simulation parameters (e.g. timing, cameras,
+- `simulation_config` - specify all the simulation parameters (e.g. timing, cameras,
   vehicle configuration, etc.).
 
 For example, one might change the number of rollouts per scene generated in the configuration files
 by running the wizard as follows:
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.default_scenario_parameters.n_rollouts=8
+uv run alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.simulation_config.n_rollouts=8
 ```
 
 ### Evaluation video layouts
 You can choose which video layouts to render via `eval.video.video_layouts`. Available layouts are `DEFAULT` (BEV map, camera, metrics) and `REASONING_OVERLAY` (first-person camera with reasoning text overlay and trajectory chart). To generate reasoning-overlay videos only, override when invoking the wizard, for example:
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 You can also set `eval.video.video_layouts=[DEFAULT,REASONING_OVERLAY]` to render both layouts per rollout.
 
@@ -225,7 +225,7 @@ The wizard uses [VaVAM](https://github.com/valeoai/VideoActionModel) as the defa
 explicitly define the driver config, one can use:
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam,vavam_runtime_configs]
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam,vavam_runtime_configs]
 ```
 
 ### Alpamayo-R1
@@ -248,7 +248,7 @@ Alternatively, you can specify the path to the model directory by setting the
 Then run the wizard with the following command:
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs]
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs]
 ```
 
 > :warning: The Alpamayo R1 model is large (10b parameters)--please ensure that your GPU has the
@@ -257,7 +257,7 @@ alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,a
 To visualize the predicted chain-of-causation reaoning you can change the generated video layout
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 
 ### Transfuser (provisional)
@@ -281,7 +281,7 @@ huggingface-cli download longpollehn/tfv6_navsim config.json --local-dir=data/dr
 Then, run the wizard with the following command:
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[transfuser,transfuser_runtime_configs]
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[transfuser,transfuser_runtime_configs]
 ```
 
 ### Log replay driver
@@ -289,8 +289,8 @@ alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[tra
 If you would like to force the ego vehicle to follow its recorded trajectory, instead of following
 the predictions of a policy, you can set
 `runtime.endpoints.{physics,trafficsim,controller}.skip: true`,
-`runtime.default_scenario_parameters.physics_update_mode: NONE` and
-`runtime.default_scenario_parameters.force_gt_duration_us` to a very high value (20s+).
+`runtime.simulation_config.physics_update_mode: NONE` and
+`runtime.simulation_config.force_gt_duration_us` to a very high value (20s+).
 
 ## Scenes
 
@@ -308,7 +308,7 @@ exists in [scene suites](/data/scenes/sim_suites.csv).
 For custom scene selection, you can specify scenes manually using `scenes.scene_ids`:
 
 ```bash
-alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
+uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
 ```
 
 If necessary, the scene will automatically be downloaded from Hugging Face to your local
@@ -324,14 +324,13 @@ instructions.
 #### Using Scene Suites
 
 Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
-with 901 validated scenes (:warning: this will download all the scenes):
+with 916 validated scenes (:warning: this will download all the scenes):
 
 ```bash
-alpasim_wizard +deploy=local scenes.test_suite_id=public_2507_ex_failures wizard.log_dir=$PWD/tutorial_suite
+uv run alpasim_wizard +deploy=local scenes.test_suite_id=public_2602 wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across all 910 scenes in the `public_2507_ex_failures` suite, which
-excludes problematic scenes from the full 25.07 release dataset.
+This will run simulations across all 916 scenes in the `public_2602` suite from the 26.02 release dataset.
 
 ## Custom components
 
@@ -386,7 +385,7 @@ the context of a full simulation.
 1. (Terminal 1) Run the wizard to generate config files without running the simulation:
 
    ```bash
-   alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
+   uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
    ```
 
 1. (Terminal 1) `cd` to the generated directory (`tutorial_dbg`) and note the command/port of the
@@ -454,7 +453,7 @@ from shutting down the docker containers after each simulation by setting
 
 1. (Terminal 1) Run the wizard to generate config files without running the simulation:
    ```bash
-   alpasim_wizard +deploy=local \
+   uv run alpasim_wizard +deploy=local \
    wizard.log_dir=$PWD/tutorial_dbg_runtime \
    wizard.run_method=NONE  \
    wizard.debug_flags.use_localhost=True \

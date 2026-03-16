@@ -15,17 +15,18 @@ __pycache__/
 .claude
 .serena
 .zed
+CLAUDE.md
+.cursor/plans/archived/
 
 **/*.egg-info
-**/build/
-**/dist/
 
-runs/*
-tools/run-on-ord/runs
-tools/run-on-ord/outputs
-src/tools/run-on-ord/runs
-src/tools/run-on-ord/outputs
-data/vavam-driver/*
+**/runs/*
+src/tools/run-on-slurm/runs
+src/tools/run-on-slurm/outputs
+data/drivers/*
+outputs/
+artifacts/
+asset_harvesting/
 
 # uv.lock is only used in local development. On the server, we use uv tool run,
 # which does not require uv.lock.

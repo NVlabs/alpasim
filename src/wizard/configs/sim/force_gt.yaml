@@ -6,5 +6,5 @@ defaults:
   - _self_
 
 runtime:
-  default_scenario_parameters:
+  simulation_config:
     force_gt_duration_us: 20_000_000  # 20s

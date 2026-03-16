@@ -249,7 +249,6 @@ class Trajectory:
     # =========================================================================
     # Derivative Methods
     # =========================================================================
-
     def velocities(self, method: str = "centered") -> NDArray[np.float32]:
         """
         Compute velocities in m/s using finite differences.
@@ -297,7 +296,6 @@ class Trajectory:
     # =========================================================================
     # Mutation Methods
     # =========================================================================
-
     def update_absolute(self, timestamp: int, pose: Pose) -> None:
         """
         Append a new pose with absolute coordinates.
@@ -320,7 +318,6 @@ class Trajectory:
     # =========================================================================
     # Transform Methods
     # =========================================================================
-
     def transform(self, transform: Pose, is_relative: bool = False) -> Trajectory:
         """
         Transform all poses by a given pose.
@@ -444,7 +441,6 @@ class Polyline:
     # =========================================================================
     # Properties
     # =========================================================================
-
     @property
     def is_empty(self) -> bool:
         """Whether the polyline contains zero waypoints."""
@@ -477,7 +473,6 @@ class Polyline:
     # =========================================================================
     # Methods
     # =========================================================================
-
     def arc_lengths(self) -> NDArray[np.float32]:
         """Cumulative arc lengths along the polyline."""
         ...
@@ -586,4 +581,197 @@ class Polyline:
 
     def clone(self) -> Polyline:
         """Clone the polyline."""
+        ...
+
+class DynamicTrajectory:
+    """
+    A trajectory of timestamped poses with per-pose dynamic states.
+
+    Pairs a Trajectory (timestamped poses) with parallel dynamics data
+    (4 Vec3 fields = 12 floats per pose).
+
+    Dynamics column layout::
+
+        [0:3]  linear_velocity     (x, y, z)  m/s
+        [3:6]  angular_velocity    (x, y, z)  rad/s
+        [6:9]  linear_acceleration (x, y, z)  m/s^2
+        [9:12] angular_acceleration(x, y, z)  rad/s^2
+
+    :param timestamps: 1D uint64 array of timestamps in microseconds (strictly increasing)
+    :param positions: (N, 3) float array of positions
+    :param quaternions: (N, 4) float array in scipy format (x, y, z, w)
+    :param dynamics: (N, 12) float64 array of dynamic state values (see layout above)
+    """
+
+    def __init__(
+        self,
+        timestamps: NDArray[np.integer],
+        positions: NDArray[np.floating],
+        quaternions: NDArray[np.floating],
+        dynamics: NDArray[np.float64],
+    ) -> None: ...
+    @staticmethod
+    def from_trajectory_and_dynamics(
+        trajectory: Trajectory,
+        dynamics: NDArray[np.float64],
+    ) -> DynamicTrajectory:
+        """
+        Construct from an existing Trajectory + (N, 12) dynamics array.
+
+        Validates lengths match.
+        """
+        ...
+
+    @staticmethod
+    def create_empty() -> DynamicTrajectory:
+        """Create an empty DynamicTrajectory."""
+        ...
+
+    def __len__(self) -> int:
+        """Number of entries in the trajectory."""
+        ...
+
+    def __repr__(self) -> str:
+        """String representation for debugging."""
+        ...
+
+    def is_empty(self) -> bool:
+        """Check if the trajectory is empty."""
+        ...
+
+    @property
+    def timestamps_us(self) -> NDArray[np.uint64]:
+        """Timestamps in microseconds as numpy array."""
+        ...
+
+    @property
+    def time_range_us(self) -> range:
+        """Time range as Python range(start_us, end_us)."""
+        ...
+
+    def get_time_range_tuple(self) -> tuple[int, int]:
+        """Get the time range as (start_us, end_us) tuple. Returns (0, 0) if empty."""
+        ...
+
+    @property
+    def positions(self) -> NDArray[np.float32]:
+        """Positions as 2D numpy array of shape (N, 3)."""
+        ...
+
+    @property
+    def quaternions(self) -> NDArray[np.float32]:
+        """Quaternions as 2D numpy array of shape (N, 4) in scipy format (x, y, z, w)."""
+        ...
+
+    @property
+    def last_pose(self) -> Pose:
+        """Get the last pose. Raises IndexError if empty."""
+        ...
+
+    @property
+    def first_pose(self) -> Pose:
+        """Get the first pose. Raises IndexError if empty."""
+        ...
+
+    def get_pose(self, idx: int) -> Pose:
+        """Get a single Pose at the given index (supports negative indexing)."""
+        ...
+
+    @property
+    def dynamics(self) -> NDArray[np.float64]:
+        """Dynamics as 2D numpy array of shape (N, 12)."""
+        ...
+
+    def interpolate_dynamics(
+        self, target_timestamps: NDArray[np.uint64]
+    ) -> NDArray[np.float64]:
+        """
+        Linear interpolation of dynamics at query timestamps.
+
+        Clamps outside range. Returns (M, 12) f64 array.
+        """
+        ...
+
+    def trajectory(self) -> Trajectory:
+        """Returns a plain Trajectory (clones the poses, drops dynamics)."""
+        ...
+
+    def interpolate_pose(self, at_us: int) -> Pose:
+        """
+        Interpolate a single pose at the given timestamp.
+
+        Same semantics as ``Trajectory.interpolate_pose``.
+
+        :param at_us: Timestamp in microseconds (must be within trajectory range)
+        :returns: Interpolated Pose at the given timestamp.
+        """
+        ...
+
+    def interpolate_delta(self, start_us: int, end_us: int) -> Pose:
+        """
+        Compute the relative transform between two timestamps.
+
+        Returns ``start_pose.inverse() @ end_pose``, identical to
+        ``Trajectory.interpolate_delta``.
+        """
+        ...
+
+    def interpolate(self, target_timestamps: NDArray[np.uint64]) -> Trajectory:
+        """
+        Interpolate poses at multiple timestamps, returning a plain Trajectory.
+
+        Same semantics as ``Trajectory.interpolate``. Dynamics are **not**
+        interpolated — use ``interpolate_dynamics`` separately if needed.
+
+        :param target_timestamps: 1D uint64 array of timestamps to interpolate at.
+        :returns: A new Trajectory with interpolated poses.
+        """
+        ...
+
+    def clip(self, start_us: int, end_us: int) -> Trajectory:
+        """
+        Clip the trajectory to a time range, returning a plain Trajectory.
+
+        Same semantics as ``Trajectory.clip``: interpolates at boundaries and
+        includes interior poses. Dynamics are **not** preserved.
+
+        :param start_us: Start timestamp (inclusive)
+        :param end_us: End timestamp (exclusive)
+        :returns: A new Trajectory clipped to the specified range.
+        """
+        ...
+
+    def update_absolute(
+        self, timestamp: int, pose: Pose, dynamics: NDArray[np.float64]
+    ) -> None:
+        """
+        Append one entry.
+
+        :param timestamp: Timestamp in microseconds (must be > last timestamp)
+        :param pose: The Pose to append
+        :param dynamics: (12,) f64 array of dynamic state values
+        """
+        ...
+
+    def concat(self, other: DynamicTrajectory) -> DynamicTrajectory:
+        """Concatenate: other must start after self ends."""
+        ...
+
+    def append(self, other: DynamicTrajectory) -> DynamicTrajectory:
+        """Append: handles overlapping single endpoint."""
+        ...
+
+    def transform(
+        self, transform: Pose, is_relative: bool = False
+    ) -> DynamicTrajectory:
+        """
+        Transform poses, leaves dynamics unchanged.
+
+        :param transform: The pose to transform by.
+        :param is_relative: If true, applies right multiplication, otherwise left. Default: false.
+        """
+        ...
+
+    def clone(self) -> DynamicTrajectory:
+        """Create a deep copy of this DynamicTrajectory."""
         ...

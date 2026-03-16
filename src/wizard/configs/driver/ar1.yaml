@@ -12,7 +12,7 @@ log_level: ${wizard.log_level}
 
 # Model configuration
 model:
-  model_type: ALPAMAYO_R1  # Model type: alpamayo_r1
+  model_type: ar1  # Entry-point name in alpasim.models registry
   # HuggingFace model ID (requires cached download or hf authentication in the driver container)
   checkpoint_path: "nvidia/Alpamayo-R1-10B"
   # # Alternative local path to a pre-downloaded model

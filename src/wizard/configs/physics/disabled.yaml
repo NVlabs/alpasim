@@ -4,5 +4,5 @@ runtime:
   endpoints:
     physics:
       skip: true
-  default_scenario_parameters:
+  simulation_config:
     physics_update_mode: NONE

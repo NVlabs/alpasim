@@ -150,6 +150,13 @@ class RenderableTrajectory:
     def interpolate_pose(self, at_us: int) -> geometry.Pose:
         return self._trajectory.interpolate_pose(at_us)
 
+    def interpolate_poses_list(
+        self, target_timestamps: np.ndarray
+    ) -> list[geometry.Pose]:
+        return self._trajectory.interpolate_poses_list(
+            np.asarray(target_timestamps, dtype=np.uint64)
+        )
+
     def interpolate(self, target_timestamps: np.ndarray) -> "RenderableTrajectory":
         """Interpolates trajectory to target timestamps."""
         interp = self._trajectory.interpolate(
@@ -1494,16 +1501,17 @@ class Routes:
         self._ego_trajectory = ego_trajectory
         self._ego_coords_rig_to_aabb_center = ego_coords_rig_to_aabb_center
 
-        for timestamp_us, route_in_rig_frame in zip(
-            self.timestamps_us, self.routes_in_rig_frame, strict=True
+        ego_poses = ego_trajectory.interpolate_poses_list(
+            np.array(self.timestamps_us, dtype=np.uint64)
+        )
+
+        for ego_pose, route_in_rig_frame in zip(
+            ego_poses, self.routes_in_rig_frame, strict=True
         ):
             # Transform waypoints from rig frame to AABB frame (just translation)
             route_in_aabb_frame = (
                 route_in_rig_frame - ego_coords_rig_to_aabb_center.vec3
             )
-
-            # Get ego pose at this timestamp
-            ego_pose = ego_trajectory.interpolate_pose(timestamp_us)
 
             # Transform waypoints to global frame: rotate by ego orientation, then translate
             rotation = R.from_quat(ego_pose.quat).as_matrix()

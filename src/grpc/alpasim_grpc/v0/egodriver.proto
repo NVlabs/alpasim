@@ -78,9 +78,10 @@ message RolloutEgoTrajectory {
     /// Estimated ego rig pose as the active transform local->rig_est (see CONTRIBUTING.md, "Coordinate Systems").
     /// Note: this can diverge from the true local->rig transform when error models are enabled.
     common.Trajectory trajectory = 3;
-    /// Estimated dynamic state (velocities, accelerations) at the current timestamp in rig frame.
-    /// Note: this can diverge from the true dynamic state when error models are enabled.
-    common.DynamicState dynamic_state = 4;
+    /// Estimated dynamic states (velocities, accelerations) in rig frame.
+    /// Entries correspond 1:1 with trajectory.poses.
+    /// Note: these can diverge from the true dynamic states when error models are enabled.
+    repeated common.DynamicState dynamic_states = 5;
 }
 
 message RouteRequest {

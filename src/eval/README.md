@@ -1,11 +1,16 @@
 ## Evaluation
 
-This module is a refactored version of the `KPI` service. It
+> :warning: This codebase is new and not yet battle-tested. Metrics can often
+> have weird corner-cases. If you encounter one, please let us know.
+> The generated videos show all computed metric, including per-timestamp
+> result, making it easy to check if metric results look reasonable.
 
-- Reads in ASL logs
-- Computes metrics (see [`src/eval/scorers/__init__.py`](src/eval/scorers/__init__.py) for list of
+This module is a refactored version of the `KPI` service. It
+* Reads in ASL logs
+* Computes metrics (see [`src/eval/scorers/__init__.py`](src/eval/scorers/__init__.py) for list of
   implemented "Scorers")
-- And generates a video
+* Saves results locally as parquet files
+* And generates a video (see image) - stored locally.
 
 ### Configuration
 
@@ -13,22 +18,26 @@ See [schema.py](src/eval/schema.py). Video output is controlled by `eval.video`:
 
 ## Writing your own metric scorer
 
-A key motivation for this module was to make writing new scorers fast and easy. To do so, we:
-
-- Rely heavily on dataclasses for storing the information parsed from ASL. The information is
-  organised hierarchically, with the root being `SimulationResult` in [`data.py`](src/eval/data.py).
-  Use `ScenarioEvaluator` for evaluation and `asl_loader.load_scenario_eval_input_from_asl()` to
-  load ASL files.
-- We don't use indexing by index, but always by timestamp_us, to reduce off-by-one errors.
-- We rely on the `Trajectory` class from AlpaSim, which allows indexing into trajectories by
-  timestamp. We expand this class to `RenderableTrajectory` in [`data.py`](src/eval/data.py) which
-  also contains the bounding box and knows how to render itself onto a video frame.
-- Lastly, we also rely heavily on the `shapely` library, to abstract away complex geometric
-  computations such as `distance`, `contains`, `project`, `intersects`, etc... The
-  `RenderableTrajectory` class has helper methods to convert itself to shapely objects.
-- We also have a `ShapelyMap` class, which is primarily used for fast video rendering of maps. For
-  computing map-based metrics, it's probably easiest to use the `trajdata.vec_map` directly, which
-  is also stored in `SimulationResult` and allows querying for current lanes, etc..
+A key motivation for this module was to make writing new scorers fast and easy.
+To do so, we:
+* Rely heavily on dataclasses for storing the information parsed from ASL. The
+  information is organised hierarchically, with the root being `SimulationResult` in
+  [`data.py`](src/eval/data.py). Use `ScenarioEvaluator` for evaluation and
+  `asl_loader.load_scenario_eval_input_from_asl()` to load ASL files.
+* We don't use indexing by index, but always by timestamp_us, to reduce
+  off-by-one errors.
+* We rely on the `Trajectory` class from AlpaSim, which allows indexing into
+  trajectories by timestamp. We expand this class to `RenderableTrajectory` in
+  [`data.py`](src/eval/data.py) which also contains the bounding box and knows how
+  to render itself onto a video frame.
+* Lastly, we also rely heavily on the `shapely` library, to abstract away complex
+  geometric computations such as `distance`, `contains`, `project`,
+  `intersects`, etc... The `RenderableTrajectory` class has helper methods to
+  convert itself to shapely objects.
+* We also have a `ShapelyMap` class, which is primarily used for fast video
+  rendering of maps. For computing map-based metrics, it's probably easiest to use the
+  `trajdata.vec_map` directly, which is also stored in
+  `SimulationResult` and allows querying for current lanes, etc..
 
 ### Running locally
 
@@ -40,15 +49,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 Recommended workflow:
 
-1. First run the wizard normally (after installing it with `uv tool install -e src/wizard`) and
-   generating ASL files.
-
+1. First run the wizard normally (after installing it with `uv tool install -e
+   src/wizard`) and generating ASL files.
 ```bash
-alpasim_wizard wizard.log_dir=<log_dir> +deploy=local
+uv run alpasim_wizard wizard.log_dir=<log_dir> +deploy=local
 ```
-
 2. Execute this from `src/eval`:
-
 ```bash
 uv run alpasim-eval  \
   --asl_search_glob=<log_dir>/rollouts/clipgt-d8cbf4ca-b7ff-44bd-a5be-260f736a02fe/15f2c488-10ad-11f0-b123-0242c0a84004/\*\*/\*.asl \
@@ -62,14 +68,18 @@ The environment is shared with that of the main project and is automatically man
 ### Overview over the codebase, e.g. for writing
 
 Main components of the codebase:
+* [`data.py`](src/eval/data.py) contains most datastructures. Start exploring
+  from `SimulationResult` and `ScenarioEvalInput`
+* Parsing ASL logs is done in `asl_loader.load_scenario_eval_input_from_asl()` in [`asl_loader.py`](src/eval/asl_loader.py)
+* Scorers are implemented in the folder [`scorers`](src/eval/scorers/). If you
+  add a new scorer, don't forget to add it to the list in
+  [`scorers.__init__.py`](src/eval/scorers/__init__.py)
+* Scorers produce metrics per timestamp per rollout. These results are
+  aggregated in
+  [`eval_aggregation.py`](src/eval/aggregation/eval_aggregation.py). As long as
+  you conform to the existing datastructure, you probably won't need to touch this.
+* Lastly, video generation is done in [`video.py`](src/eval/video.py)
 
-- [`data.py`](src/eval/data.py) contains most datastructures. Start exploring from
-  `SimulationResult` and `ScenarioEvalInput`
-- Parsing ASL logs is done in `asl_loader.load_scenario_eval_input_from_asl()` in
-  [`asl_loader.py`](src/eval/asl_loader.py)
-- Scorers are implemented in the folder [`scorers`](src/eval/scorers/). If you add a new scorer,
-  don't forget to add it to the list in [`scorers.__init__.py`](src/eval/scorers/__init__.py)
-- Scorers produce metrics per timestamp per rollout. These results are aggregated in
-  [`eval_aggregation.py`](src/eval/aggregation/eval_aggregation.py). As long as you conform to the
-  existing datastructure, you probably won't need to touch this.
-- Lastly, video generation is done in [`video.py`](src/eval/video.py)
+### Building
+
+The eval service is built from the **top-level Dockerfile** at the repo root (same image as other services). Use the main project build and CI; there is no separate eval-only image or `build.sh` in this module. The wizard uses the image produced by the top-level build when running evaluations.

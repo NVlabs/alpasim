@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
+import hashlib
+import logging
 import os
 import pathlib
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Optional
 
 import matplotlib.pyplot as plt
@@ -21,6 +24,8 @@ from eval.aggregation.modifiers import (
     get_removed_rows,
 )
 from eval.data import AggregationType
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODIFIERS = [
     AddCombinedEvent(
@@ -50,6 +55,14 @@ DEFAULT_MODIFIERS = [
     RemoveTrajectoryWithEvent(pl.col("img_is_black") > 0.0),
     RemoveTimestepsAfterEvent(pl.col("offroad_or_collision") > 0.0),
 ]
+
+
+def _combine_run_uuids_deterministically(run_uuids: pl.Series) -> str:
+    normalized = [
+        str(run_uuid) for run_uuid in run_uuids.drop_nulls().unique().sort().to_list()
+    ]
+    payload = "\x1f".join(normalized).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def add_rollout_and_trajectory_uids(
@@ -145,6 +158,7 @@ def write_metrics_results_txt(
     agg_function_df: pl.DataFrame,
     output_path: str,
     modifiers: list[MetricAggregationModifiers] | None = None,
+    warnings: list[str] | None = None,
 ) -> None:
     """Write the metrics results to a txt file.
 
@@ -153,8 +167,16 @@ def write_metrics_results_txt(
             time,clips and rollouts, i.e. with one line per run.
         agg_function_df: The dataframe with the aggregation functions.
         output_path: The path to the output folder.
+        warnings: Processing warnings to include in the output file.
     """
     console = Console(record=True, width=160)
+
+    if warnings:
+        console.rule("Warnings")
+        counts = Counter(warnings)
+        for msg, count in counts.items():
+            suffix = f" (x{count})" if count > 1 else ""
+            console.print(f"  [bold yellow]WARNING:[/bold yellow] {msg}{suffix}")
 
     if modifiers:
         console.rule("Modifiers applied:")
@@ -172,7 +194,6 @@ def write_metrics_results_txt(
     ]
     metric_names.sort()
     for row in df_wide_avg_t_clip_rollout.iter_rows(named=True):
-
         table = Table(
             title=f"Run: {row['run_name']}",
             caption=(
@@ -409,6 +430,8 @@ class ProcessedMetricDFs(UnprocessedMetricsDFs):
     # individual array jobs are combined into a single run uuid.
     combined_run_uuids: str | None
     modifiers: list[MetricAggregationModifiers] | None
+    # Warnings emitted during processing (e.g. missing columns filled with defaults).
+    warnings: list[str] = field(default_factory=list)
 
     def __repr__(self) -> str:
         nr_trajectories = (
@@ -554,10 +577,14 @@ def aggregate_and_write_metrics_results_txt(
             a txt file and a png file. If None, no outputs are written.
     """
 
+    processing_warnings: list[str] = []
+
     combined_run_uuids = None
     if force_same_run:
         # Combine the run_uuids of the individual array jobs.
-        combined_run_uuids = str(hash(tuple(metrics_df["run_uuid"].unique().sort())))
+        combined_run_uuids = _combine_run_uuids_deterministically(
+            metrics_df["run_uuid"]
+        )
         metrics_df = metrics_df.with_columns(
             pl.lit(combined_run_uuids).alias("run_uuid")
         )
@@ -574,6 +601,17 @@ def aggregate_and_write_metrics_results_txt(
         index=["trajectory_uid", "timestamps_us"],
         on="name",
     ).sort(["trajectory_uid", "timestamps_us"])
+
+    # When no map is loaded, offroad is not computed. Add a default so modifiers that
+    # reference it (e.g. offroad_or_collision) do not fail.
+    if "offroad" not in df_wide.columns:
+        df_wide = df_wide.with_columns(pl.lit(0.0).alias("offroad"))
+        msg = (
+            "No offroad column found in the metrics dataframe. "
+            "Adding a default value of 0.0."
+        )
+        logger.warning(msg)
+        processing_warnings.append(msg)
 
     df_wide_modified = df_wide
     additional_modifiers = DEFAULT_MODIFIERS + (additional_modifiers or [])
@@ -615,6 +653,7 @@ def aggregate_and_write_metrics_results_txt(
             agg_function_df,
             output_path,
             additional_modifiers,
+            processing_warnings,
         )
         plot_metrics_results(df_wide_avg_t_clip, trajectory_uid_df, output_path)
 
@@ -644,4 +683,5 @@ def aggregate_and_write_metrics_results_txt(
         agg_function_df=agg_function_df,
         combined_run_uuids=combined_run_uuids,
         modifiers=additional_modifiers,
+        warnings=processing_warnings,
     )

@@ -1,7 +1,7 @@
 # @package _global_
 
 runtime:
-  default_scenario_parameters:
+  simulation_config:
       cameras:
       -
         height: 320

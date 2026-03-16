@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Polars-based scene management for querying and downloading scene artifacts."""
 
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 
-import polars as pl  # type: ignore[import-not-found]
+import polars as pl
 import yaml
 from alpasim_wizard.s3_api import S3Connection, S3Path
 from alpasim_wizard.scenes.csv_utils import HUGGINGFACE_REPO, ArtifactRepository
@@ -29,6 +29,40 @@ from typing_extensions import ClassVar, Self
 LOCAL_SUITE_ID = "local"
 
 logger = logging.getLogger("alpasim_wizard")
+
+
+def _load_and_merge_csvs(
+    csv_paths: list[str],
+    dedup_key: str | list[str],
+) -> pl.DataFrame:
+    """Load one or more CSVs, concatenate, and verify no duplicates across files.
+
+    Args:
+        csv_paths: Paths to CSV files to load and merge.
+        dedup_key: Column name (str) or column names (list) that must be
+            unique across all files.
+    """
+    frames = []
+    for path in csv_paths:
+        logger.info("Loading scene catalog: %s", path)
+        frames.append(pl.read_csv(path))
+
+    if len(frames) == 1:
+        return frames[0]
+
+    merged = pl.concat(frames)
+
+    # Check for duplicates across files
+    key = [dedup_key] if isinstance(dedup_key, str) else dedup_key
+    duplicate_count = merged.height - merged.unique(subset=key).height
+    if duplicate_count > 0:
+        raise ValueError(
+            f"Found {duplicate_count} duplicate rows (by {key}) across "
+            f"scene catalog files: {csv_paths}. Each scene must appear in "
+            f"exactly one catalog file."
+        )
+
+    return merged
 
 
 @dataclass
@@ -57,6 +91,31 @@ def _deduplicate(df: pl.DataFrame) -> pl.DataFrame:
     return df.sort("last_modified", descending=True).unique(
         subset=["scene_id"], keep="first"
     )
+
+
+def _warn_duplicate_scenes(df: pl.DataFrame) -> None:
+    """Log a warning if any scene_id has artifacts for multiple NRE versions.
+
+    Since NRE is fully backwards-compatible, duplicates are resolved by
+    ``_deduplicate`` (newest wins). This warning gives operators visibility
+    so the scene database can be cleaned up over time.
+    """
+    dupes = (
+        df.group_by("scene_id")
+        .agg(pl.col("nre_version_string").unique().alias("nre_versions"))
+        .filter(pl.col("nre_versions").list.len() > 1)
+    )
+    if dupes.height > 0:
+        details = "\n".join(
+            f"  {row['scene_id']}: {sorted(row['nre_versions'])}"
+            for row in dupes.iter_rows(named=True)
+        )
+        logger.warning(
+            f"Found {dupes.height} scene(s) with artifacts for multiple NRE versions. "
+            "The newest artifact per scene will be used. "
+            "Consider cleaning up the scene database to remove stale entries.\n"
+            f"{details}"
+        )
 
 
 # TODO(mwatson): unify with car2sim.py logic wrt metadata extraction
@@ -106,6 +165,7 @@ def scan_local_usdz_directory(usdz_dir: str) -> tuple[pl.DataFrame, pl.DataFrame
                             "path": os.path.abspath(usdz_file),
                             "last_modified": now,
                             "artifact_repository": "local",
+                            "hf_revision": "",
                         }
                     )
 
@@ -181,8 +241,10 @@ class USDZManager:
             # Use the local_usdz_dir as the cache directory for scenesets
             cache_dir = cfg.local_usdz_dir
         else:
-            sim_scenes = pl.read_csv(cfg.scenes_csv)
-            sim_suites = pl.read_csv(cfg.suites_csv)
+            sim_scenes = _load_and_merge_csvs(cfg.scenes_csv, dedup_key="uuid")
+            sim_suites = _load_and_merge_csvs(
+                cfg.suites_csv, dedup_key=["test_suite_id", "scene_id"]
+            )
             cache_dir = cfg.scene_cache
 
         # Ensure directories exist
@@ -206,28 +268,21 @@ class USDZManager:
 
         return manager
 
-    def query_by_scene_ids(
-        self, scene_ids: list[str], nre_versions: list[str]
-    ) -> list[SceneIdAndUuid]:
-        """Query scenes by scene IDs and compatible NRE versions."""
+    def query_by_scene_ids(self, scene_ids: list[str]) -> list[SceneIdAndUuid]:
+        """Query scenes by scene IDs."""
         if len(scene_ids) == 0:
             return []
 
-        if len(nre_versions) == 0:
-            raise ValueError("At least one nre_version must be provided.")
-
-        df = self.sim_scenes.filter(
-            pl.col("scene_id").is_in(scene_ids)
-            & pl.col("nre_version_string").is_in(nre_versions)
-        ).select(["scene_id", "uuid", "last_modified", "nre_version_string"])
+        df = self.sim_scenes.filter(pl.col("scene_id").is_in(scene_ids)).select(
+            ["scene_id", "uuid", "last_modified", "nre_version_string"]
+        )
 
         found = set(df["scene_id"].to_list()) if df.height > 0 else set()
         missing = set(scene_ids) - found
         if missing:
-            raise USDZQueryError(
-                f"Failed to find scenes for {missing} compatible with {nre_versions=}."
-            )
+            raise USDZQueryError(f"Failed to find scenes for {missing}.")
 
+        _warn_duplicate_scenes(df)
         deduplicated = _deduplicate(df)
         logger.info(
             f"Scenes: \n{deduplicated.select(['scene_id', 'nre_version_string'])}"
@@ -235,40 +290,29 @@ class USDZManager:
 
         return SceneIdAndUuid.list_from_df(deduplicated)
 
-    def query_by_suite_id(
-        self, test_suite_id: str, nre_versions: list[str]
-    ) -> list[SceneIdAndUuid]:
-        """Query scenes by test suite ID and compatible NRE versions."""
-        if len(nre_versions) == 0:
-            raise ValueError("At least one nre_version must be provided.")
-
+    def query_by_suite_id(self, test_suite_id: str) -> list[SceneIdAndUuid]:
+        """Query scenes by test suite ID."""
         # Filter suites first
         suite_scenes = self.sim_suites.filter(pl.col("test_suite_id") == test_suite_id)
 
-        # Left join with scenes filtered by nre_version
-        scenes_filtered = self.sim_scenes.filter(
-            pl.col("nre_version_string").is_in(nre_versions)
-        )
-
         df = suite_scenes.join(
-            scenes_filtered,
+            self.sim_scenes,
             on="scene_id",
             how="left",
         ).select(["uuid", "scene_id", "nre_version_string", "last_modified"])
 
         if df.height == 0:
-            raise USDZQueryError(
-                f"Failed to find any scenes for {test_suite_id=} with {nre_versions=}."
-            )
+            raise USDZQueryError(f"Failed to find any scenes for {test_suite_id=}.")
 
         if df["uuid"].null_count() > 0:
             missing = df.filter(pl.col("uuid").is_null())["scene_id"].to_list()
             raise USDZQueryError(
-                f"Failed to find some scenes for scene suite {test_suite_id} with {nre_versions=}. "
+                f"Failed to find some scenes for scene suite {test_suite_id}. "
                 f"Missing: {missing}."
                 "A sceneset is expected to contain a valid artifact for each scene_id."
             )
 
+        _warn_duplicate_scenes(df)
         deduplicated = _deduplicate(df)
         logger.info(
             f"Scenes: \n{deduplicated.select(['scene_id', 'nre_version_string'])}"
@@ -288,23 +332,28 @@ class USDZManager:
 
     def get_artifact_info(
         self, uuids: list[str]
-    ) -> dict[str, tuple[str, ArtifactRepository]]:
-        """Get artifact paths and repositories for given UUIDs.
+    ) -> dict[str, tuple[str, ArtifactRepository, str | None]]:
+        """Get artifact paths, repositories, and HF revisions for given UUIDs.
 
         Args:
             uuids: List of UUIDs to look up.
 
         Returns:
-            Dict mapping uuid to (path, artifact_repository) tuple.
+            Dict mapping uuid to (path, artifact_repository, hf_revision) tuple.
+            hf_revision is None for non-HuggingFace artifacts.
         """
         if not uuids:
             return {}
 
+        has_hf_revision = "hf_revision" in self.sim_scenes.columns
+
         # Check if artifact_repository column exists (for backwards compatibility)
         if "artifact_repository" in self.sim_scenes.columns:
-            df = self.sim_scenes.filter(pl.col("uuid").is_in(uuids)).select(
-                ["uuid", "path", "artifact_repository"]
-            )
+            select_cols = ["uuid", "path", "artifact_repository"]
+            if has_hf_revision:
+                select_cols.append("hf_revision")
+
+            df = self.sim_scenes.filter(pl.col("uuid").is_in(uuids)).select(select_cols)
             result = {}
             for row in df.iter_rows(named=True):
                 repo_str = row["artifact_repository"]
@@ -320,7 +369,12 @@ class USDZManager:
                         "defaulting to swiftstack"
                     )
                     repo = ArtifactRepository.SWIFTSTACK
-                result[row["uuid"]] = (row["path"], repo)
+
+                revision = row.get("hf_revision") if has_hf_revision else None
+                if revision is not None:
+                    revision = str(revision).strip() if str(revision).strip() else None
+
+                result[row["uuid"]] = (row["path"], repo, revision)
             return result
         else:
             # Backwards compatibility: assume all are SwiftStack
@@ -328,7 +382,7 @@ class USDZManager:
                 ["uuid", "path"]
             )
             return {
-                row["uuid"]: (row["path"], ArtifactRepository.SWIFTSTACK)
+                row["uuid"]: (row["path"], ArtifactRepository.SWIFTSTACK, None)
                 for row in df.iter_rows(named=True)
             }
 
@@ -346,7 +400,7 @@ class USDZManager:
         swiftstack_uuids = []
         huggingface_uuids = []
         local_uuids = []
-        for uuid, (path, repo) in artifact_info.items():
+        for uuid, (path, repo, _rev) in artifact_info.items():
             if repo == ArtifactRepository.SWIFTSTACK:
                 swiftstack_uuids.append(uuid)
             elif repo == ArtifactRepository.HUGGINGFACE:
@@ -360,7 +414,7 @@ class USDZManager:
                 f"Using {len(local_uuids)} local artifacts (no download needed)"
             )
             for uuid in local_uuids:
-                path, _ = artifact_info[uuid]
+                path, _, _ = artifact_info[uuid]
                 if not os.path.exists(path):
                     raise FileNotFoundError(
                         f"Local artifact not found: {path} (uuid={uuid})"
@@ -374,7 +428,7 @@ class USDZManager:
         if swiftstack_uuids:
             tasks = []
             for uuid in swiftstack_uuids:
-                path, _ = artifact_info[uuid]
+                path, _, _ = artifact_info[uuid]
                 cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
                 s3_path = S3Path.from_swiftstack(path)
                 tasks.append(self.s3.maybe_download_object(s3_path, cache_path))
@@ -387,7 +441,7 @@ class USDZManager:
             await tqdm.gather(*tasks)
 
     def _download_single_huggingface_artifact(
-        self, uuid: str, hf_filepath: str, tmpdir: str
+        self, uuid: str, hf_filepath: str, tmpdir: str, revision: str | None = None
     ) -> None:
         """Download and validate a single HuggingFace artifact.
 
@@ -395,15 +449,18 @@ class USDZManager:
             uuid: The expected UUID of the artifact.
             hf_filepath: The file path within the HuggingFace repository.
             tmpdir: Temporary directory for downloading.
+            revision: Optional HuggingFace revision (branch, tag, or commit hash).
         """
         logger.info(
             f"Downloading HuggingFace artifact for uuid {uuid} from {hf_filepath}"
+            f" (revision={revision})"
         )
         downloaded_usdz = hf_hub_download(
             repo_id=HUGGINGFACE_REPO,
             repo_type="dataset",
             local_dir=tmpdir,
             filename=hf_filepath,
+            revision=revision,
         )
 
         # sanity check that the uuid matches what we expect
@@ -423,7 +480,9 @@ class USDZManager:
                     )
 
     def _download_huggingface_artifacts(
-        self, uuids: list[str], artifact_info: dict[str, tuple[str, ArtifactRepository]]
+        self,
+        uuids: list[str],
+        artifact_info: dict[str, tuple[str, ArtifactRepository, str | None]],
     ) -> None:
         """
         Download the required HuggingFace artifacts, rename them based on their metadata uuids,
@@ -431,16 +490,19 @@ class USDZManager:
 
         Downloads are parallelized with a maximum of 5 concurrent downloads.
         """
-        missing_uuid_to_filepath = {}
+        missing_uuid_info: dict[str, tuple[str, str | None]] = (
+            {}
+        )  # uuid -> (filepath, revision)
         for uuid in uuids:
             cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
             if not os.path.exists(cache_path):
-                missing_uuid_to_filepath[uuid] = artifact_info[uuid][0]
-        if missing_uuid_to_filepath:
+                path, _repo, revision = artifact_info[uuid]
+                missing_uuid_info[uuid] = (path, revision)
+        if missing_uuid_info:
             logger.info(
-                f"Missing {len(missing_uuid_to_filepath)} required HuggingFace artifacts"
+                f"Missing {len(missing_uuid_info)} required HuggingFace artifacts"
             )
-            max_workers = min(5, len(missing_uuid_to_filepath))
+            max_workers = min(5, len(missing_uuid_info))
             with tempfile.TemporaryDirectory(dir=self.scenesets_dir) as tmpdir:
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {
@@ -449,8 +511,9 @@ class USDZManager:
                             uuid,
                             hf_filepath,
                             tmpdir,
+                            revision,
                         ): uuid
-                        for uuid, hf_filepath in missing_uuid_to_filepath.items()
+                        for uuid, (hf_filepath, revision) in missing_uuid_info.items()
                     }
                     for future in as_completed(futures):
                         uuid = futures[future]

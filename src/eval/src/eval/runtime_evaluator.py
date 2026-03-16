@@ -8,7 +8,7 @@ This module provides the RuntimeEvaluator class that encapsulates all evaluation
 logic needed during runtime simulation, including data accumulation, building
 evaluation inputs, running metrics computation, and video rendering.
 
-When eval_config.run_in_runtime is False, all methods become no-ops.
+Evaluation runs when `eval_config.enabled` is True; otherwise, calls are no-ops.
 """
 
 from __future__ import annotations
@@ -36,9 +36,6 @@ class RuntimeEvaluator:
     This class encapsulates all evaluation-related logic including data
     accumulation during simulation and evaluation at rollout end.
 
-    When eval_config.run_in_runtime is False, all methods become no-ops, making
-    this class safe to use unconditionally without external checks.
-
     The implementation uses EvalDataAccumulator internally to process messages,
     ensuring identical behavior between runtime evaluation and post-hoc ASL
     file evaluation. All trajectory and metadata information is extracted from
@@ -59,7 +56,7 @@ class RuntimeEvaluator:
         # - actor_poses: builds trajectories
         # - driver_camera_image, route_request, driver_request/return: accumulated
 
-        # At rollout end (no-op if disabled):
+        # At rollout end:
         evaluator.run_evaluation()
     """
 
@@ -99,7 +96,7 @@ class RuntimeEvaluator:
     @property
     def _enabled(self) -> bool:
         """Check if in-runtime evaluation is enabled."""
-        return self.eval_config.run_in_runtime
+        return self.eval_config.enabled
 
     @property
     def _should_render_video(self) -> bool:
@@ -178,10 +175,10 @@ class RuntimeEvaluator:
         accumulated during simulation via on_message(), ensuring identical
         behavior with post-hoc ASL file evaluation.
 
-        No-op if run_in_runtime is False.
+        No-op if evaluation is disabled (`eval.enabled=False`).
 
         Returns:
-            ScenarioEvalResult if evaluation was run, None if disabled.
+            ScenarioEvalResult if evaluation was run, None otherwise.
 
         Note:
             This method is synchronous. For CPU-bound evaluation workloads,

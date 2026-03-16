@@ -27,7 +27,9 @@ message PhysicsGroundIntersectionRequest {
 
     message EgoData {
         common.AABB aabb = 1; // TODO: replace with mesh ID?
-        PosePair pose_pair = 2;
+        // Timestamped ego poses (active transforms local->aabb) to ground-correct.
+        // All poses are processed independently with the same algorithm.
+        common.Trajectory ego_trajectory_aabb = 3;
     }
 
     message OtherObject {
@@ -61,9 +63,12 @@ message PhysicsGroundIntersectionReturn {
         // Pose represents the active transform local->aabb for the center of
         // the AABB (see CONTRIBUTING.md, "Coordinate Systems").
         common.Pose pose = 1;
-        Status status = 2; 
+        Status status = 2;
     }
 
-    optional ReturnPose ego_pose = 1;
+    // Ground-corrected ego poses, same order as request ego_trajectory_aabb.
+    common.Trajectory ego_trajectory_aabb = 4;
+    // Per-pose status for ego_trajectory_aabb, same order.
+    repeated Status ego_status = 5;
     repeated ReturnPose other_poses = 2; // return in same order as in request
 }

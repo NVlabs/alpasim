@@ -129,11 +129,10 @@ echo "Resume Log File: ${RESUME_LOG_FILE}"
 echo "Optional Overrides: $@"
 echo "---------------------------"
 
-# Install new dependencies if required.
-uv tool upgrade alpasim_wizard
-
-# Call the wizard using the original config
-alpasim_wizard \
+# Use --project to pick up the wizard's .venv without changing the working directory
+# Need to specify the python version because uv ignores the upper limit in pyproject.toml
+uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
+    alpasim_wizard \
     --config-path "$TARGET_LOG_DIR" \
     --config-name wizard-config-loadable \
     --config-dir "$REPO_ROOT_DIR/src/wizard/configs" \

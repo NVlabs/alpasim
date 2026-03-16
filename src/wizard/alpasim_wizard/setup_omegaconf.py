@@ -10,11 +10,10 @@ Sets up the logger and config schema for the wizard, and provides a main_wrapper
 
 import logging
 import os
-from pathlib import Path
 from typing import Callable
 
-import git
 import hydra
+from alpasim_utils.paths import find_repo_root
 from hydra.core.config_store import ConfigStore
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
@@ -27,20 +26,7 @@ cs = ConfigStore.instance()
 # Registering the Config class with the name 'config'.
 cs.store(name="config_schema", node=AlpasimConfig)
 
-
-def get_repo_root() -> Path:
-    path = Path(__file__)
-    try:
-
-        repo = git.Repo(path, search_parent_directories=True)
-        return Path(repo.git.rev_parse("--show-toplevel"))
-    except ModuleNotFoundError:
-        logger.info(
-            "GitPython module not installed, please install it into the "
-            "alpasim environment."
-        )
-    # Assumes .../repo_root/wizard/src/alpasim_wizard/__main__.py
-    return path.resolve().parent.parent.parent.parent
+REPO_ROOT = find_repo_root(__file__)
 
 
 def validate_config(cfg: AlpasimConfig) -> None:
@@ -56,38 +42,24 @@ def validate_config(cfg: AlpasimConfig) -> None:
             "to determine the NRE version."
         )
 
-    # Validate service lists
+    # Validate service list
     services_dict = OmegaConf.to_container(cfg.services) or {}
-    service_lists = {
-        "run_sim_services": cfg.wizard.run_sim_services,
-        "run_eval_services": cfg.wizard.run_eval_services,
-        "run_aggregation_services": cfg.wizard.run_aggregation_services,
-    }
-
-    for list_name, service_list in service_lists.items():
-        if service_list:
-            undefined_services = [s for s in service_list if s not in services_dict]
-            if undefined_services:
-                raise RuntimeError(
-                    f"Services {undefined_services} in `wizard.{list_name}` "
-                    f"are not defined in the `services` section."
-                )
+    if cfg.wizard.run_sim_services:
+        undefined_services = [
+            s for s in cfg.wizard.run_sim_services if s not in services_dict
+        ]
+        if undefined_services:
+            raise RuntimeError(
+                f"Services {undefined_services} in `wizard.run_sim_services` "
+                f"are not defined in the `services` section."
+            )
 
     if cfg.wizard.run_mode != RunMode.BATCH:
-        # Count total services to run
-        total_services = 0
-        if cfg.wizard.run_sim_services:
-            total_services += len(cfg.wizard.run_sim_services)
-        if cfg.wizard.run_eval_services:
-            total_services += len(cfg.wizard.run_eval_services)
-        if cfg.wizard.run_aggregation_services:
-            total_services += len(cfg.wizard.run_aggregation_services)
-
+        total_services = len(cfg.wizard.run_sim_services or [])
         if total_services != 1:
             raise AssertionError(
                 "When specifying a run mode other than BATCH, "
-                "only one service may be run. Ensure only one service is specified "
-                "across run_sim_services, run_eval_services, and run_aggregation_services."
+                "only one service may be run in run_sim_services."
             )
 
 
@@ -107,6 +79,7 @@ def update_scene_config(cfg: AlpasimConfig) -> None:
     - scene_ids has exactly one element (which we assume to be the default one)
     """
     scene_config = cfg.scenes
+
     # Database scene handling
     scene_config_keys = ("scene_ids", "test_suite_id")
     if sum(getattr(scene_config, key) is not None for key in scene_config_keys) == 1:
@@ -149,9 +122,7 @@ def cmd_line_args(cfg: DictConfig) -> str:
     return " ".join(_convert_to_cmd_line_args_list(cfg)).replace("$", r"\$")
 
 
-OmegaConf.register_new_resolver(
-    "repo-relative", lambda path: str(get_repo_root() / path)
-)
+OmegaConf.register_new_resolver("repo-relative", lambda path: str(REPO_ROOT / path))
 
 OmegaConf.register_new_resolver("cmd-line-args", lambda cfg: cmd_line_args(cfg))
 OmegaConf.register_new_resolver("or", lambda a, b: a or b)
@@ -159,8 +130,7 @@ OmegaConf.register_new_resolver("or", lambda a, b: a or b)
 
 def main_wrapper(main: Callable) -> None:
     """Wraps a main function with Hydra config parsing."""
-    repo_root = get_repo_root()
-    config_path = repo_root / "src" / "wizard" / "configs"
+    config_path = REPO_ROOT / "src" / "wizard" / "configs"
     if not os.path.isdir(config_path):
         raise OSError(
             f"Wizard config dir not found at {config_path=}. "

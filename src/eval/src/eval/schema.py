@@ -3,9 +3,21 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Optional
 
 from omegaconf import MISSING
+
+
+@dataclass
+class DatabaseConfig:
+    upload_metadata: bool = MISSING
+    upload_leaderboard: bool = MISSING
+    upload_full_metrics: bool = MISSING
+    # Name of the table to store the unaggregated metrics.
+    metrics_table_name: Optional[str] = None
+    # Name of the table to store the simulation execution metadata.
+    sim_execution_table_name: Optional[str] = None
+    leaderboard_table_name: Optional[str] = None
 
 
 class EgoLoc(StrEnum):
@@ -142,14 +154,15 @@ class MetricAggregationModifiersConfig:
 
 @dataclass
 class EvalConfig:
-    # Whether to run evaluation in runtime (after each rollout) or in separate job
-    run_in_runtime: bool = True
+    # Whether evaluation is enabled. Set to false to skip eval during simulation.
+    enabled: bool = True
     # Configuration for scorers that have free parameters.
     scorers: ScorersConfig = MISSING
     aggregation_modifiers: MetricAggregationModifiersConfig = MISSING
     # Number of processes to use for parallel processing of ASL reading and
     # metric computation.
     num_processes: int = MISSING
+    database: DatabaseConfig = MISSING
     # Whether to render a video, what should be rendered and how.
     video: VideoRendererConfig = MISSING
     # Vector map params. Passed to trajdata.

@@ -50,6 +50,7 @@ from alpasim_grpc.v0.egodriver_pb2_grpc import (
     EgodriverServiceServicer,
     add_EgodriverServiceServicer_to_server,
 )
+from alpasim_plugins.plugins import models as model_registry
 from omegaconf import OmegaConf
 from PIL import Image
 
@@ -58,7 +59,6 @@ import grpc.aio
 
 from .frame_cache import FrameCache
 from .models import DriveCommand
-from .models.ar1_model import AR1Model
 from .models.base import (
     BaseTrajectoryModel,
     CameraImages,
@@ -66,14 +66,12 @@ from .models.base import (
     PredictionInput,
 )
 from .models.manual_model import ManualModel
-from .models.transfuser_model import TransfuserModel
-from .models.vam_model import VAMModel
 from .navigation import determine_command_from_route
 from .rectification import (
     FthetaToPinholeRectifier,
     build_ftheta_rectifier_for_resolution,
 )
-from .schema import DriverConfig, ModelConfig, ModelType, RectificationTargetConfig
+from .schema import DriverConfig, ModelConfig, RectificationTargetConfig
 from .trajectory_optimizer import (
     TrajectoryOptimizer,
     VehicleConstraints,
@@ -426,8 +424,13 @@ def _create_model(
 ) -> BaseTrajectoryModel:
     """Factory method to create the appropriate model.
 
+    Uses the alpasim.models plugin registry to discover and instantiate
+    models.  Each registered model class provides a ``from_config()``
+    classmethod that extracts the parameters it needs from the generic
+    argument set, so no model-specific branching is required here.
+
     Args:
-        cfg: Model configuration.
+        cfg: Model configuration (``cfg.model_type`` is the entry-point name).
         device: Torch device to load model on.
         camera_ids: List of camera logical IDs in order.
         context_length: Number of temporal frames (None uses model default).
@@ -437,41 +440,12 @@ def _create_model(
         Model instance implementing BaseTrajectoryModel.
 
     Raises:
-        ValueError: If model type is unknown or required config is missing.
+        PluginNotFoundError: If model_type is not found in the plugin registry.
     """
-    if cfg.model_type == ModelType.VAM:
-
-        if cfg.tokenizer_path is None:
-            raise ValueError("VAM model requires tokenizer_path")
-        return VAMModel(
-            checkpoint_path=cfg.checkpoint_path,
-            tokenizer_path=cfg.tokenizer_path,
-            device=device,
-            camera_ids=camera_ids,
-            context_length=context_length or 8,
-        )
-    elif cfg.model_type == ModelType.TRANSFUSER:
-
-        return TransfuserModel(
-            checkpoint_path=cfg.checkpoint_path,
-            device=device,
-            camera_ids=camera_ids,
-        )
-    elif cfg.model_type == ModelType.ALPAMAYO_R1:
-        return AR1Model(
-            checkpoint_path=cfg.checkpoint_path,
-            device=device,
-            camera_ids=camera_ids,
-            context_length=context_length or 4,
-        )
-    elif cfg.model_type == ModelType.MANUAL:
-        return ManualModel(
-            camera_ids=camera_ids,
-            output_frequency_hz=output_frequency_hz,
-            context_length=context_length or 1,
-        )
-    else:
-        raise ValueError(f"Unknown model type: {cfg.model_type}")
+    model_cls = model_registry.get(cfg.model_type)
+    return model_cls.from_config(
+        cfg, device, camera_ids, context_length, output_frequency_hz
+    )
 
 
 class EgoDriverService(EgodriverServiceServicer):
@@ -523,7 +497,7 @@ class EgoDriverService(EgodriverServiceServicer):
 
         logger.info(
             "Initialized %s model with %d cameras, context_length=%d",
-            cfg.model.model_type.value,
+            cfg.model.model_type,
             self._model.num_cameras,
             self._context_length,
         )
@@ -770,7 +744,7 @@ class EgoDriverService(EgodriverServiceServicer):
 
         logger.info(
             "Starting %s session %s",
-            self._cfg.model.model_type.value,
+            self._cfg.model.model_type,
             request.session_uuid,
         )
         session = Session.create(
@@ -799,7 +773,7 @@ class EgoDriverService(EgodriverServiceServicer):
         self, request: Empty, context: grpc.aio.ServicerContext
     ) -> VersionId:
         driver_version = version("alpasim_driver")
-        model_type = self._cfg.model.model_type.value
+        model_type = self._cfg.model.model_type
         return VersionId(
             version_id=f"{model_type}-driver-{driver_version}",
             git_hash="unknown",
@@ -838,26 +812,14 @@ class EgoDriverService(EgodriverServiceServicer):
     ) -> Empty:
         session = self._sessions[request.session_uuid]
 
-        # Guard: We currently assume a single pose per egomotion observation.
-        # The dynamic_state has no timestamp and is assumed to correspond to
-        # the (single) pose's timestamp. If multiple poses are sent, remove
-        # this check and ensure proper handling of multi-pose trajectories.
-        if len(request.trajectory.poses) != 1:
-            raise ValueError(
-                f"Expected exactly 1 pose in egomotion trajectory, got {len(request.trajectory.poses)}. "
-                "The driver assumes dynamic_state corresponds to the single pose's timestamp. "
-                "If multi-pose trajectories are intentional, update the driver to handle them correctly."
-            )
-
         session.add_egoposes(request.trajectory)
 
-        # Track dynamic state if provided (velocities, accelerations in rig frame)
-        if request.HasField("dynamic_state") and request.trajectory.poses:
-            # Use the latest pose timestamp for the dynamic state
-            latest_timestamp_us = max(
-                pose.timestamp_us for pose in request.trajectory.poses
-            )
-            session.add_dynamic_state(latest_timestamp_us, request.dynamic_state)
+        # Track dynamic states if provided (velocities, accelerations in rig frame)
+        # Entries correspond 1:1 with trajectory.poses
+        for pose, dynamic_state in zip(
+            request.trajectory.poses, request.dynamic_states, strict=True
+        ):
+            session.add_dynamic_state(pose.timestamp_us, dynamic_state)
 
         return Empty()
 
@@ -991,11 +953,12 @@ class EgoDriverService(EgodriverServiceServicer):
             Alpasim Trajectory protobuf message.
         """
         trajectory = Trajectory()
-        trajectory.poses.append(current_pose)
 
         model_trajectory = prediction.trajectory_xy
         if model_trajectory is None or len(model_trajectory) == 0:
             return trajectory
+
+        trajectory.poses.append(current_pose)
 
         curr_z = current_pose.pose.vec.z
         frequency_hz = self._model.output_frequency_hz
@@ -1104,7 +1067,7 @@ async def serve(cfg: DriverConfig) -> None:
     external_ip = _get_external_ip()
     logger.info(
         "Starting %s driver on %s (external IP: %s:%d)",
-        cfg.model.model_type.value,
+        cfg.model.model_type,
         address,
         external_ip,
         cfg.port,
@@ -1144,7 +1107,7 @@ def _run_grpc_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None
         external_ip = _get_external_ip()
         logger.info(
             "Starting %s driver on %s (external IP: %s:%d)",
-            cfg.model.model_type.value,
+            cfg.model.model_type,
             address,
             external_ip,
             cfg.port,
@@ -1179,13 +1142,13 @@ def main(hydra_cfg: DriverConfig) -> None:
 
     if cfg.output_dir:
         os.makedirs(cfg.output_dir, exist_ok=True)
-        config_filename = f"{cfg.model.model_type.value}-driver.yaml"
+        config_filename = f"{cfg.model.model_type}-driver.yaml"
         OmegaConf.save(cfg, os.path.join(cfg.output_dir, config_filename), resolve=True)
 
     # For ManualModel, run the GUI on the main thread and gRPC in a background
     # thread. This is required on macOS (Cocoa), and we use the same approach
     # on Linux for consistency and simpler maintenance.
-    if cfg.model.model_type == ModelType.MANUAL:
+    if cfg.model.model_type == "manual":
         logger.info("Starting gRPC server in background thread (GUI mode)")
 
         ready_event = threading.Event()

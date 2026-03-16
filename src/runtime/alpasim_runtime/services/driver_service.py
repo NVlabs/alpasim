@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Type, TypeAlias
+import random
+from typing import Optional, Type
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import DynamicState
@@ -23,13 +24,8 @@ from alpasim_grpc.v0.egodriver_pb2 import (
 )
 from alpasim_grpc.v0.egodriver_pb2_grpc import EgodriverServiceStub
 from alpasim_grpc.v0.logging_pb2 import LogEntry
-from alpasim_grpc.v0.sensorsim_pb2 import AvailableCamerasReturn
-from alpasim_runtime.broadcaster import MessageBroadcaster
-from alpasim_runtime.services.service_base import (
-    WILDCARD_SCENE_ID,
-    ServiceBase,
-    SessionInfo,
-)
+from alpasim_runtime.services.service_base import ServiceBase, SessionInfo
+from alpasim_runtime.services.session_configs import DriverSessionConfig
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_utils.geometry import (
     Polyline,
@@ -42,8 +38,6 @@ from alpasim_utils.geometry import (
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
-
-AvailableCamera: TypeAlias = AvailableCamerasReturn.AvailableCamera
 
 
 class DriverService(ServiceBase[EgodriverServiceStub]):
@@ -58,38 +52,17 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     def stub_class(self) -> Type[EgodriverServiceStub]:
         return EgodriverServiceStub
 
-    # Override the session method to add typed parameters
-    def session(  # type: ignore[override]
-        self,
-        uuid: str,
-        broadcaster: MessageBroadcaster,
-        random_seed: int,
-        sensorsim_cameras: list[AvailableCamera],
-        scene_id: Optional[str] = None,
-    ) -> "ServiceBase[EgodriverServiceStub]":
-        """Create a driver session with typed parameters.
-
-        These are used in `_initialize_session()`.
-        """
-        return super().session(
-            uuid=uuid,
-            broadcaster=broadcaster,
-            random_seed=random_seed,
-            sensorsim_cameras=sensorsim_cameras,
-            scene_id=scene_id,
-        )
-
-    async def _initialize_session(
-        self, session_info: SessionInfo, **kwargs: Any
-    ) -> None:
+    async def _initialize_session(self, session_info: SessionInfo) -> None:
         """Initialize driver session after gRPC connection is established."""
-        await super()._initialize_session(session_info=session_info)
+        cfg = session_info.session_config
+        if not isinstance(cfg, DriverSessionConfig):
+            raise TypeError(
+                "DriverService._initialize_session requires a DriverSessionConfig "
+                f"via session_config, got {type(cfg).__name__}."
+            )
 
-        random_seed: int = session_info.additional_args["random_seed"]
-        scene_id: str | None = session_info.additional_args.get("scene_id")
-        sensorsim_cameras: list[AvailableCamera] = session_info.additional_args[
-            "sensorsim_cameras"
-        ]
+        scene_id = cfg.scene_id
+        sensorsim_cameras = cfg.sensorsim_cameras
 
         rollout_spec = DriveSessionRequest.RolloutSpec(
             vehicle=DriveSessionRequest.RolloutSpec.VehicleDefinition(
@@ -98,13 +71,13 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         )
 
         request = DriveSessionRequest(
-            session_uuid=self.session_info.uuid,
-            random_seed=random_seed,
+            session_uuid=session_info.uuid,
+            random_seed=random.randint(0, 2**32 - 1),
             debug_info=DriveSessionRequest.DebugInfo(scene_id=scene_id),
             rollout_spec=rollout_spec,
         )
 
-        await self.session_info.broadcaster.broadcast(
+        await session_info.broadcaster.broadcast(
             LogEntry(driver_session_request=request)
         )
 
@@ -115,24 +88,21 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             "start_session", "driver", self.stub.start_session, request
         )
 
-    async def _cleanup_session(self, **kwargs: Any) -> None:
+    async def _cleanup_session(self, session_info: SessionInfo) -> None:
         """Clean up driver session."""
         if self.skip:
             return
 
-        close_request = DriveSessionCloseRequest(session_uuid=self.session_info.uuid)
+        close_request = DriveSessionCloseRequest(session_uuid=session_info.uuid)
         await profiled_rpc_call(
             "close_session", "driver", self.stub.close_session, close_request
         )
 
-    async def get_available_scenes(self) -> List[str]:
-        """Get list of available scenes from the driver service."""
-        return [WILDCARD_SCENE_ID]
-
     async def submit_image(self, image: ImageWithMetadata) -> None:
         """Submit an image observation for the current session."""
+        session_info = self._require_session_info()
         request = RolloutCameraImage(
-            session_uuid=self.session_info.uuid,
+            session_uuid=session_info.uuid,
             camera_image=RolloutCameraImage.CameraImage(
                 frame_start_us=image.start_timestamp_us,
                 frame_end_us=image.end_timestamp_us,
@@ -141,9 +111,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             ),
         )
 
-        await self.session_info.broadcaster.broadcast(
-            LogEntry(driver_camera_image=request)
-        )
+        await session_info.broadcaster.broadcast(LogEntry(driver_camera_image=request))
 
         if self.skip:
             return
@@ -158,21 +126,23 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     async def submit_trajectory(
         self,
         trajectory: Trajectory,
-        dynamic_state: DynamicState,
+        dynamic_states_in_rig: list[DynamicState],
     ) -> None:
         """Submit an egomotion trajectory for the current session.
 
         Args:
             trajectory: The estimated ego trajectory.
-            dynamic_state: The estimated dynamic state (velocities, accelerations) in rig frame.
+            dynamic_states_in_rig: Estimated dynamic states (velocities, accelerations)
+                resolved in the rig frame, one per pose in the trajectory.
         """
+        session_info = self._require_session_info()
         request = RolloutEgoTrajectory(
-            session_uuid=self.session_info.uuid,
+            session_uuid=session_info.uuid,
             trajectory=trajectory_to_grpc(trajectory),
-            dynamic_state=dynamic_state,
+            dynamic_states=dynamic_states_in_rig,
         )
 
-        await self.session_info.broadcaster.broadcast(
+        await session_info.broadcaster.broadcast(
             LogEntry(driver_ego_trajectory=request)
         )
 
@@ -190,15 +160,16 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         self, timestamp_us: int, route_polyline_in_rig: Polyline
     ) -> None:
         """Submit a route for the current session."""
+        session_info = self._require_session_info()
         # Convert the route polyline to gRPC Route format
         grpc_route = polyline_to_grpc_route(route_polyline_in_rig, timestamp_us)
 
         request = RouteRequest(
-            session_uuid=self.session_info.uuid,
+            session_uuid=session_info.uuid,
             route=grpc_route,
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(route_request=request))
+        await session_info.broadcaster.broadcast(LogEntry(route_request=request))
 
         if self.skip:
             return
@@ -211,17 +182,16 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         self, timestamp_us: int, trajectory: Trajectory
     ) -> None:
         """Submit ground truth from recording for the current session."""
+        session_info = self._require_session_info()
         request = GroundTruthRequest(
-            session_uuid=self.session_info.uuid,
+            session_uuid=session_info.uuid,
             ground_truth=GroundTruth(
                 timestamp_us=timestamp_us,
                 trajectory=trajectory_to_grpc(trajectory),
             ),
         )
 
-        await self.session_info.broadcaster.broadcast(
-            LogEntry(ground_truth_request=request)
-        )
+        await session_info.broadcaster.broadcast(LogEntry(ground_truth_request=request))
 
         if self.skip:
             return
@@ -241,15 +211,16 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         Returns:
             Trajectory containing the selected trajectory for the ego vehicle.
         """
+        session_info = self._require_session_info()
         # Create request with both old and new fields for backward compatibility
         request = DriveRequest(
-            session_uuid=self.session_info.uuid,
+            session_uuid=session_info.uuid,
             time_now_us=time_now_us,
             time_query_us=time_query_us,
             renderer_data=renderer_data or b"",
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(driver_request=request))
+        await session_info.broadcaster.broadcast(LogEntry(driver_request=request))
 
         if self.skip:
             # Create a trajectory response with multiple future timestamps.
@@ -287,6 +258,6 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
                 "drive", "driver", self.stub.drive, request
             )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(driver_return=response))
+        await session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
         return trajectory_from_grpc(response.trajectory)

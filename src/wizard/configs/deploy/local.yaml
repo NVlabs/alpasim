@@ -4,7 +4,6 @@
 
 defaults:
   - _self_
-  - /stable_manifest/oss
 
 defines:
   # The repo-relative resolver makes the path relative to the git repo root.
@@ -20,6 +19,10 @@ services:
     gpus: [0]
 
   physics:
+    replicas_per_container: 1
+    gpus: [0]
+
+  trafficsim:
     replicas_per_container: 1
     gpus: [0]
 

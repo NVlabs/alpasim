@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import omegaconf
 import pytest
@@ -8,17 +8,17 @@ from alpasim_runtime import config
 
 
 def test_typed_parse_config_valid():
-    # sanity check for user config
     user_cfg = config.typed_parse_config(
         "tests/data/valid_user_config.yaml", config.UserSimulatorConfig
     )
-    assert user_cfg.scenarios[0].force_gt_duration_us == 1700000
+    assert user_cfg.simulation_config.force_gt_duration_us == 1700000
 
-    # also check that the default values are honored for those not in the yaml
-    default = config.ScenarioConfig()
-    assert user_cfg.scenarios[0].control_timestep_us == default.control_timestep_us
+    default = config.SimulationConfig()
+    assert user_cfg.simulation_config.control_timestep_us == default.control_timestep_us
 
-    # sanity check for network config
+    assert len(user_cfg.scenes) == 1
+    assert user_cfg.scenes[0].scene_id == "clipgt-f94a6ae5-019e-4467-840f-5376b5255828"
+
     network_cfg = config.typed_parse_config(
         "tests/data/valid_network_config.yaml", config.NetworkSimulatorConfig
     )

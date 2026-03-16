@@ -1,129 +1,41 @@
 # Repository Guidelines
 
 ## Overview
+
 Alpasim is a lightweight, data-driven research simulator for autonomous vehicle testing using a microservice architecture with gRPC communication. The runtime orchestrates physics simulation, traffic, neural rendering, and ego vehicle policy evaluation.
 
-## Codebase Overview
+## Documentation
 
-Alpasim is structured around a **Runtime** orchestrator with gRPC microservices for driver, controller, physics, traffic, and sensorsim. **Wizard** generates service configs and deployment artifacts (SLURM/Docker Compose). **Eval** computes metrics from ASL logs and runtime data.
+- **User docs** → [docs/ONBOARDING.md](docs/ONBOARDING.md), [docs/TUTORIAL.md](docs/TUTORIAL.md), [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- **Design and data** → [docs/DESIGN.md](docs/DESIGN.md), [docs/DATA_PIPELINE.md](docs/DATA_PIPELINE.md)
+- **Coordinate frames, coding style, contributing** → [CONTRIBUTING.md](CONTRIBUTING.md)
 
-**Key architectural patterns**:
-- Two-phase rollout initialization: `UnboundRollout` (validation) → `BoundRollout` (execution)
-- Worker pool parallelism: subprocess workers (W>1) or inline mode (W=1)
-- Queue-based service pools with atomic acquisition
-- Message broadcasting for logging and in-runtime evaluation
-- Coordinate frame transforms: DS rig ↔ AABB center ↔ local/ENU
+## Build and run (quick reference)
 
-**Stack**: Python 3.11-3.12, gRPC/protobuf, OmegaConf/Hydra, uv
-**Structure**: `src/<module>` packages with colocated tests; `docs/`, `tools/`, and `cicd/` support developer workflows.
+- **Environment**: `source setup_local_env.sh` (or `./setup_local_env.sh`). The project uses **uv** for dependencies and scripts; use `uv run` for commands (e.g. `uv run pytest`, `uv run alpasim_wizard ...`).
+- **After changing `.proto` files**: `cd src/grpc && uv run compile-protos`
+- **Run simulation locally** (from repo root or `src/wizard`): `uv run alpasim_wizard +deploy=local wizard.log_dir=./my_run` (deploy configs live in `src/wizard/configs/deploy/`.)
+- **Tests**: `uv run pytest` (e.g. `uv run pytest src/runtime/tests`)
+- **Static checks**: `pre-commit run --all-files`
 
-## Project Structure & Module Organization
+## Environment and external repos
 
-- Core packages live in `src/<module>`; each module (e.g., `runtime`, `wizard`, `grpc`, `utils`,
-  `ddb`, `physics`, `avmf`, `tools`, `controller`, `driver`, `eval`) bundles its code with a
-  colocated `tests` folder.
-- Shared docs in `docs/` (onboarding, design), assets & sample data in `data/`, CI wiring in
-  `cicd/`.
-- Proto files compile under `src/grpc`; generated stubs feed other packages.
-- Scripts and helpers sit in `tools/` (includes `buildauth`, map utilities). Keep temp artifacts
-  under `tmp/` or gitignored caches.
+Environment variables and external repository URLs are project- or environment-specific; see CONTRIBUTING and your setup for local development.
 
-## Build, Test, and Development Commands
+## Commit and pull request guidelines
 
-- Create/update a local env: `./setup_local_env.sh` (uses `uv` to create `.venv`, install editable
-  packages, compile gRPC stubs, and register `pre-commit` hooks).
-- Run commands via `uv run …` (no need to activate the venv).
-- Run the fast test bundle: `uv run pytest` (respects default `-m 'not manual'` marker). Target a
-  module with `uv run pytest src/runtime/tests`.
-- Static checks: `pre-commit run --all-files` covers `black`, `ruff`, import sorting, and basic
-  lint. Type-check runtime-heavy code via `uv run mypy src/runtime`.
-
-## utils_rs (Rust bindings)
-
-When modifying Rust code in `src/utils_rs/`, rebuild the package using:
-
-```bash
-uv pip install --force-reinstall -e src/utils_rs
-```
-
-Do NOT use `maturin develop` or similar commands. After editing, update `src/utils_rs/utils_rs.pyi` to reflect any API changes (new functions, changed signatures, etc.).
-
-## Running Python with uv
-
-This repository uses `uv` for Python environment management. Do not activate virtual environments explicitly.
-
-- Run Python: `uv run python -c "..."`, `uv run python script.py`
-- Run tests: `uv run pytest`, or for a module `uv run --project src/runtime pytest src/runtime/tests`
-- Use `--project src/<name>` to select a sub-environment (e.g. `uv run --project src/runtime python -c "..."`). Do not use `source .venv/bin/activate` then `python`; use `uv run` instead.
-
-## Coding Style & Naming Conventions
-
-- Python 3.12+, 4-space indentation, limit files to UTF-8 ASCII unless data demands otherwise.
-- Auto-format with `black`; keep imports sorted by the hooks. Use `ruff` to satisfy lint warnings
-  before pushing.
-- Follow PEP 8 naming plus domain hints: prefix vectors/poses with frames (`pose_local_to_rig`,
-  `velocity_vehicle_in_local`) to avoid ambiguity in physics/AV math.
-- Do not use TYPE_CHECKING to conditionally import packages for type checking.
-- Do not use on-demand or runtime imports; always place all imports at the top of the file.
-- Import Rust extension types (`Pose`, `Trajectory`, `Polyline`, etc.) via `alpasim_utils.geometry`, **not** directly from `utils_rs`. The `utils_rs` package is a private implementation detail.
-- Document complex flows with concise comments; prefer dataclasses and type hints for public APIs.
-
-## Testing Guidelines
-
-- Place tests next to their module under `src/<module>/tests` and name files `test_*.py`.
-- Default pytest config skips `@pytest.mark.manual` suites; mark long-running or cluster-dependent
-  cases accordingly.
-- Use fixtures over hard-coded paths; when acting on sample assets, reference `data/` or create
-  temporary files.
-- Extend async tests with `pytest-asyncio`; keep gRPC client stubs isolated to avoid network
-  side-effects.
-
-## Architecture & Data Flow
-- Services: **Runtime**, **Physics**, **Controller**, **Eval**, **DDB**, **Wizard**, **GRPC**, **Utils** (see `src/<service>/`).
-- All services communicate via gRPC messages defined in `src/grpc/alpasim_grpc/v0/`.
-- Wizard generates configs, Runtime orchestrates loop, services exchange data, Runtime logs to ASL, Eval computes metrics, DDB indexes outputs.
-
-## Environment Variables
-- Optional: `SLURM_JOB_ID`, `UV_EXTRA_INDEX_URL`. Other deployment-specific variables (e.g. registry auth, object storage) may be required depending on your setup.
-
-## Common Issues & Solutions
-- Use `uv sync` instead of `pip install` for dependency resolution.
-- After changing `.proto`: run `uv run compile-protos` in `src/grpc`.
-
-## External Repositories
-- Alpamayo policy: https://gitlab-master.nvidia.com/alpamayo/alpamayo
-- NRE: https://gitlab-master.nvidia.com/Toronto_DL_Lab/nre
-- Trafficsim: https://gitlab-master.nvidia.com/alpamayo/trafficsim
-
-## Commit & Pull Request Guidelines
-- Keep commits focused and imperative (`runtime: guard invalid rig transforms`). Avoid `wip` in final history.
-- Rebase onto `main` before submitting; force-pushes are expected after rebases due to the linear history requirement.
+- Keep commits focused and imperative. Rebase onto `main` before submitting; force-pushes are expected after rebases.
 - Pipelines auto-bump versions for touched packages; allow the bot-generated commit to land and re-trigger CI if needed.
 - PRs should explain scenario impact, reference issue IDs, and attach logs/screens for wizard/runtime regressions. Confirm tests and `pre-commit` pass before requesting review.
-- When pushing to a brach that has the auto-bump commit "Alpasim automatic
-  version bump", force push over it (if that's the only commit you'd overwrite).
-  Similarly, if you pulled that commit, delete it before pushing. This commit is
-  automatically created by the CI pipeline after every push and should only
-  exist once.
-- Do not manually update the docker container versions - this is done by the
-  "Alpasim automatic version bump" commit that is created by the CI pipeline.
-
-- Keep commits focused and imperative (`runtime: guard invalid rig transforms`). Avoid `wip` in
-  final history.
-- Rebase onto `main` before submitting; force-pushes are expected after rebases due to the linear
-  history requirement.
-- Pipelines auto-bump versions for touched packages; allow the bot-generated commit to land and
-  re-trigger CI if needed.
-- PRs should explain scenario impact, reference issue IDs, and attach logs/screens for
-  wizard/runtime regressions. Confirm tests and `pre-commit` pass before requesting review.
+- When pushing to a branch that has the auto-bump commit "Alpasim automatic version bump", force push over it if that's the only commit you'd overwrite. Do not manually update docker container versions; that is done by the CI pipeline.
 
 ## Other conventions
 
-- Conventions on the used coordinate frames can be found in `CONTRIBUTING.md`
-
+- Coordinate frame conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## MCP Servers
-When asked to access any of the following services, check if you have access to
-the corresponding MCP server:
+
+When asked to access any of the following services, check if you have access to the corresponding MCP server:
+
 - Linar
-- Gitlab. This is especially relevant for MRs.
+- Gitlab (especially relevant for MRs)

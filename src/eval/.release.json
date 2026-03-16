@@ -1,7 +1,6 @@
 {
   "$schema": "https://unpkg.com/release-it@18/schema/release-it.json",
   "git": {
-
     "requireUpstream": true,
     "requireCleanWorkingDir": false,
     "commitMessage": "Release pipeline, Alpasim EVAL image, v${version}",

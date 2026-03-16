@@ -1,0 +1,8 @@
+# @package _global_
+
+defines:
+  driver_model: ???  # default is defined in stable_manifest/internal.yaml
+
+runtime:
+  simulation_config:
+    planner_delay_us: 200_000

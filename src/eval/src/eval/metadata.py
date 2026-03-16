@@ -9,19 +9,9 @@ from glob import glob
 from pathlib import Path
 from typing import Any
 
-import yaml
+from alpasim_utils.yaml_utils import load_yaml_dict
 
 logger = logging.getLogger("alpasim_eval.metadata")
-
-
-def _load_yaml(file_path: str | Path) -> dict[str, Any]:
-    """Load a YAML file and return its contents as a dictionary."""
-    path = Path(file_path) if isinstance(file_path, str) else file_path
-    if not path.exists():
-        logger.warning("File not found at %s", path)
-        return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def get_metadata(config_dir: Path) -> dict[str, Any]:
@@ -38,7 +28,9 @@ def get_metadata(config_dir: Path) -> dict[str, Any]:
     """
     # Read run metadata from same directory as config
     run_metadata_path = config_dir / "run_metadata.yaml"
-    run_metadata = _load_yaml(run_metadata_path)
+    run_metadata = load_yaml_dict(run_metadata_path, missing_ok=True)
+    if not run_metadata_path.exists():
+        logger.warning("File not found at %s", run_metadata_path)
     logger.debug("Loaded run metadata: %s", run_metadata)
 
     yamls_to_upload = glob(f"{config_dir}/*.yaml", recursive=True)
@@ -48,7 +40,9 @@ def get_metadata(config_dir: Path) -> dict[str, Any]:
     ]
 
     logger.debug("Yamls to collect: %s", yaml_paths)
-    yaml_dict = {path.name: _load_yaml(path) for path in yaml_paths}
+    yaml_dict = {
+        path.name: load_yaml_dict(path, missing_ok=True) for path in yaml_paths
+    }
 
     # Serialize the dictionary to JSON string
     run_metadata["yamls"] = json.dumps(yaml_dict)

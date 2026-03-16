@@ -269,5 +269,4 @@ impl Pose {
             && (self.quaternion.z - other.quaternion.z).abs() < EPSILON
             && (self.quaternion.w - other.quaternion.w).abs() < EPSILON
     }
-
 }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """CI test to validate scene and suite CSV files in the repository."""
 
@@ -47,9 +47,9 @@ def test_validate_csvs_catches_duplicate_uuids(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "dup-uuid,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,swiftstack\n"
-        "dup-uuid,clipgt-bbb,0.2.220,path/b,2025-01-01 00:00:00,swiftstack\n"  # duplicate!
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "dup-uuid,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,swiftstack,\n"
+        "dup-uuid,clipgt-bbb,0.2.220,path/b,2025-01-01 00:00:00,swiftstack,\n"  # duplicate!
     )
     suites.write_text("test_suite_id,scene_id\n")
 
@@ -63,8 +63,8 @@ def test_validate_csvs_catches_orphaned_suite_references(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-exists,0.2.220,path/a,2025-01-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-exists,0.2.220,path/a,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites.write_text(
         "test_suite_id,scene_id\n"
@@ -82,8 +82,8 @@ def test_validate_csvs_catches_invalid_timestamp_format(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.2.220,path/a,01/15/2025 10:30:00,swiftstack\n"  # wrong format!
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.2.220,path/a,01/15/2025 10:30:00,swiftstack,\n"  # wrong format!
     )
     suites.write_text("test_suite_id,scene_id\n")
 
@@ -97,8 +97,8 @@ def test_validate_csvs_catches_invalid_scene_id_format(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,invalid-scene-id,0.2.220,path/a,2025-01-01 00:00:00,swiftstack\n"  # missing clipgt- prefix
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,invalid-scene-id,0.2.220,path/a,2025-01-01 00:00:00,swiftstack,\n"  # missing clipgt- prefix
     )
     suites.write_text("test_suite_id,scene_id\n")
 
@@ -127,8 +127,8 @@ def test_validate_csvs_catches_duplicate_suite_entries(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites.write_text(
         "test_suite_id,scene_id\n"
@@ -146,12 +146,27 @@ def test_validate_csvs_catches_invalid_artifact_repository(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,invalid_repo\n"  # invalid!
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.2.220,path/a,2025-01-01 00:00:00,invalid_repo,\n"  # invalid!
     )
     suites.write_text("test_suite_id,scene_id\n")
 
     with pytest.raises(CSVValidationError, match="Invalid artifact_repository"):
+        validate_csvs(str(scenes), str(suites))
+
+
+def test_validate_csvs_catches_missing_hf_revision(tmp_path):
+    """Verify validation catches huggingface rows without hf_revision."""
+    scenes = tmp_path / "scenes.csv"
+    suites = tmp_path / "suites.csv"
+
+    scenes.write_text(
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa-bbb-ccc,0.2.220-abc123,path/to/file.usdz,2025-01-01 00:00:00,huggingface,\n"
+    )
+    suites.write_text("test_suite_id,scene_id\n")
+
+    with pytest.raises(CSVValidationError, match="hf_revision"):
         validate_csvs(str(scenes), str(suites))
 
 
@@ -161,9 +176,9 @@ def test_validate_csvs_passes_for_valid_data(tmp_path):
     suites = tmp_path / "suites.csv"
 
     scenes.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa-bbb-ccc,0.2.220-abc123,alpasim/path/to/file.usdz,2025-01-01 00:00:00,swiftstack\n"
-        "uuid-2,clipgt-ddd-eee-fff,0.2.220-abc123,alpasim/path/to/file2.usdz,2025-01-02 12:30:45,huggingface\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa-bbb-ccc,0.2.220-abc123,alpasim/path/to/file.usdz,2025-01-01 00:00:00,swiftstack,\n"
+        "uuid-2,clipgt-ddd-eee-fff,0.2.220-abc123,alpasim/path/to/file2.usdz,2025-01-02 12:30:45,huggingface,v1\n"
     )
     suites.write_text(
         "test_suite_id,scene_id\n"

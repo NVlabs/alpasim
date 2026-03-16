@@ -68,12 +68,13 @@ class ConfigurationManager:
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)
 
-        # Get default_scenario_parameters as a regular dict
-        default_params = runtime_config.get("default_scenario_parameters", {})
+        # Write simulation params directly (was: fan out per scene)
+        simulation_config = runtime_config.pop("simulation_config", {})
+        runtime_config["simulation_config"] = simulation_config
 
-        runtime_config = self._create_scenarios(
-            runtime_config, [s.scene_id for s in artifact_list], default_params
-        )
+        # Write flat scene list
+        runtime_config["scenes"] = [{"scene_id": s.scene_id} for s in artifact_list]
+
         runtime_config = self._maybe_split_user_config_for_slurm_array(runtime_config)
 
         task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
@@ -241,25 +242,8 @@ class ConfigurationManager:
             return d
         return {k: self._remove_none_values(v) for k, v in d.items() if v is not None}
 
-    def _create_scenarios(
-        self, runtime_config: Dict, scene_id_list: List[str], default_params: Dict
-    ) -> Dict:
-        """Create scenarios from scene IDs."""
-        new_scenarios = []
-
-        for scene_id in scene_id_list:
-            # Create a new scenario based on default params
-            scenario = default_params.copy() if default_params else {}
-            scenario["scene_id"] = scene_id
-            new_scenarios.append(scenario)
-
-        runtime_config["scenarios"] = new_scenarios
-        runtime_config.pop("default_scenario_parameters", None)
-
-        return runtime_config
-
     def _maybe_split_user_config_for_slurm_array(self, user_config: Any) -> Any:
-        """Split scenarios for SLURM array jobs."""
+        """Split scenes for SLURM array jobs."""
         task_count = int(os.environ.get("SLURM_ARRAY_TASK_COUNT", 0))
 
         if task_count <= 1:
@@ -273,18 +257,16 @@ class ConfigurationManager:
         task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
         min_task_id = int(os.environ.get("SLURM_ARRAY_TASK_MIN", 0))
 
-        all_scenarios = user_config["scenarios"]
+        all_scenes = user_config["scenes"]
         # Sort for deterministic distribution
-        all_scenarios = sorted(
-            all_scenarios, key=lambda x: (x.get("scene_id", ""), str(x))
-        )
+        all_scenes = sorted(all_scenes, key=lambda x: (x.get("scene_id", ""), str(x)))
 
-        # Distribute scenarios across array tasks
-        split_scenarios: List[List[Any]] = [[] for _ in range(task_count)]
-        for scenario_id, scenario in enumerate(all_scenarios):
-            split_scenarios[scenario_id % task_count].append(all_scenarios[scenario_id])
+        # Distribute scenes across array tasks (round-robin)
+        split_scenes: List[List[Any]] = [[] for _ in range(task_count)]
+        for idx, scene in enumerate(all_scenes):
+            split_scenes[idx % task_count].append(scene)
 
-        user_config["scenarios"] = split_scenarios[task_id - min_task_id]
+        user_config["scenes"] = split_scenes[task_id - min_task_id]
         return user_config
 
     def get_runtime_config_name(self) -> str:

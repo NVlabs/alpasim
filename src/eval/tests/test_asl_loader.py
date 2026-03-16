@@ -106,6 +106,25 @@ async def minimal_asl_file(tmp_path: Path) -> Path:
     return asl_path
 
 
+@pytest_asyncio.fixture
+async def runtime_layout_asl_file(tmp_path: Path) -> Path:
+    """Create an ASL file matching runtime layout: .../<scene>/<session_uuid>/rollout.asl."""
+    session_uuid = "test-uuid-123"
+    asl_path = tmp_path / "rollouts" / "test-clipgt" / session_uuid / "rollout.asl"
+    asl_path.parent.mkdir(parents=True, exist_ok=True)
+
+    log_writer = logs.LogWriter(asl_path)
+    async with log_writer:
+        metadata = _create_rollout_metadata()
+        await log_writer.on_message(LogEntry(rollout_metadata=metadata))
+        for i in range(10):
+            timestamp_us = i * 100_000
+            actor_poses = _create_actor_poses(timestamp_us, x_position=float(i))
+            await log_writer.on_message(LogEntry(actor_poses=actor_poses))
+
+    return asl_path
+
+
 @pytest.fixture
 def default_eval_config() -> EvalConfig:
     """Create a default EvalConfig for testing."""
@@ -211,6 +230,20 @@ class TestLoadScenarioEvalInputFromAsl:
         )
 
         # Path is .../rollouts/test-clipgt/0/rollout.asl
+        assert result.batch_id == "0"
+
+    @pytest.mark.asyncio
+    async def test_runtime_layout_normalizes_batch_id_to_zero(
+        self, runtime_layout_asl_file: Path, default_eval_config: EvalConfig
+    ) -> None:
+        """Runtime layout stores rollout UUID in path segment that should not become batch_id."""
+        result = await load_scenario_eval_input_from_asl(
+            asl_file_path=str(runtime_layout_asl_file),
+            cfg=default_eval_config,
+            artifacts={},
+            run_metadata={"run_uuid": "test-run", "run_name": "test"},
+        )
+
         assert result.batch_id == "0"
 
 

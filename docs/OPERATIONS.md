@@ -9,7 +9,7 @@ This guide covers common operational tasks for tuning, optimizing, and troublesh
 The number of service replicas and their GPU assignments are configured in deployment configs
 located in `src/wizard/configs/deploy/`:
 
-- **Local workstation**: `local_oss.yaml`
+- **Local workstation**: `local.yaml`
 
 #### Understanding the Configuration
 
@@ -36,7 +36,7 @@ Example:
 
 #### Balancing Replicas and Concurrent Rollouts
 
-Total simulation throughput capacity is determined by:
+For most services, total simulation throughput capacity is determined by:
 
 ```
 Total capacity = nr_gpus * replicas_per_container * n_concurrent_rollouts
@@ -45,13 +45,23 @@ Total capacity = nr_gpus * replicas_per_container * n_concurrent_rollouts
 where **`n_concurrent_rollouts`** is the number of rollouts (simulation episodes) each service
 replica can process simultaneously. This controls how many scenes can be simulated in parallel.
 
-All services must have equal total capacity to avoid bottlenecks. Example from `local_oss.yaml`
-scaled up:
+For sensorsim/NRE, this changed in recent NRE releases: each container may run a single NRE
+process with internal worker concurrency via `--max-workers`, instead of multiple replicas per
+container. In that case, think of effective per-container capacity as:
+
+```
+effective sensorsim capacity = nr_gpus * max_workers * n_concurrent_rollouts
+```
+
+If `replicas_per_container=1` and NRE runs with `--max-workers=4`, one sensorsim container can
+still serve four render workers internally.
+
+All services should have similar total capacity to avoid bottlenecks. Example:
 
 ```yaml
 services:
   sensorsim:
-    replicas_per_container: 4
+    replicas_per_container: 1
     gpus: [0, 1]
 
   driver:
@@ -65,7 +75,7 @@ services:
 runtime:
   endpoints:
     sensorsim:
-      n_concurrent_rollouts: 4 # 2 GPUs * 4 replicas * 4 concurrent = 32
+      n_concurrent_rollouts: 4 # with --max-workers=4: 2 GPUs * 4 workers * 4 concurrent = 32
 
     driver:
       n_concurrent_rollouts: 2 # 2 GPUs * 8 replicas * 2 concurrent = 32
@@ -73,6 +83,14 @@ runtime:
     controller:
       n_concurrent_rollouts: 2 # 1 CPU * 16 replicas * 2 concurrent = 32
 ```
+
+For sensorsim specifically, tune these together:
+
+- `services.sensorsim.replicas_per_container`
+- the NRE container's internal `--max-workers`
+- `runtime.endpoints.sensorsim.n_concurrent_rollouts`
+
+Recent OSS deploy configs prefer `replicas_per_container: 1` plus higher `--max-workers`.
 
 ### How do I change the model?
 
@@ -84,7 +102,7 @@ By default, the VaVam driver and model are used. The model weights are downloade
 To use a custom model, mount a custom vavam-driver directory:
 
 ```bash
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
     defines.vavam_driver=/path/to/custom/vavam-driver
 ```
@@ -98,7 +116,7 @@ that path.
 To use a custom driver container image:
 
 ```bash
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
     services.driver.image=<your-registry>/<your-driver-image>:<tag>
 ```
@@ -119,7 +137,8 @@ The simulator has multiple synchronized "clocks":
 
 1. **Driver inference** (`control_timestep_us`) - How often the model makes decisions
 1. **Camera frames** (`frame_interval_us`) - How often cameras capture images
-1. **GPS/Pose updates** (`egopose_interval_us`) - How often position is updated
+1. **Pose reporting** (`pose_reporting_interval_us`) - How often intermediate poses are reported
+   between control steps (0 = at `control_timestep_us` rate, the default)
 1. **Simulation start** (`time_start_offset_us`) - Initial offset to avoid artifacts
 
 For correct operation, these must be mathematically aligned.
@@ -133,45 +152,42 @@ To change to 5Hz inference (200ms between decisions):
 1. **Set inference frequency** (`control_timestep_us`):
 
    ```bash
-   runtime.default_scenario_parameters.control_timestep_us=200000  # 200ms = 5Hz
+   runtime.simulation_config.control_timestep_us=200000  # 200ms = 5Hz
    ```
 
-1. **Match GPS update rate** (`egopose_interval_us` must equal `control_timestep_us`):
-
-   ```bash
-   runtime.default_scenario_parameters.egopose_interval_us=200000
-   ```
+1. **Pose reporting** (`pose_reporting_interval_us`): defaults to 0, which falls back to
+   `control_timestep_us`. No explicit setting needed unless you want intermediate pose reports.
 
 1. **Set time offset** (must be a multiple of `control_timestep_us`):
 
    ```bash
-   runtime.default_scenario_parameters.time_start_offset_us=600000  # 3 * 200ms
+   runtime.simulation_config.time_start_offset_us=600000  # 3 * 200ms
    ```
 
 1. **Match camera frame rate** (VaVam default has 1 camera):
 
    ```bash
-   runtime.default_scenario_parameters.cameras.0.frame_interval_us=200000
+   runtime.simulation_config.cameras.0.frame_interval_us=200000
    ```
 
    For configs with 2 cameras (e.g., `+cameras=2cam`), also set:
 
    ```bash
-   runtime.default_scenario_parameters.cameras.1.frame_interval_us=200000
+   runtime.simulation_config.cameras.1.frame_interval_us=200000
    ```
 
 **Full command**:
 
 ```bash
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
-    runtime.default_scenario_parameters.control_timestep_us=200000 \
-    runtime.default_scenario_parameters.egopose_interval_us=200000 \
-    runtime.default_scenario_parameters.time_start_offset_us=600000 \
-    runtime.default_scenario_parameters.cameras.0.frame_interval_us=200000
+    runtime.simulation_config.control_timestep_us=200000 \
+    runtime.simulation_config.time_start_offset_us=600000 \
+    runtime.simulation_config.cameras.0.frame_interval_us=200000
 ```
 
-Note: Add `cameras.1.frame_interval_us=200000` if using 2-camera configs
+Note: Add `cameras.1.frame_interval_us=200000` if using 2-camera configs.
+`pose_reporting_interval_us` defaults to 0, falling back to `control_timestep_us`.
 
 **Scenario 2: High-rate camera with lower inference rate**
 
@@ -180,18 +196,17 @@ To use 30Hz cameras (33.3ms) but 10Hz inference (100ms):
 1. **Camera captures at 30Hz**: `frame_interval_us=33334` (33.3ms)
 1. **Inference runs at 10Hz**: `control_timestep_us=100002` (must be 3 × 33334)
 1. **Subsample frames**: `driver.inference.Cframes_subsample=3` (use every 3rd frame)
-1. **Egopose matches inference**: `egopose_interval_us=100002`
+1. **Pose reporting**: `pose_reporting_interval_us` defaults to 0 (falls back to `control_timestep_us`)
 1. **Time offset aligns**: `time_start_offset_us=300006` (3 × 100002)
 
 **Full command** (based on `sim/20s_at_30Hz.yaml`):
 
 ```bash
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
-    runtime.default_scenario_parameters.control_timestep_us=100002 \
-    runtime.default_scenario_parameters.egopose_interval_us=100002 \
-    runtime.default_scenario_parameters.time_start_offset_us=300006 \
-    runtime.default_scenario_parameters.cameras.0.frame_interval_us=33334 \
+    runtime.simulation_config.control_timestep_us=100002 \
+    runtime.simulation_config.time_start_offset_us=300006 \
+    runtime.simulation_config.cameras.0.frame_interval_us=33334 \
     ++driver.inference.Cframes_subsample=3
 ```
 
@@ -203,7 +218,7 @@ The `assert_zero_decision_delay` flag (enabled by default in OSS configs) valida
 synchronization at runtime. It checks that:
 
 - Camera frames complete exactly at decision time
-- Egopose updates complete exactly at decision time
+- Pose updates complete exactly at decision time
 
 If misconfigured, the simulator will error with messages like:
 
@@ -213,33 +228,35 @@ Last started frame finishes at X which is Y microseconds away from decision time
 ```
 
 **What it does**: At each control step, before calling the driver, the runtime verifies that the
-last camera frame and egopose update completed exactly at `now_us` (zero delay). This ensures the
+last camera frame and pose update completed exactly at `now_us` (zero delay). This ensures the
 model receives perfectly synchronized data.
 
 **Testing your configuration**:
 
 ```bash
 # The flag is true by default, but you can explicitly set it:
-runtime.default_scenario_parameters.assert_zero_decision_delay=true
+runtime.simulation_config.assert_zero_decision_delay=true
 ```
 
 #### Common Frequencies
 
 Based on actual config files in `src/wizard/configs/`:
 
-| Frequency | `control_timestep_us` | `egopose_interval_us` | `time_start_offset_us`      | Notes               |
-| --------- | --------------------- | --------------------- | --------------------------- | ------------------- |
-| 2Hz       | 500000 (500ms)        | 500000                | 500000 (1×) or 1500000 (3×) | VaVam default       |
-| 5Hz       | 200000 (200ms)        | 200000                | 600000 (3×)                 | Example config      |
-| 10Hz      | 100000 (100ms)        | 100000                | 300000 (3×)                 | Base config default |
-| 30Hz      | 33334 (33.3ms)        | 33334                 | 100002 (3×)                 | High frequency      |
+| Frequency | `control_timestep_us` | `time_start_offset_us`      | Notes               |
+| --------- | --------------------- | --------------------------- | ------------------- |
+| 2Hz       | 500000 (500ms)        | 500000 (1×) or 1500000 (3×) | VaVam default       |
+| 5Hz       | 200000 (200ms)        | 600000 (3×)                 | Example config      |
+| 10Hz      | 100000 (100ms)        | 300000 (3×)                 | Base config default |
+| 30Hz      | 33334 (33.3ms)        | 100002 (3×)                 | High frequency      |
+
+`pose_reporting_interval_us` defaults to 0 for all frequencies (falls back to `control_timestep_us`).
 
 **Pattern**: Most configs use `time_start_offset_us = 3 × control_timestep_us` to avoid artifacts at
 scene start.
 
 **See also**:
 
-- [src/runtime/README.md - Zero delay mode](../src/runtime/README.md#zero-delay-mode) for
+- [src/runtime/README.md - Zero delay mode](/src/runtime/README.md#zero-delay-mode) for
   synchronization requirements
 - `src/wizard/configs/driver/vavam_runtime_configs.yaml` for a 2Hz example
 
@@ -367,14 +384,14 @@ Use `runtime.endpoints.<service>.skip` to disable services:
 
 ```bash
 # Disable traffic simulation
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
     runtime.endpoints.trafficsim.skip=true
 
 # Disable physics (log replay mode)
-uv run alpasim_wizard +deploy=local_oss \
+uv run alpasim_wizard +deploy=local \
     wizard.log_dir=runs/{DATETIME} \
     runtime.endpoints.physics.skip=true \
-    runtime.default_scenario_parameters.physics_update_mode=NONE \
-    runtime.default_scenario_parameters.force_gt_duration_us=20000000
+    runtime.simulation_config.physics_update_mode=NONE \
+    runtime.simulation_config.force_gt_duration_us=20000000
 ```

@@ -4,26 +4,52 @@
 """
 Worker process entry point and main loop.
 
+Workers are stateless with respect to service management: each job arrives
+with pre-assigned service addresses from the parent dispatch loop.  The worker
+creates lightweight service objects, runs the rollout, and closes channels.
+
 Supports two execution modes:
-- Inline mode (W=1): Runs in parent process for debugging
+- Inline mode (W=1): Runs in parent process (in separate threads)
 - Subprocess mode (W>1): Runs in spawned child processes for parallelism
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import sys
 import time
+import traceback
 from multiprocessing import Queue
+from queue import Empty as QueueEmpty
 
+from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
+from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import UserSimulatorConfig, typed_parse_config
-from alpasim_runtime.dispatcher import Dispatcher
+from alpasim_runtime.event_loop import EventBasedRollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
+from alpasim_runtime.services.controller_service import ControllerService
+from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.physics_service import PhysicsService
+from alpasim_runtime.services.sensorsim_service import SensorsimService
+from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
 from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
-from alpasim_runtime.worker.ipc import WorkerArgs, _ShutdownSentinel, poll_job_queue
+from alpasim_runtime.unbound_rollout import UnboundRollout
+from alpasim_runtime.worker.artifact_cache import make_artifact_loader
+from alpasim_runtime.worker.ipc import (
+    AssignedRolloutJob,
+    JobResult,
+    WorkerArgs,
+    _ShutdownSentinel,
+)
+from alpasim_utils.artifact import Artifact
+
+from eval.schema import EvalConfig
+
+_JOB_POLL_TIMEOUT_S = 10.0
 
 
 def _is_orphaned(parent_pid: int) -> bool:
@@ -31,34 +57,143 @@ def _is_orphaned(parent_pid: int) -> bool:
     return os.getppid() != parent_pid
 
 
+async def run_single_rollout(
+    job: AssignedRolloutJob,
+    user_config: UserSimulatorConfig,
+    artifacts: dict[str, Artifact],
+    camera_catalog: CameraCatalog,
+    version_ids: RolloutMetadata.VersionIds,
+    rollouts_dir: str,
+    eval_config: EvalConfig,
+) -> JobResult:
+    """Execute one rollout with the addresses assigned by the parent."""
+    ep = job.endpoints
+    rollout: UnboundRollout | None = None
+
+    try:
+        # Create lightweight service objects (just channel + stub, no pool)
+        driver = DriverService(
+            ep.driver.address,
+            skip=ep.driver.skip,
+        )
+        sensorsim = SensorsimService(
+            ep.sensorsim.address,
+            skip=ep.sensorsim.skip,
+            camera_catalog=camera_catalog,
+        )
+        physics = PhysicsService(
+            ep.physics.address,
+            skip=ep.physics.skip,
+        )
+        traffic = TrafficService(
+            ep.trafficsim.address,
+            skip=ep.trafficsim.skip,
+        )
+        controller = ControllerService(
+            ep.controller.address,
+            skip=ep.controller.skip,
+        )
+
+        # Offload CPU-bound rollout preparation to thread
+        loop = asyncio.get_running_loop()
+        rollout = await loop.run_in_executor(
+            None,
+            functools.partial(
+                UnboundRollout.create,
+                simulation_config=user_config.simulation_config,
+                scene_id=job.scene_id,
+                version_ids=version_ids,
+                available_artifacts=artifacts,
+                rollouts_dir=rollouts_dir,
+            ),
+        )
+
+        eval_result = await EventBasedRollout(
+            unbound=rollout,
+            driver=driver,
+            sensorsim=sensorsim,
+            physics=physics,
+            trafficsim=traffic,
+            controller=controller,
+            camera_catalog=camera_catalog,
+            eval_config=eval_config,
+        ).run()
+
+        return JobResult(
+            request_id=job.request_id,
+            job_id=job.job_id,
+            rollout_spec_index=job.rollout_spec_index,
+            success=True,
+            error=None,
+            error_traceback=None,
+            rollout_uuid=rollout.rollout_uuid,
+            eval_result=eval_result,
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        tb = traceback.format_exc()
+        module_logger = logging.getLogger(__name__)
+        module_logger.warning(
+            "Rollout FAILED: job=%s scene=%s uuid=%s error=%s\n%s",
+            job.job_id,
+            rollout.scene_id if rollout else "N/A",
+            rollout.rollout_uuid if rollout else "N/A",
+            exc,
+            tb,
+        )
+        return JobResult(
+            request_id=job.request_id,
+            job_id=job.job_id,
+            rollout_spec_index=job.rollout_spec_index,
+            success=False,
+            error=str(exc),
+            error_traceback=tb,
+            rollout_uuid=rollout.rollout_uuid if rollout else None,
+        )
+
+
 async def run_worker_loop(
     worker_id: int,
     job_queue: Queue,
     result_queue: Queue,
-    dispatcher: Dispatcher,
+    num_consumers: int,
+    user_config: UserSimulatorConfig,
+    smooth_trajectories: bool,
+    artifact_cache_size: int | None,
+    camera_catalog: CameraCatalog,
+    version_ids: RolloutMetadata.VersionIds,
+    rollouts_dir: str,
+    eval_config: EvalConfig,
     parent_pid: int | None = None,
 ) -> int:
     """
-    Core job processing loop. Used by both inline (W=1) and subprocess (W>1) modes.
-
-    Consumes jobs from job_queue, executes them via dispatcher, and pushes results
-    to result_queue.
+    Core job processing loop with concurrent consumers.
 
     Args:
         worker_id: Worker identifier for logging.
-        job_queue: Queue to pull RolloutJob or shutdown sentinel from.
+        job_queue: Queue to pull AssignedRolloutJob or shutdown sentinel from.
         result_queue: Queue to push JobResult to.
-        dispatcher: Dispatcher instance for executing jobs.
-        parent_pid: If None, running inline in parent - skip orphan detection.
+        num_consumers: Number of concurrent consumer tasks.
+        user_config: User simulator configuration.
+        smooth_trajectories: Whether to smooth trajectories when loading artifacts.
+        artifact_cache_size: Max worker-local artifact cache size.
+            None = unlimited cache, 0 = disable cache.
+        camera_catalog: Camera catalog for sensorsim.
+        version_ids: Canonical version IDs from the parent process.
+        rollouts_dir: Directory for rollout outputs.
+        eval_config: Evaluation configuration.
+        parent_pid: If None, running inline - skip orphan detection.
                     If set, running in subprocess - exit if parent dies.
 
     Returns:
         Number of rollouts completed by this worker.
     """
     module_logger = logging.getLogger(__name__)
-
-    max_concurrent = dispatcher.get_pool_capacity()
-    module_logger.info(f"Worker {worker_id} ready with capacity={max_concurrent}")
+    module_logger.info(
+        "Worker %d ready with num_consumers=%d",
+        worker_id,
+        num_consumers,
+    )
 
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
@@ -66,6 +201,11 @@ async def run_worker_loop(
 
     # Install event loop idle profiler
     install_event_loop_idle_profiler(loop)
+
+    load_artifact = make_artifact_loader(
+        smooth_trajectories=smooth_trajectories,
+        max_cache_size=artifact_cache_size,
+    )
 
     async def job_consumer() -> None:
         """
@@ -84,12 +224,14 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
-            # Pull job. With timeout to stay responsive to shutdown signals.
-            job = await loop.run_in_executor(
-                None,
-                poll_job_queue,
-                job_queue,
-            )
+            # Pull job with timeout to stay responsive to shutdown signals
+            def _poll_job() -> AssignedRolloutJob | _ShutdownSentinel | None:
+                try:
+                    return job_queue.get(timeout=_JOB_POLL_TIMEOUT_S)
+                except QueueEmpty:
+                    return None
+
+            job = await loop.run_in_executor(None, _poll_job)
 
             if job is None:
                 # Timeout - retry
@@ -102,14 +244,24 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
+            artifact = load_artifact(job.scene_id, job.artifact_path)
+
             # Process the job
-            result = await dispatcher.run_job(job)
+            result = await run_single_rollout(
+                job=job,
+                user_config=user_config,
+                artifacts={job.scene_id: artifact},
+                camera_catalog=camera_catalog,
+                version_ids=version_ids,
+                rollouts_dir=rollouts_dir,
+                eval_config=eval_config,
+            )
             result_queue.put(result)
             rollout_count += 1
 
-    # Spawn max_concurrent consumer tasks - each handles one job at a time
+    # Spawn num_consumers consumer tasks -- each handles one job at a time
     async with asyncio.TaskGroup() as tg:
-        for _ in range(max_concurrent):
+        for _ in range(num_consumers):
             tg.create_task(job_consumer())
 
     # TaskGroup ensures all consumers complete before exiting
@@ -127,7 +279,7 @@ async def worker_async_main(args: WorkerArgs) -> None:
     """
     Async worker entry point.
 
-    Handles worker setup (logging to file, metrics, dispatcher creation) then
+    Handles worker setup (logging to file, metrics) then
     delegates to run_worker_loop for the actual job processing.
     """
     # Initialize shared RPC tracking if provided (multiprocessing mode)
@@ -135,7 +287,6 @@ async def worker_async_main(args: WorkerArgs) -> None:
         set_shared_rpc_tracking(args.shared_rpc_tracking)
 
     # Load user config (for scenarios, endpoints, etc.)
-    # Network config is not needed - allocations are pre-computed
     user_config = typed_parse_config(args.user_config_path, UserSimulatorConfig)
 
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
@@ -167,9 +318,13 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     module_logger = logging.getLogger(__name__)
     module_logger.info(
-        f"Worker {args.worker_id} starting (num_workers={args.num_workers})"
+        "Worker %d starting (num_workers=%d, num_consumers=%d)",
+        args.worker_id,
+        args.num_workers,
+        args.num_consumers,
     )
-    module_logger.info(f"Allocations: {args.allocations}")
+
+    camera_catalog = CameraCatalog(user_config.extra_cameras)
 
     start_time = time.perf_counter()
 
@@ -180,24 +335,23 @@ async def worker_async_main(args: WorkerArgs) -> None:
         worker_id=args.worker_id,
         sample_resources=(args.worker_id == 0),
     ) as ctx:
-        dispatcher = await Dispatcher.create(
-            user_config=user_config,
-            allocations=args.allocations,
-            usdz_glob=args.usdz_glob,
-            rollouts_dir=rollouts_dir,
-            eval_config=args.eval_config,
-        )
-
         rollout_count = await run_worker_loop(
             worker_id=args.worker_id,
             job_queue=args.job_queue,
             result_queue=args.result_queue,
-            dispatcher=dispatcher,
-            parent_pid=args.parent_pid,  # Enable orphan detection
+            num_consumers=args.num_consumers,
+            user_config=user_config,
+            smooth_trajectories=user_config.smooth_trajectories,
+            artifact_cache_size=user_config.artifact_cache_size,
+            camera_catalog=camera_catalog,
+            version_ids=args.version_ids,
+            rollouts_dir=rollouts_dir,
+            eval_config=args.eval_config,
+            parent_pid=args.parent_pid,
         )
 
         # Record simulation summary with actual measured values
         total_time = time.perf_counter() - start_time
         ctx.record_simulation_summary(total_time, rollout_count)
 
-    module_logger.info(f"Worker {args.worker_id} exiting")
+    module_logger.info("Worker %d exiting", args.worker_id)

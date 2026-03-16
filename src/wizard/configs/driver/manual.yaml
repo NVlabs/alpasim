@@ -15,7 +15,7 @@ log_level: ${wizard.log_level}
 
 # Model configuration
 model:
-  model_type: MANUAL
+  model_type: manual
   # Manual model doesn't need checkpoints, but schema requires a path
   checkpoint_path: "unused"
   # Manual model is CPU-only, no GPU needed

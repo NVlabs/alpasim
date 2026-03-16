@@ -104,5 +104,8 @@ message LogEntry {
         nre.grpc.protos.sensorsim.AvailableCamerasReturn available_cameras_return = 20;
 
         nre.grpc.protos.sensorsim.AggregatedRenderRequest aggregated_render_request = 21;
+
+        common.Empty available_ego_masks_request = 22;
+        nre.grpc.protos.sensorsim.AvailableEgoMasksReturn available_ego_masks_return = 23;
     }
 }

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
+
+from __future__ import annotations
 
 import dataclasses
 from typing import Iterable
@@ -113,7 +115,12 @@ class ShapelyMap:
     )
 
     @staticmethod
-    def from_vec_map(vec_map: VectorMap) -> "ShapelyMap":
+    def from_vec_map(vec_map: VectorMap | None) -> "ShapelyMap":
+        if vec_map is None:
+            return ShapelyMap(
+                renderable_linestrings=[],
+                str_tree=STRtree([]),
+            )
         renderable_linestrings = []
 
         road_lane_elements = vec_map.elements[

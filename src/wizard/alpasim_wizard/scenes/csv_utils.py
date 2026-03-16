@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Shared utilities for CSV operations on scene/suite data."""
 
@@ -10,7 +10,7 @@ import os
 import re
 from enum import Enum
 
-import polars as pl  # type: ignore[import-not-found]
+import polars as pl
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ SCENES_COLUMNS = [
     "path",
     "last_modified",
     "artifact_repository",
+    "hf_revision",
 ]
 SUITES_COLUMNS = ["test_suite_id", "scene_id"]
 
@@ -283,6 +284,26 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
                 bad = invalid_repos["artifact_repository"].unique().to_list()[:5]
                 errors.append(
                     f"Invalid artifact_repository values (expected one of {list(VALID_ARTIFACT_REPOSITORIES)}): {bad}"
+                )
+
+        # Check hf_revision is set for huggingface artifacts
+        if (
+            "hf_revision" in scenes_df.columns
+            and "artifact_repository" in scenes_df.columns
+        ):
+            hf_rows = scenes_df.filter(
+                pl.col("artifact_repository").cast(pl.Utf8).str.strip_chars()
+                == "huggingface"
+            )
+            missing_revision = hf_rows.filter(
+                pl.col("hf_revision").is_null()
+                | (pl.col("hf_revision").cast(pl.Utf8).str.strip_chars() == "")
+            )
+            if missing_revision.height > 0:
+                bad_uuids = missing_revision["uuid"].to_list()[:5]
+                errors.append(
+                    f"HuggingFace artifacts missing hf_revision: {bad_uuids}"
+                    f"{'...' if missing_revision.height > 5 else ''}"
                 )
 
     # --- Suites CSV validation (if provided) ---

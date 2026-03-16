@@ -17,14 +17,14 @@ traffic simulator (coming soon). Additionally, we have a [physics simulation mod
 (ground constraints for egovehicle and non-ego actors), a
 [controller/vehicle model](/src/controller), and a
 [runtime](/src/runtime) which drives the simulation
-loop by issuing calls to the respective services and produces logs. An [eval module](src/eval) runs
+loop by issuing calls to the respective services and produces logs. An [eval module](/src/eval) runs
 outside of the main simulation loop and consumes the logs to compute metrics for autonomous driving.
 
 The simulator interfaces with [a driver](/src/driver) - the egovehicle policy network, which is the
-main target of the simulation and creates trajectories to completee the feedback loop. The services
+main target of the simulation and creates trajectories to complete the feedback loop. The services
 communicate with a gRPC protocol defined in the [gRPC API](/src/grpc/).
 
-![Alpasim architecture diagram](/docs/assets/images/alpasim-architecture.png)
+![Alpasim architecture diagram](assets/images/alpasim-architecture.png)
 
 ## Data flow of the simulation
 
@@ -50,11 +50,14 @@ synchronized logging and lets the runtime double as a load balancer between the 
 remaining services but it also means that the runtime is about as IO intense as all other services
 _combined_.
 
-The runtime is a gRPC client and needs to be aware of the addresses of all other microservices; the
-microservices are server daemons and make no requests of their own. The containers can be run in any
-way the user wishes (on arbitrary multiple machines) as long as the runtime is aware of the
-addresses and the filesystem mounts contain the necessary files. This repository focuses on
-configuration for running them all jointly on a single machine via `docker compose` or with `slurm`.
+The runtime needs to be aware of the addresses of all other microservices. In one-shot execution it
+acts primarily as a gRPC client that orchestrates a batch of rollouts. In daemon mode it also
+exposes its own gRPC server for on-demand simulation requests while continuing to act as the central
+client to the other services. The remaining microservices are server daemons and make no requests of
+their own. The containers can be run in any way the user wishes (on arbitrary multiple machines) as
+long as the runtime is aware of the addresses and the filesystem mounts contain the necessary files.
+This repository focuses on configuration for running them all jointly on a single machine via
+`docker compose` or with `slurm`.
 
 ## Links to source code
 
@@ -66,3 +69,5 @@ The microservices/components can be found here:
 - [physics](/src/physics): ground-mesh interaction modeling
 - [runtime](/src/runtime): the simulation runtime
 - trafficsim (coming soon)
+
+See the repository layout under `src/` for module organization.

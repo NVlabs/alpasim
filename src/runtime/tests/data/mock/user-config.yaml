@@ -48,40 +48,30 @@ extra_cameras:
         thin_prism: [0.0, 0.0, 0.0, 0.0]
     resolution_hw: [320, 512]
     shutter_type: ROLLING_TOP_TO_BOTTOM
-scenarios:
-  - assert_zero_decision_delay: true
-    cameras:
-      - logical_id: camera_front_wide_120fov
-        height: 320
-        width: 512
-        frame_interval_us: 100000
-        shutter_duration_us: 30000
-        first_frame_offset_us: -30000
-      - logical_id: camera_front_tele_30fov
-        height: 320
-        width: 512
-        frame_interval_us: 100000
-        shutter_duration_us: 30000
-        first_frame_offset_us: -30000
-    control_timestep_us: 100000
-    egomotion_noise:
-      cov_orientation_x: 0.0
-      cov_orientation_y: 0.0
-      cov_orientation_z: 0.0007
-      cov_x: 0.05
-      cov_y: 0.05
-      cov_z: 0.0
-      enabled: true
-      time_constant_orientation: 5.0
-      time_constant_position: 3.0
-    egopose_interval_us: 100000
-    force_gt_duration_us: 99999999999999 # large for mock test to prevent need for real drive trajectories
-    n_rollouts: 1
-    n_sim_steps: 160
-    physics_update_mode: NONE
-    planner_delay_us: 500000
-    ego_mask_rig_config_id: "hyperion_8_1"
-    route_generator_type: MAP
-    scene_id: clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3 #clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71  # Note: needs to match file from tests/data/mock/dataset-clipgt-1ea7dc88...
-    time_start_offset_us: 300000
-    vehicle: null
+simulation_config:
+  assert_zero_decision_delay: true
+  cameras:
+    - logical_id: camera_front_wide_120fov
+      height: 320
+      width: 512
+      frame_interval_us: 100000
+      shutter_duration_us: 30000
+      first_frame_offset_us: -30000
+    - logical_id: camera_front_tele_30fov
+      height: 320
+      width: 512
+      frame_interval_us: 100000
+      shutter_duration_us: 30000
+      first_frame_offset_us: -30000
+  control_timestep_us: 100000
+  force_gt_duration_us: 100000000000000 # large for mock test to prevent need for real drive trajectories
+  n_rollouts: 1
+  n_sim_steps: 50
+  physics_update_mode: NONE
+  planner_delay_us: 500000
+  ego_mask_rig_config_id: "hyperion_8_1"
+  route_generator_type: MAP
+  time_start_offset_us: 300000
+  vehicle: null
+scenes:
+  - scene_id: clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71  # Note: needs to match file from tests/data/mock/dataset-clipgt-1ea7dc88...
