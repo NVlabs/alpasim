@@ -1,5 +1,3 @@
-_Previously "docker-filesystem"_
-
 # Alpasim Data
 This directory contains all subdirectories which we will need to mount to the various docker containers to run alpasim.
 
