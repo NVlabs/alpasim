@@ -114,24 +114,16 @@ alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<
 alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.scene_ids=[<your scene ids>]
 ```
 
-## Autoresume Support for SLURM array jobs (14.04.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/193)
+## Autoresume Support for SLURM array jobs (14.04.25)
 * A helper script `src/tools/run-on-slurm/resume_slurm_job.sh` is provided to simplify resuming failed array job tasks.
 
-## Autoresume Support (21.03.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/174)
+## Autoresume Support (21.03.25)
 * Adds the ability for users to restart failed jobs in a batch by setting `runtime.enable_autoresume=true`.
 
 ## Deprecation of old repos (24.03.25)
 Three alpasim repositories are deprecated in favor of this one, to unify the development process more.
-The old repositories are:
-* [alpasim-docker](https://gitlab-master.nvidia.com/alpamayo/alpasim-docker)
-* [alpasim-runtime](https://gitlab-master.nvidia.com/alpamayo/alpasim-runtime)
-* [alpasim-grpc](https://gitlab-master.nvidia.com/alpamayo/alpasim-grpc-api)
 
-## `buildauth login` required (17.03.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/143)
-* Instead of manually obtaining artifactory credentials, users should now use `./tools/buildauth login` (see your setup documentation for buildauth).
-* Users who were already onboarded via the old process may need to update.
-
-## Breaking change: wizard using `uv tool` (14.03.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/127)
+## Breaking change: wizard using `uv tool` (14.03.25)
 Using `uv` allows us to automatically updated wizard dependencies without future
 action from the user, while currently users have to re-install the wizard.
 To migrate:
@@ -148,7 +140,7 @@ To migrate:
   interpreter unter `.venv` (you might need to enter the path as the venv wasn't
   picked up automatically for me).
 
-## Removal of batching from the runtime (13.03.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/134)
+## Removal of batching from the runtime (13.03.25)
 * User facing:
     * `runtime.endpoints.*.n_concurrent_batches` is now called `runtime.endpoints.*.n_concurrent_rollouts`.
     * `runtime.batch_size` no longer exists.
@@ -159,28 +151,12 @@ To migrate:
         * Fields like `batch_size` can be assumed to always be equal to 1 and `rollout_index` equal to 0. They are deprecated.
         * Fields which are `repeated` to support multiple rollouts are deprecated. New fields (with single rollout per message semantics) are added.
         * Runtime falls back to deprecated fields - no breaking change for now.
-        * Next step is for Alpamodel to populate the new fields on `DriveResponse` and roadcast conversion to support the new fields.
 
-## Wizard USDZ management changes (24.02.25) - [MR link](https://gitlab-master.nvidia.com/alpamayo/alpasim-docker/-/merge_requests/239)
+## Wizard USDZ management changes (24.02.25)
 
-* Users need to populate an `ALPAMAYO_S3_SECRET` env variable in their environment (e.g. via `~./bashrc`).
-    * The secret is to be found in cssportal (see your setup documentation for credentials).
-    * `rclone` setup is no longer necessary for use of alpasim (using `boto3` interally)
-* Users need to reinstall the wizard: `pip install -e wizard/ && pip install -r wizard/requirements.txt`.
-* Scene selection is performed via `scenes.{scene_ids,test_suite_id,kratos_query}` instead of `wizard.nre_sceneset`.
-    * The three options are mutually exclusive.
+* Scene selection is performed via `scenes.{scene_ids,test_suite_id}` instead of `wizard.nre_sceneset`.
+    * The options are mutually exclusive.
     * Specific artifacts will be automatically selected to match the configured NRE version.
     If impossible, an error is thrown.
-    * The old behavior of `wizard.nre_sceneset=interactive0_0` is replicated with `scenes.test_suite_id=migrated.interactive0_0`.
-* `wizard.no_query` is now `scenes.database.no_query`.
-* Database tables are updated.
-    * Test suites are defined by a list of (`scene_id`, `test_suite_id`) and not automatically versioned.
-    If all `scene_id`s have an artifact availble for a given NRE version, the suite available to be ran.
-    * Old suites have been migrated with `test_suite_id = migrated.{old_suite_id}_{old_suite_version}`.
-    * Scene table is named `sim_scenes_staging_003` ([kratos query](https://kratos-explorer.data.nvidiagrid.net/queries/92300/source)).
-    * Test suite table is named `sim_suites_staging_007` ([kratos query](https://kratos-explorer.data.nvidiagrid.net/queries/92302)) (`006` is skipped).
+* `usdz` files are now cached by their `uuid` rather than path.
 * `python -m alpasim_wizard.check_config <hydra args...>` is a new command which can be ran **on login node** to quickly sanity-check if the run configuration is valid in terms of syntax and scene settings.
-* New database management tools: `alpasim_wizard.{populate_db,create_suite}` instead of `alpasim_wizard.kratos_scripts`.
-* `usdz` files are now cached by their `uuid` rather than swiftstack path.
-* Developers: wizard dev deps (testing, type hints) have been made optional. To install, use `pip install -e wizard/[dev]`.
-    * You will get a warning about compatiblity clash between `kratos-cli` and `urllib3>2.0`, this should not cause any issues in practice.

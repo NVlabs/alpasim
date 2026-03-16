@@ -46,9 +46,8 @@ def write_yaml(data: dict[str, Any], file_path: str) -> None:
 def nre_image_to_nre_version(image: str) -> str:
     """
     Extract the NRE version from the NRE image URL.
-    Accepts both legacy and newer image references, including:
-    - `nvcr.io/nvidian/alpamayo/nre:{version}`
-    - `http://nvcr.io/.../nre_run:{version}`
+    Accepts image references of the form `<registry>/<path>/nre:<version>`,
+    e.g. `docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0`.
     """
     match = re.search(r":(?P<version>[^/:@]+)$", image.strip())
     if match is None:
@@ -100,7 +99,7 @@ def ensure_sqsh_path(
     file lock so concurrent wizard instances do not race.
 
     Args:
-        image: Full docker image URL (e.g. nvcr.io/nvidian/alpamayo/alpasim-runtime:0.3.1).
+        image: Full docker image URL (e.g. docker.io/org/repo:tag).
         squash_caches: List of cache directories to search and, for the first writable one, create.
         enroot_config_path: Directory containing .credentials for registry auth.
             If None, uses ENROOT_CONFIG_PATH from the environment.

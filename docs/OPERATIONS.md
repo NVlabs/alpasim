@@ -122,7 +122,7 @@ uv run alpasim_wizard +deploy=local \
 ```
 
 Your custom image must expose a gRPC endpoint compatible with the driver service interface (see
-[protocol buffer definitions](../src/grpc/alpasim_grpc/v0/)).
+[protocol buffer definitions](/src/grpc/alpasim_grpc/v0/)).
 
 For development of driver code within this repository, changes to `src/driver/` are automatically
 mounted into containers at runtime (see [Code Changes](TUTORIAL.md#code-changes) in TUTORIAL.md).
@@ -256,7 +256,7 @@ scene start.
 
 **See also**:
 
-- [src/runtime/README.md - Zero delay mode](../src/runtime/README.md#zero-delay-mode) for
+- [src/runtime/README.md - Zero delay mode](/src/runtime/README.md#zero-delay-mode) for
   synchronization requirements
 - `src/wizard/configs/driver/vavam_runtime_configs.yaml` for a 2Hz example
 

@@ -16,7 +16,7 @@ The `artifact_repository` column in `sim_scenes.csv` indicates where scene files
 
 | Suite ID | Scenes | Description |
 |----------|--------|-------------|
-| `public_2507_ex_failures` | 910 | All public NRE scenes (date 10. Dec 2025) excluding those with map issues. |
+| `public_2602` | 916 | All public NRE scenes from the 26.02 release. |
 
 ## Managing Scenes
 

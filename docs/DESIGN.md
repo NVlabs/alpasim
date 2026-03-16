@@ -13,16 +13,16 @@ are implemented in Python (accessible to researchers) and communicate via gRPC.
 
 Core services include the
 [Neural Rendering Engine (NRE)](https://www.nvidia.com/en-us/glossary/3d-reconstruction/) and neural
-traffic simulator (coming soon). Additionally, we have a [physics simulation module](../src/physics)
+traffic simulator (coming soon). Additionally, we have a [physics simulation module](/src/physics)
 (ground constraints for egovehicle and non-ego actors), a
-[controller/vehicle model](../src/controller), and a
-[runtime](../src/runtime) which drives the simulation
-loop by issuing calls to the respective services and produces logs. An [eval module](../src/eval) runs
+[controller/vehicle model](/src/controller), and a
+[runtime](/src/runtime) which drives the simulation
+loop by issuing calls to the respective services and produces logs. An [eval module](/src/eval) runs
 outside of the main simulation loop and consumes the logs to compute metrics for autonomous driving.
 
-The simulator interfaces with [a driver](../src/driver) - the egovehicle policy network, which is the
+The simulator interfaces with [a driver](/src/driver) - the egovehicle policy network, which is the
 main target of the simulation and creates trajectories to complete the feedback loop. The services
-communicate with a gRPC protocol defined in the [gRPC API](../src/grpc/).
+communicate with a gRPC protocol defined in the [gRPC API](/src/grpc/).
 
 ![Alpasim architecture diagram](assets/images/alpasim-architecture.png)
 
@@ -63,11 +63,11 @@ This repository focuses on configuration for running them all jointly on a singl
 
 The microservices/components can be found here:
 
-- [controller](../src/controller): a simple vehicle controller + model
-- [driver](../src/driver): a service that runs driving policies
-- [eval](../src/eval): an evaluation framework that processes data
-- [physics](../src/physics): ground-mesh interaction modeling
-- [runtime](../src/runtime): the simulation runtime
+- [controller](/src/controller): a simple vehicle controller + model
+- [driver](/src/driver): a service that runs driving policies
+- [eval](/src/eval): an evaluation framework that processes data
+- [physics](/src/physics): ground-mesh interaction modeling
+- [runtime](/src/runtime): the simulation runtime
 - trafficsim (coming soon)
 
 See the repository layout under `src/` for module organization.

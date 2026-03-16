@@ -11,8 +11,8 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 # ---------------------------------------------------------------------------
 
 # Each model: label, default state (1=on, 0=off), download function body
-model_labels=( "Cosmos [Nvidia internal]"  "VaVAM-B"  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)" )
-model_states=( 0         1          0 )
+model_labels=( "VaVAM-B"  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)" )
+model_states=( 1          0 )
 
 if [[ "${#model_labels[@]}" -ne "${#model_states[@]}" ]]; then
   echo "ERROR: model_labels and model_states arrays have different lengths" >&2
@@ -21,9 +21,8 @@ fi
 
 download_model() {
   case "$1" in
-    0) rclone sync -P pbss-team-alpamayo:alpasim/artifacts/alpackages/25.10.08 "${SCRIPT_DIR}"/alpackages ;;
-    1) "${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b ;;
-    2) huggingface-cli download nvidia/Alpamayo-R1-10B ;;
+    0) "${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b ;;
+    1) huggingface-cli download nvidia/Alpamayo-R1-10B ;;
   esac
 }
 

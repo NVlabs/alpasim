@@ -179,7 +179,7 @@ scenes, etc.) and understand the architecture in more depth.
 
 AlpaSim wizard is configured via [hydra](https://hydra.cc/docs/intro/) and takes in a `.yaml`
 configuration file and arbitrary command line overrides. Example config files are in
-`src/wizard/configs/`. We suggest reading [base_config.yaml](../src/wizard/configs/base_config.yaml),
+`src/wizard/configs/`. We suggest reading [base_config.yaml](/src/wizard/configs/base_config.yaml),
 which has detailed comments on the configuration fields.
 
 ### Runtime specification
@@ -300,8 +300,8 @@ Publicly available NuRec scenes are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release)
 and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
 their uuid, rather than their filenames, to prevent versioning issues. The list of currently
-available scenes exists in [scenes set](../data/scenes/sim_scenes.csv) and the set of available suites
-exists in [scene suites](../data/scenes/sim_suites.csv).
+available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available suites
+exists in [scene suites](/data/scenes/sim_suites.csv).
 
 #### Selecting Individual Scenes
 
@@ -324,14 +324,13 @@ instructions.
 #### Using Scene Suites
 
 Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
-with 901 validated scenes (:warning: this will download all the scenes):
+with 916 validated scenes (:warning: this will download all the scenes):
 
 ```bash
-uv run alpasim_wizard +deploy=local scenes.test_suite_id=public_2507_ex_failures wizard.log_dir=$PWD/tutorial_suite
+uv run alpasim_wizard +deploy=local scenes.test_suite_id=public_2602 wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across all 910 scenes in the `public_2507_ex_failures` suite, which
-excludes problematic scenes from the full 25.07 release dataset.
+This will run simulations across all 916 scenes in the `public_2602` suite from the 26.02 release dataset.
 
 ## Custom components
 
@@ -347,17 +346,17 @@ statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the 
 The simulation is split into multiple microservices, each running in its own docker container. The
 primary requirement for a custom container image is that it exposes a gRPC endpoint compatible with
 the expected service interface. The default images used for each service are specified in
-[`stable_manifest`](../src/wizard/configs/stable_manifest/oss.yaml); however, these can be overridden
+[`stable_manifest`](/src/wizard/configs/stable_manifest/oss.yaml); however, these can be overridden
 by setting `services.<service>.image` to the desired image name and updating the relevant service
 command `services.<service>.command`. For more information about the service interfaces, please see
-the [protocol buffer definitions](../src/grpc/alpasim_grpc/v0/).
+the [protocol buffer definitions](/src/grpc/alpasim_grpc/v0/).
 
 ## Asl log format
 
 `asl` contains most of messages exchanged in the course of a batch simulation as size-delimited
 protobuf messages. These files can be read to access detailed information about the course of the
 simulation. Aside from being used for evaluation, they can also be useful for debugging model or
-simulation behavior. [This notebook](../src/runtime/notebooks/replay_logs_alpamodel.ipynb) shows an
+simulation behavior. [This notebook](/src/runtime/notebooks/replay_logs_alpamodel.ipynb) shows an
 example of reading an `asl` log and "replaying the stimuli" on a driver instance, allowing for
 reproducing behavior with your favorite debugger attached.
 

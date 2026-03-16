@@ -140,11 +140,8 @@ services:
     volumes:
       - "${defines.drivers}:/mnt/drivers"
       - "${wizard.log_dir}:/mnt/output" # optional output like the debug images
-      - "${defines.filesystem}/huggingface:/mnt/hf_cache" # HuggingFace cache for offline mode
-    environments:
-      - HF_HOME=/mnt/hf_cache
-      - HF_HUB_OFFLINE=1
-      - TRANSFORMERS_OFFLINE=1
+      - "${repo-relative:'src'}:/repo/src"
+      - "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}:/root/.cache/huggingface"
     command:
       - "uv run -m alpasim_driver.main"
       - "--config-path=/mnt/output"

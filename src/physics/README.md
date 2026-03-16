@@ -1,48 +1,14 @@
-# alpamayo-physics
+# AlpaSim Physics
 
-This repo contains the code for the Physics micro-service of the Alpamayo project, see [design doc](https://docs.google.com/document/d/1JFGuGnFFASgHbDlO6a8L1GttR-feAO6fRpTifebX5NU/edit?usp=sharing). Please contact [Riccardo de Lutio](mailto:rdelutio@nvidia.com) for any questions/suggestions/inquiries.
+This project contains the code for the Physics micro-service of the AlpaSim project, which uses a
+mesh of the environment to constrain the motion of simulated agents to the ground surface. It does
+not handle collisions or vehicle dynamics.
 
 ## Environment Setup
 
-```bash
-uv sync
-```
+`uv` is used to manage the development environment.
 
-## Running the Sim
+## Running the Sim Service
 
-### gRPC server
-
-Start the physics server via the registered entry point:
-
-```bash
-uv run physics_server --artifact-glob '/path/to/artifacts/**/*.usdz' --host 0.0.0.0 --port 8080
-```
-
-Additional flags:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--artifact-glob` | *(required)* | Glob expression to find artifacts (must match `.usdz` files) |
-| `--host` | `localhost` | Host to bind the gRPC server to |
-| `--port` | `8080` | Port to bind the gRPC server to |
-| `--cache-size` | `16` | Number of scene backends to keep in LRU cache |
-| `--use-ground-mesh` | `False` | Use ground mesh for scene loading |
-| `--visualize` | `False` | Enable Polyscope visualization (requires `vis` extra) |
-| `--log-level` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-
-### gRPC client (gradio)
-
-A simple gradio-based client is available (requires the `local` extra):
-
-```bash
-uv run --extra local python client.py
-```
-
-## TODO
-
-- [ ] Include semantic mesh
-- [ ] Further tests with multiple assets
-- [ ] Speedups
-- [ ] Collisions
-- [ ] Ego vehicle dynamics
-- [ ] Refine gRPC API, use request to read environment mesh
+Run `uv run physics_server <args>` to start a server for the micro-service. Use `--help` to see
+available options.
