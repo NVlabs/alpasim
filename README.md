@@ -55,13 +55,25 @@ AlpaSim currently supports the following driver policies:
 Stay tuned for additional model support. [Contributions](#contributing) from the community are
 appreciated.
 
+## Getting Started
+
+To run simulations locally (Docker Compose, single machine), see the [Tutorial](docs/TUTORIAL.md).
+For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
+
 ## Documentation & Resources
 
 - **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions
 - **[Tutorial](docs/TUTORIAL.md)**: Step-by-step usage guide
+- **[Manual Driver](docs/MANUAL_DRIVER.md)**: Interactive keyboard control of the ego vehicle
 - **[Operations Guide](docs/OPERATIONS.md)**: Performance tuning, configuration, and troubleshooting
+- **[Data Pipeline](docs/DATA_PIPELINE.md)**: ASL log format and reading logs
 - **[Design Documentation](docs/DESIGN.md)**: Technical architecture and design decisions
+- **[Plugin System](docs/PLUGIN_SYSTEM.md)**: Extending AlpaSim with custom models, configs, and tools
 - **[API Reference](src/grpc/)**: gRPC API documentation
+- **[Changelog](CHANGELOG.md)**: Major updates and migration notes
+- **[Contributing](CONTRIBUTING.md)**: Code style, coordinate conventions, and PR process
+- **[Developer Quick Reference](AGENTS.md)**: Build commands, testing, and CI workflow
+- **[Test Suites & Scenes](data/scenes/README.md)**: Available scene datasets
 
 ### **Sample Data**
 
