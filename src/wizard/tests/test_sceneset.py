@@ -39,16 +39,16 @@ def test_csvs(tmp_path: Path) -> tuple[Path, Path]:
 
     # Create scenes CSV with test data
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
         "stripped-2b8f88d4-8348-4faf-9dd3-78564fddde78,clipgt-c045249c-2c01-45b0-87f5-6f631f71f1f1,"
         "stripped-0.2.220-1777390b,alpasim/artifacts/NRE/unit-tests/25.02.19/three-stripped-scenes/"
-        "2b8f88d4-8348-4faf-9dd3-78564fddde78.usdz/2b8f88d4-8348-4faf-9dd3-78564fddde78.usdz,2025-02-19 14:18:25,swiftstack\n"  # noqa
+        "2b8f88d4-8348-4faf-9dd3-78564fddde78.usdz/2b8f88d4-8348-4faf-9dd3-78564fddde78.usdz,2025-02-19 14:18:25,swiftstack,\n"  # noqa
         "stripped-90db43dd-e5d2-41c4-9a69-400f6c33fb45,clipgt-c370a6ff-e319-4757-8282-09a67fad614e,"
         "stripped-0.2.220-1777390b,alpasim/artifacts/NRE/unit-tests/25.02.19/three-stripped-scenes/"
-        "90db43dd-e5d2-41c4-9a69-400f6c33fb45.usdz/90db43dd-e5d2-41c4-9a69-400f6c33fb45.usdz,2025-02-19 14:18:28,swiftstack\n"  # noqa
+        "90db43dd-e5d2-41c4-9a69-400f6c33fb45.usdz/90db43dd-e5d2-41c4-9a69-400f6c33fb45.usdz,2025-02-19 14:18:28,swiftstack,\n"  # noqa
         "stripped-c146251f-16d0-43eb-8905-3f0c037028cb,clipgt-c1ba971e-260f-4a7d-90b1-f60a9caf6acb,"
         "stripped-0.2.220-1777390b,alpasim/artifacts/NRE/unit-tests/25.02.19/three-stripped-scenes/"
-        "c146251f-16d0-43eb-8905-3f0c037028cb.usdz/c146251f-16d0-43eb-8905-3f0c037028cb.usdz,2025-02-19 14:18:31,swiftstack\n"  # noqa
+        "c146251f-16d0-43eb-8905-3f0c037028cb.usdz/c146251f-16d0-43eb-8905-3f0c037028cb.usdz,2025-02-19 14:18:31,swiftstack,\n"  # noqa
     )
 
     # Create suites CSV with test data
@@ -135,9 +135,10 @@ def test_get_artifact_info(usdz_manager: USDZManager):
     info = usdz_manager.get_artifact_info([EXAMPLE_USDZ_UUID])
 
     assert EXAMPLE_USDZ_UUID in info
-    path, repo = info[EXAMPLE_USDZ_UUID]
+    path, repo, revision = info[EXAMPLE_USDZ_UUID]
     assert EXAMPLE_USDZ_SS_PATH in path
     assert repo == ArtifactRepository.SWIFTSTACK
+    assert revision is None
 
 
 def test_deduplicate():
@@ -182,9 +183,9 @@ def test_load_and_merge_csvs_single(tmp_path: Path):
     """Single CSV loads normally without duplicate checking."""
     csv_a = tmp_path / "a.csv"
     csv_a.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface\n"
-        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,huggingface\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface,\n"
+        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,huggingface,\n"
     )
     result = _load_and_merge_csvs([str(csv_a)], dedup_key="uuid")
     assert result.height == 2
@@ -194,13 +195,13 @@ def test_load_and_merge_csvs_multiple_no_overlap(tmp_path: Path):
     """Multiple CSVs with disjoint rows merge successfully."""
     csv_a = tmp_path / "a.csv"
     csv_a.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface,\n"
     )
     csv_b = tmp_path / "b.csv"
     csv_b.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack,\n"
     )
     result = _load_and_merge_csvs([str(csv_a), str(csv_b)], dedup_key="uuid")
     assert result.height == 2
@@ -211,13 +212,13 @@ def test_load_and_merge_csvs_duplicate_raises(tmp_path: Path):
     """Duplicate UUIDs across files raise ValueError."""
     csv_a = tmp_path / "a.csv"
     csv_a.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface,\n"
     )
     csv_b = tmp_path / "b.csv"
     csv_b.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.2,path/a2,2025-02-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.2,path/a2,2025-02-01 00:00:00,swiftstack,\n"
     )
     with pytest.raises(ValueError, match="duplicate"):
         _load_and_merge_csvs([str(csv_a), str(csv_b)], dedup_key="uuid")
@@ -253,13 +254,13 @@ def test_from_cfg_multiple_csvs(tmp_path: Path):
     """USDZManager.from_cfg merges multiple scene/suite CSVs."""
     scenes_a = tmp_path / "scenes_a.csv"
     scenes_a.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface,\n"
     )
     scenes_b = tmp_path / "scenes_b.csv"
     scenes_b.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites_a = tmp_path / "suites_a.csv"
     suites_a.write_text("test_suite_id,scene_id\nsuite-pub,clipgt-aaa\n")
@@ -400,7 +401,7 @@ def test_usdz_manager_from_cfg_with_local_usdz_dir(
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
     suites_csv.write_text("test_suite_id,scene_id\n")
 
@@ -430,7 +431,7 @@ def test_usdz_manager_query_by_scene_ids_with_local(
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
     suites_csv.write_text("test_suite_id,scene_id\n")
 
@@ -457,7 +458,7 @@ def test_get_artifact_info_local(local_usdz_dir: Path, tmp_path: Path):
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
     suites_csv.write_text("test_suite_id,scene_id\n")
 
@@ -472,9 +473,30 @@ def test_get_artifact_info_local(local_usdz_dir: Path, tmp_path: Path):
 
     info = manager.get_artifact_info(["uuid-1111-aaaa"])
     assert "uuid-1111-aaaa" in info
-    path, repo = info["uuid-1111-aaaa"]
+    path, repo, revision = info["uuid-1111-aaaa"]
     assert repo == ArtifactRepository.LOCAL
     assert path.endswith("scene1.usdz")
+
+
+def test_get_artifact_info_includes_hf_revision(tmp_path: Path):
+    """Test that get_artifact_info returns hf_revision for HuggingFace artifacts."""
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    suites_csv = tmp_path / "sim_suites.csv"
+    scenes_csv.write_text(
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-hf,clipgt-hf-scene,1.0,sample_set/26.02/file.usdz,2025-01-01 00:00:00,huggingface,26.02\n"
+    )
+    suites_csv.write_text("test_suite_id,scene_id\n")
+    config = ScenesConfig(
+        scene_cache=str(tmp_path),
+        scenes_csv=[str(scenes_csv)],
+        suites_csv=[str(suites_csv)],
+    )
+    manager = USDZManager.from_cfg(config)
+    info = manager.get_artifact_info(["uuid-hf"])
+    path, repo, revision = info["uuid-hf"]
+    assert repo == ArtifactRepository.HUGGINGFACE
+    assert revision == "26.02"
 
 
 def test_query_by_scene_ids_duplicate_nre_versions_warns(tmp_path: Path, caplog):
@@ -482,9 +504,9 @@ def test_query_by_scene_ids_duplicate_nre_versions_warns(tmp_path: Path, caplog)
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack\n"
-        "uuid-bbb,clipgt-scene-1,2.0.0-bbbb,path/b,2025-01-02 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack,\n"
+        "uuid-bbb,clipgt-scene-1,2.0.0-bbbb,path/b,2025-01-02 00:00:00,swiftstack,\n"
     )
     suites_csv.write_text("test_suite_id,scene_id\n")
     config = ScenesConfig(
@@ -508,10 +530,10 @@ def test_query_by_suite_id_duplicate_nre_versions_warns(tmp_path: Path, caplog):
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
-        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository\n"
-        "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack\n"
-        "uuid-bbb,clipgt-scene-1,2.0.0-bbbb,path/b,2025-01-02 00:00:00,swiftstack\n"
-        "uuid-ccc,clipgt-scene-2,1.0.0-aaaa,path/c,2025-01-01 00:00:00,swiftstack\n"
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack,\n"
+        "uuid-bbb,clipgt-scene-1,2.0.0-bbbb,path/b,2025-01-02 00:00:00,swiftstack,\n"
+        "uuid-ccc,clipgt-scene-2,1.0.0-aaaa,path/c,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites_csv.write_text(
         "test_suite_id,scene_id\nsuite-1,clipgt-scene-1\nsuite-1,clipgt-scene-2\n"

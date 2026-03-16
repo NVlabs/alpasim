@@ -331,23 +331,28 @@ class USDZManager:
 
     def get_artifact_info(
         self, uuids: list[str]
-    ) -> dict[str, tuple[str, ArtifactRepository]]:
-        """Get artifact paths and repositories for given UUIDs.
+    ) -> dict[str, tuple[str, ArtifactRepository, str | None]]:
+        """Get artifact paths, repositories, and HF revisions for given UUIDs.
 
         Args:
             uuids: List of UUIDs to look up.
 
         Returns:
-            Dict mapping uuid to (path, artifact_repository) tuple.
+            Dict mapping uuid to (path, artifact_repository, hf_revision) tuple.
+            hf_revision is None for non-HuggingFace artifacts.
         """
         if not uuids:
             return {}
 
+        has_hf_revision = "hf_revision" in self.sim_scenes.columns
+
         # Check if artifact_repository column exists (for backwards compatibility)
         if "artifact_repository" in self.sim_scenes.columns:
-            df = self.sim_scenes.filter(pl.col("uuid").is_in(uuids)).select(
-                ["uuid", "path", "artifact_repository"]
-            )
+            select_cols = ["uuid", "path", "artifact_repository"]
+            if has_hf_revision:
+                select_cols.append("hf_revision")
+
+            df = self.sim_scenes.filter(pl.col("uuid").is_in(uuids)).select(select_cols)
             result = {}
             for row in df.iter_rows(named=True):
                 repo_str = row["artifact_repository"]
@@ -363,7 +368,12 @@ class USDZManager:
                         "defaulting to swiftstack"
                     )
                     repo = ArtifactRepository.SWIFTSTACK
-                result[row["uuid"]] = (row["path"], repo)
+
+                revision = row.get("hf_revision") if has_hf_revision else None
+                if revision is not None:
+                    revision = str(revision).strip() if str(revision).strip() else None
+
+                result[row["uuid"]] = (row["path"], repo, revision)
             return result
         else:
             # Backwards compatibility: assume all are SwiftStack
@@ -371,7 +381,7 @@ class USDZManager:
                 ["uuid", "path"]
             )
             return {
-                row["uuid"]: (row["path"], ArtifactRepository.SWIFTSTACK)
+                row["uuid"]: (row["path"], ArtifactRepository.SWIFTSTACK, None)
                 for row in df.iter_rows(named=True)
             }
 
@@ -389,7 +399,7 @@ class USDZManager:
         swiftstack_uuids = []
         huggingface_uuids = []
         local_uuids = []
-        for uuid, (path, repo) in artifact_info.items():
+        for uuid, (path, repo, _rev) in artifact_info.items():
             if repo == ArtifactRepository.SWIFTSTACK:
                 swiftstack_uuids.append(uuid)
             elif repo == ArtifactRepository.HUGGINGFACE:
@@ -403,7 +413,7 @@ class USDZManager:
                 f"Using {len(local_uuids)} local artifacts (no download needed)"
             )
             for uuid in local_uuids:
-                path, _ = artifact_info[uuid]
+                path, _, _ = artifact_info[uuid]
                 if not os.path.exists(path):
                     raise FileNotFoundError(
                         f"Local artifact not found: {path} (uuid={uuid})"
@@ -417,7 +427,7 @@ class USDZManager:
         if swiftstack_uuids:
             tasks = []
             for uuid in swiftstack_uuids:
-                path, _ = artifact_info[uuid]
+                path, _, _ = artifact_info[uuid]
                 cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
                 s3_path = S3Path.from_swiftstack(path)
                 tasks.append(self.s3.maybe_download_object(s3_path, cache_path))
@@ -466,7 +476,9 @@ class USDZManager:
                     )
 
     def _download_huggingface_artifacts(
-        self, uuids: list[str], artifact_info: dict[str, tuple[str, ArtifactRepository]]
+        self,
+        uuids: list[str],
+        artifact_info: dict[str, tuple[str, ArtifactRepository, str | None]],
     ) -> None:
         """
         Download the required HuggingFace artifacts, rename them based on their metadata uuids,
