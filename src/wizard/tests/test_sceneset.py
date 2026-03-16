@@ -361,6 +361,7 @@ def test_scan_local_usdz_directory(local_usdz_dir: Path):
         "path",
         "last_modified",
         "artifact_repository",
+        "hf_revision",
     }
 
     uuids = set(sim_scenes["uuid"].to_list())

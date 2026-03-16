@@ -165,6 +165,7 @@ def scan_local_usdz_directory(usdz_dir: str) -> tuple[pl.DataFrame, pl.DataFrame
                             "path": os.path.abspath(usdz_file),
                             "last_modified": now,
                             "artifact_repository": "local",
+                            "hf_revision": "",
                         }
                     )
 
@@ -440,7 +441,7 @@ class USDZManager:
             await tqdm.gather(*tasks)
 
     def _download_single_huggingface_artifact(
-        self, uuid: str, hf_filepath: str, tmpdir: str
+        self, uuid: str, hf_filepath: str, tmpdir: str, revision: str | None = None
     ) -> None:
         """Download and validate a single HuggingFace artifact.
 
@@ -448,15 +449,18 @@ class USDZManager:
             uuid: The expected UUID of the artifact.
             hf_filepath: The file path within the HuggingFace repository.
             tmpdir: Temporary directory for downloading.
+            revision: Optional HuggingFace revision (branch, tag, or commit hash).
         """
         logger.info(
             f"Downloading HuggingFace artifact for uuid {uuid} from {hf_filepath}"
+            f" (revision={revision})"
         )
         downloaded_usdz = hf_hub_download(
             repo_id=HUGGINGFACE_REPO,
             repo_type="dataset",
             local_dir=tmpdir,
             filename=hf_filepath,
+            revision=revision,
         )
 
         # sanity check that the uuid matches what we expect
@@ -486,16 +490,19 @@ class USDZManager:
 
         Downloads are parallelized with a maximum of 5 concurrent downloads.
         """
-        missing_uuid_to_filepath = {}
+        missing_uuid_info: dict[
+            str, tuple[str, str | None]
+        ] = {}  # uuid -> (filepath, revision)
         for uuid in uuids:
             cache_path = os.path.join(self.all_usdzs_dir, f"{uuid}.usdz")
             if not os.path.exists(cache_path):
-                missing_uuid_to_filepath[uuid] = artifact_info[uuid][0]
-        if missing_uuid_to_filepath:
+                path, _repo, revision = artifact_info[uuid]
+                missing_uuid_info[uuid] = (path, revision)
+        if missing_uuid_info:
             logger.info(
-                f"Missing {len(missing_uuid_to_filepath)} required HuggingFace artifacts"
+                f"Missing {len(missing_uuid_info)} required HuggingFace artifacts"
             )
-            max_workers = min(5, len(missing_uuid_to_filepath))
+            max_workers = min(5, len(missing_uuid_info))
             with tempfile.TemporaryDirectory(dir=self.scenesets_dir) as tmpdir:
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {
@@ -504,8 +511,9 @@ class USDZManager:
                             uuid,
                             hf_filepath,
                             tmpdir,
+                            revision,
                         ): uuid
-                        for uuid, hf_filepath in missing_uuid_to_filepath.items()
+                        for uuid, (hf_filepath, revision) in missing_uuid_info.items()
                     }
                     for future in as_completed(futures):
                         uuid = futures[future]
