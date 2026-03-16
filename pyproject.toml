@@ -1,32 +1,85 @@
 [project]
 name = "alpasim_workspace"
-version = "0.31.0"
+version = "0.42.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
 ]
 
+[project.optional-dependencies]
+# -- Per-member extras (install a single package + its transitive deps) --
+plugins = ["alpasim_plugins"]
+controller = ["alpasim_controller"]
+eval = ["alpasim_eval"]
+grpc = ["alpasim_grpc"]
+runtime = ["alpasim-runtime"]
+utils = ["alpasim_utils"]
+physics = ["alpasim-physics"]
+tools = ["alpasim-tools"]
+driver = ["alpasim_driver"]
+wizard = ["alpasim_wizard"]
+
+# -- Composite extras --
+# All core (non-plugin) packages
+all = [
+  "alpasim_plugins",
+  "alpasim_controller",
+  "alpasim_eval",
+  "alpasim_grpc",
+  "alpasim-runtime",
+  "alpasim_utils",
+  "alpasim-physics",
+  "alpasim-tools",
+  "alpasim_driver",
+  "alpasim_wizard",
+]
+
+# -- Plugin extras --
+transfuser = ["alpasim_transfuser"]
+internal = ["alpasim-internal"]
+
 [tool.uv.workspace]
 members = [
+  "src/plugins",
   "src/controller",
   "src/eval",
   "src/grpc",
   "src/runtime",
+  "src/wizard",
   "src/utils",
   "src/utils_rs",
   "src/physics",
   "src/tools",
   "src/driver",
+  "plugins/*",
 ]
 
-# This is a hacky workaround to skip installing certain packages.
+[tool.uv.sources]
+alpasim_plugins = { workspace = true }
+alpasim_controller = { workspace = true }
+alpasim_eval = { workspace = true }
+alpasim_grpc = { workspace = true }
+alpasim-runtime = { workspace = true }
+alpasim_utils = { workspace = true }
+alpasim-physics = { workspace = true }
+alpasim-tools = { workspace = true }
+alpasim_driver = { workspace = true }
+alpasim_transfuser = { workspace = true }
+alpasim_wizard = { workspace = true }
+alpasim-internal = { workspace = true }
+
 [tool.uv]
 override-dependencies = [
-  # flash attention is an AR1 dependency but does not declare its own dependencies
+  # flash-attention is an AR1 dependency, but it doesn't work with uv
+  # because it's own pyproject.toml does not declare its own dependencies
   # properly, leading to uv install errors.
   # TODO: make flash attention optional in alpamayo-r1 repo.
   "flash-attn; python_version < '0'",
+  # av is an optional dependency of pyAV (from torchvision), and it is in conflict
+  # with maglev.av both of which can be important as `import av`. Since torchvision
+  # handles the case where av is not available, we can skip installing it keeping maglev.av functional.
+  "av; python_version < '0'",
   # hyperqueue is a vam dependency for HPC job scheduling, only available on Linux x86_64.
   # Not needed for local driver runs.
   "hyperqueue; python_version < '0'",

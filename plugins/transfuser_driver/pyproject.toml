@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim_transfuser"
+version = "0.1.0"
+description = "Transfuser trajectory prediction model plugin for Alpasim"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "alpasim_plugins",
+    "alpasim_driver",
+    "numpy",
+    "torch",
+    "timm",
+    "beartype",
+    "jaxtyping",
+    "opencv-python-headless",
+    "omegaconf",
+]
+
+# This is how we register the transfuser model with the plugin system.
+[project.entry-points."alpasim.models"]
+transfuser = "alpasim_transfuser.transfuser_model:TransfuserModel"
+
+[project.entry-points."alpasim.configs"]
+transfuser = "alpasim_transfuser.configs"
+
+[tool.setuptools.packages.find]
+include = ["alpasim_transfuser*"]
+
+[tool.uv.sources]
+alpasim_plugins = { workspace = true }
+alpasim_driver = { workspace = true }

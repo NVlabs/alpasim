@@ -12,7 +12,6 @@ from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionRequest
 from alpasim_grpc.v0.physics_pb2_grpc import PhysicsServiceStub
-from alpasim_runtime.config import PhysicsUpdateMode, ScenarioConfig
 from alpasim_runtime.services.service_base import ServiceBase
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_utils import geometry
@@ -38,32 +37,30 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         scene_id: str,
         delta_start_us: int,
         delta_end_us: int,
-        pose_now: geometry.Pose,
-        pose_future: geometry.Pose,
+        ego_trajectory_aabb: geometry.Trajectory,
         traffic_poses: Dict[str, geometry.Pose],
         ego_aabb: AABB,
         skip: bool = False,
-    ) -> Tuple[geometry.Pose, Dict[str, geometry.Pose]]:
+    ) -> Tuple[geometry.Trajectory, Dict[str, geometry.Pose]]:
         """
         Calculate ground intersection for ego and traffic vehicles.
 
         Args:
+            ego_trajectory_aabb: Ego trajectory in AABB coordinates to
+                ground-correct.
             skip: If True, return traffic poses unchanged without
                 making a gRPC call. Use this when objects are following
                 trajectories that already have correct physics applied (e.g.,
                 recorded ground truth or when traffic sim is skipped).
 
         Returns:
-            Tuple of (ego_pose, traffic_poses) after ground intersection
+            Tuple of (ego_trajectory, traffic_poses) after ground intersection.
+            The ego trajectory preserves the input timestamps.
         """
-
         if self.skip or skip:
-            # Return the future poses unchanged
-            return pose_future, traffic_poses
+            return ego_trajectory_aabb, traffic_poses
 
-        assert traffic_poses is not None or (
-            pose_now is not None and pose_future is not None
-        ), "Either traffic_poses or pose_now and pose_future must be provided."
+        session_info = self._require_session_info()
 
         traffic_poses = traffic_poses or {}
 
@@ -71,35 +68,33 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
             scene_id,
             delta_start_us,
             delta_end_us,
-            geometry.pose_to_grpc(pose_now),
-            geometry.pose_to_grpc(pose_future),
-            [geometry.pose_to_grpc(p) for p in traffic_poses.values()],
+            ego_trajectory_aabb=ego_trajectory_aabb,
+            other_poses=[geometry.pose_to_grpc(p) for p in traffic_poses.values()],
             ego_aabb=ego_aabb,
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(physics_request=request))
+        await session_info.broadcaster.broadcast(LogEntry(physics_request=request))
 
         response = await profiled_rpc_call(
             "ground_intersection", "physics", self.stub.ground_intersection, request
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(physics_return=response))
+        await session_info.broadcaster.broadcast(LogEntry(physics_return=response))
 
-        ego_response = geometry.pose_from_grpc(response.ego_pose.pose)
+        ego_trajectory = geometry.trajectory_from_grpc(response.ego_trajectory_aabb)
         traffic_responses = {
             k: geometry.pose_from_grpc(v.pose)
-            for k, v in zip(traffic_poses.keys(), response.other_poses)
+            for k, v in zip(traffic_poses.keys(), response.other_poses, strict=True)
         }
 
-        return ego_response, traffic_responses
+        return ego_trajectory, traffic_responses
 
     def _prepare_request(
         self,
         scene_id: str,
         delta_start_us: int,
         delta_end_us: int,
-        ego_pose_now: common_pb2.Pose,
-        ego_pose_future: common_pb2.Pose,
+        ego_trajectory_aabb: geometry.Trajectory,
         other_poses: List[common_pb2.Pose],
         ego_aabb: AABB,
     ) -> PhysicsGroundIntersectionRequest:
@@ -110,9 +105,7 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
             future_us=delta_end_us,
             ego_data=PhysicsGroundIntersectionRequest.EgoData(
                 aabb=ego_aabb.to_grpc(),
-                pose_pair=PhysicsGroundIntersectionRequest.PosePair(
-                    now_pose=ego_pose_now, future_pose=ego_pose_future
-                ),
+                ego_trajectory_aabb=geometry.trajectory_to_grpc(ego_trajectory_aabb),
             ),
             other_objects=[
                 PhysicsGroundIntersectionRequest.OtherObject(
@@ -126,16 +119,3 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
                 for other_pose in other_poses
             ],
         )
-
-    async def find_scenario_incompatibilities(
-        self, scenario: ScenarioConfig
-    ) -> List[str]:
-        """Check if physics service can handle the given scenario."""
-
-        incompatibilities = await super().find_scenario_incompatibilities(scenario)
-
-        # If physics is in skip mode, it can handle any scenario
-        if not self.skip and scenario.physics_update_mode == PhysicsUpdateMode.NONE:
-            incompatibilities.append("Physics is disabled for this scenario.")
-
-        return incompatibilities

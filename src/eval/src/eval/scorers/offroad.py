@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import shapely
 import shapely.geometry
+from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from shapely import plotting as shapely_plotting
 from trajdata.maps import vec_map_elements
@@ -47,11 +48,16 @@ def _get_lane_polygon(
         return shapely.LineString(lane.center.points[..., :2]).buffer(road_width_m / 2)
 
 
-def _compute_off_lane(simulation_result: SimulationResult, ts: int) -> dict[
+def _compute_off_lane(
+    simulation_result: SimulationResult,
+    ts: int,
+    ego_pose: Optional[geometry.Pose] = None,
+) -> dict[
     str,
     float | list[vec_map_elements.RoadLane] | list[shapely.LineString] | list[float],
 ]:
-    ego_pose = simulation_result.actor_trajectories["EGO"].interpolate_pose(ts)
+    if ego_pose is None:
+        ego_pose = simulation_result.actor_trajectories["EGO"].interpolate_pose(ts)
     ego_xyzh = np.array([*ego_pose.vec3, ego_pose.yaw()])
 
     possible_current_lanes = simulation_result.vec_map.get_current_lane(
@@ -119,12 +125,16 @@ class OffRoadScorer(Scorer):
     """
 
     def calculate(self, simulation_result: SimulationResult) -> list[MetricReturn]:
-
         offroad = []
         wrong_lane = []
 
-        for ts in simulation_result.timestamps_us:
-            res = _compute_off_lane(simulation_result, ts)
+        ego_traj = simulation_result.actor_trajectories["EGO"]
+        ego_poses = ego_traj.interpolate_poses_list(
+            np.asarray(simulation_result.timestamps_us, dtype=np.uint64)
+        )
+
+        for ts, ego_pose in zip(simulation_result.timestamps_us, ego_poses):
+            res = _compute_off_lane(simulation_result, ts, ego_pose=ego_pose)
             ego_polygon = res["ego_polygon"]
 
             wrong_lane.append(

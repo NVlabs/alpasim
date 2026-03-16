@@ -5,7 +5,7 @@ build-backend = "uv_build"
 
 [project]
 name = "alpasim_driver"
-version = "0.14.0"
+version = "0.18.0"
 description = "Adapters for open-source drivers in Alpasim"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -23,18 +23,22 @@ dependencies = [
   "hydra-core",
   "omegaconf",
   "alpasim-grpc",
-  "beartype",
-  "jaxtyping",
-  "timm",
+  "alpasim_plugins",
   "pygame>=2.5.0", # manual driving
-  "alpasim_utils",
+  "alpasim_utils[geometry]",
 ]
 
 [project.scripts]
 alpasim_driver_main = "alpasim_driver.main:main"
+
+[project.entry-points."alpasim.models"]
+ar1 = "alpasim_driver.models.ar1_model:AR1Model"
+vam = "alpasim_driver.models.vam_model:VAMModel"
+manual = "alpasim_driver.models.manual_model:ManualModel"
 
 [tool.uv.sources]
 vam = { git = "https://github.com/valeoai/VideoActionModel.git" }
 alpamayo_r1 = { git = "https://github.com/NVlabs/alpamayo.git", rev = "74750b0bd86605ced9faed9fe83434b07f95e9dc"}
 alpasim-grpc = { workspace = true }
 alpasim_utils = { workspace = true }
+alpasim_plugins = { workspace = true }

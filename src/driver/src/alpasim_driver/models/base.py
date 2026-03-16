@@ -11,6 +11,7 @@ from enum import IntEnum
 from typing import Any, NamedTuple
 
 import numpy as np
+import torch
 from PIL import Image
 
 
@@ -173,6 +174,36 @@ class BaseTrajectoryModel(ABC):
             raise ValueError(
                 f"{self.__class__.__name__} expects cameras {expected}, got {received}"
             )
+
+    @classmethod
+    @abstractmethod
+    def from_config(
+        cls,
+        model_cfg: Any,
+        device: torch.device,
+        camera_ids: list[str],
+        context_length: int | None,
+        output_frequency_hz: int,
+    ) -> "BaseTrajectoryModel":
+        """Create a model instance from driver configuration.
+
+        Each model implementation extracts the parameters it needs from the
+        generic argument set. This is the standard factory interface used by
+        the plugin registry — the driver calls this instead of __init__
+        directly, so new models can be added without changing driver code.
+
+        Args:
+            model_cfg: ModelConfig dataclass with checkpoint_path, device,
+                tokenizer_path, etc.
+            device: Torch device for inference.
+            camera_ids: List of camera logical IDs in order.
+            context_length: Number of temporal frames (None uses model default).
+            output_frequency_hz: Trajectory output frequency in Hz.
+
+        Returns:
+            Configured model instance.
+        """
+        ...
 
     @abstractmethod
     def _encode_command(self, command: DriveCommand) -> Any:

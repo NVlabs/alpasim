@@ -1,11 +1,10 @@
 # @package _global_
 
 runtime:
-  default_scenario_parameters:
+  simulation_config:
     force_gt_duration_us: 3_000_000
     n_sim_steps: 100
     n_rollouts: 1
-    egopose_interval_us: 500_000
     control_timestep_us: 500_000
     time_start_offset_us: 500_000 # Needs to be in sync
     ego_mask_rig_config_id: null

@@ -3,9 +3,9 @@
 # Explicitly sets the vehicle dimensions for the simulator.
 # Even if you want to modify just a single dimension, with the default being `vehicle: null`,
 # you need to specify all other dimensions as well. This config file simplifies that by allowing
-# `+vehicle=custom runtime.default_scenario_parameters.vehicle.aabb_x_m=<your value>`.
+# `+vehicle=custom runtime.simulation_config.vehicle.aabb_x_m=<your value>`.
 runtime:
-  default_scenario_parameters:
+  simulation_config:
     vehicle:
       aabb_x_m: 5.393
       aabb_y_m: 2.109

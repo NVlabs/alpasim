@@ -10,6 +10,7 @@ for both post-eval (from ASL files) and runtime-eval (from memory).
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from alpasim_utils.artifact import Artifact
@@ -21,6 +22,13 @@ from eval.data import ScenarioEvalInput
 from eval.schema import EvalConfig
 
 logger = logging.getLogger("alpasim_eval.asl_loader")
+
+
+def _normalize_batch_id(asl_file_path: str, batch_id: str, session_uuid: str) -> str:
+    path = Path(asl_file_path)
+    if path.stem == "rollout" and path.parent.name == session_uuid:
+        return "0"
+    return batch_id
 
 
 async def load_scenario_eval_input_from_asl(
@@ -53,6 +61,13 @@ async def load_scenario_eval_input_from_asl(
 
     # Extract batch_id from file path
     _clipgt_id, batch_id, _rollout_id = extract_ids_from_path(asl_file_path)
+
+    if accumulator.session_metadata is not None:
+        batch_id = _normalize_batch_id(
+            asl_file_path=asl_file_path,
+            batch_id=batch_id,
+            session_uuid=accumulator.session_metadata.session_uuid,
+        )
 
     # Get vec_map from artifacts using scene_id from accumulated metadata
     vec_map = None

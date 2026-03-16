@@ -48,22 +48,37 @@ message RunControllerAndVehicleModelRequest {
   // The requested timestamp at the end of the propagation.
   int64 future_time_us = 4;
 
-  // For a configuration period at the beginning of the simulation, the system                                                                                  
-  // is in a replay/priming phase. During this phase, special care should be taken                                                                              
-  // to match the dynamic state in the vehicle model to prevent unintended drift.                                                                               
+  // For a configuration period at the beginning of the simulation, the system
+  // is in a replay/priming phase. During this phase, special care should be taken
+  // to match the dynamic state in the vehicle model to prevent unintended drift.
   bool coerce_dynamic_state = 5;
+
+  // Interval at which intermediate states should be reported (microseconds).
+  // When > 0, the controller records states at timestamps
+  //   (state.timestamp_us + interval, state.timestamp_us + 2*interval, ...)
+  // up to but NOT including future_time_us (which is the primary response).
+  // When 0 or unset, no intermediate states are returned (backward compatible).
+  int64 pose_reporting_interval_us = 6;
 }
 
 message RunControllerAndVehicleModelResponse {
-  // Ground-truth active transform local->rig after propagation.
-  common.PoseAtTime pose_local_to_rig = 1;
+  // DEPRECATED: Use the last entry of `states` instead.
+  common.PoseAtTime pose_local_to_rig = 1 [deprecated = true];
+  common.PoseAtTime pose_local_to_rig_estimated = 2 [deprecated = true];
+  common.DynamicState dynamic_state = 3 [deprecated = true];
+  common.DynamicState dynamic_state_estimated = 4 [deprecated = true];
 
-  // Estimated active transform local->rig after propagation.
-  common.PoseAtTime pose_local_to_rig_estimated = 2;
+  // Vehicle state at a point in time, produced by stepping the vehicle model.
+  message PropagatedState {
+    fixed64 timestamp_us = 1;
+    common.Pose pose_local_to_rig = 2;
+    common.Pose pose_local_to_rig_estimated = 3;
+    common.DynamicState dynamic_state = 4;
+    common.DynamicState dynamic_state_estimated = 5;
+  }
 
-  // Ground-truth dynamic state (velocity, acceleration) in rig frame after propagation.
-  common.DynamicState dynamic_state = 3;
-
-  // Estimated dynamic state in rig frame after propagation.
-  common.DynamicState dynamic_state_estimated = 4;
+  // All propagated states in chronological order.
+  // Contains intermediate states at pose_reporting_interval_us boundaries
+  // followed by the final state at future_time_us.
+  repeated PropagatedState states = 6;
 }

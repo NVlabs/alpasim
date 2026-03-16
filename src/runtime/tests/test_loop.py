@@ -3,7 +3,7 @@
 
 import pytest
 from alpasim_runtime.config import VehicleConfig
-from alpasim_runtime.loop import get_ds_rig_to_aabb_center_transform
+from alpasim_runtime.unbound_rollout import get_ds_rig_to_aabb_center_transform
 
 
 def test_get_ds_rig_to_aabb_center_transform():

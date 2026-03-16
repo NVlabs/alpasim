@@ -93,3 +93,11 @@ async def test_async_read_pb_log(sample_log_file):
         message_count += 1
         assert message.WhichOneof("log_entry") in ["actor_poses", "rollout_metadata"]
     assert message_count == 11  # 1 metadata + 10 actor poses
+
+
+@pytest.mark.skip(reason="read_trajectory does not work, properly. Rework needed.")
+@pytest.mark.asyncio
+async def test_read_trajectory(sample_log_file):
+    scene_id, trajectory = await logs.read_trajectory(sample_log_file)
+    assert scene_id == "test_scene"
+    assert len(trajectory.timestamps_us) == 10

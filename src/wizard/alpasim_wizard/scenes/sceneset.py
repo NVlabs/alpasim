@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Polars-based scene management for querying and downloading scene artifacts."""
 
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 
-import polars as pl  # type: ignore[import-not-found]
+import polars as pl
 import yaml
 from alpasim_wizard.s3_api import S3Connection, S3Path
 from alpasim_wizard.scenes.csv_utils import HUGGINGFACE_REPO, ArtifactRepository
@@ -29,6 +29,40 @@ from typing_extensions import ClassVar, Self
 LOCAL_SUITE_ID = "local"
 
 logger = logging.getLogger("alpasim_wizard")
+
+
+def _load_and_merge_csvs(
+    csv_paths: list[str],
+    dedup_key: str | list[str],
+) -> pl.DataFrame:
+    """Load one or more CSVs, concatenate, and verify no duplicates across files.
+
+    Args:
+        csv_paths: Paths to CSV files to load and merge.
+        dedup_key: Column name (str) or column names (list) that must be
+            unique across all files.
+    """
+    frames = []
+    for path in csv_paths:
+        logger.info("Loading scene catalog: %s", path)
+        frames.append(pl.read_csv(path))
+
+    if len(frames) == 1:
+        return frames[0]
+
+    merged = pl.concat(frames)
+
+    # Check for duplicates across files
+    key = [dedup_key] if isinstance(dedup_key, str) else dedup_key
+    duplicate_count = merged.height - merged.unique(subset=key).height
+    if duplicate_count > 0:
+        raise ValueError(
+            f"Found {duplicate_count} duplicate rows (by {key}) across "
+            f"scene catalog files: {csv_paths}. Each scene must appear in "
+            f"exactly one catalog file."
+        )
+
+    return merged
 
 
 @dataclass
@@ -57,6 +91,31 @@ def _deduplicate(df: pl.DataFrame) -> pl.DataFrame:
     return df.sort("last_modified", descending=True).unique(
         subset=["scene_id"], keep="first"
     )
+
+
+def _warn_duplicate_scenes(df: pl.DataFrame) -> None:
+    """Log a warning if any scene_id has artifacts for multiple NRE versions.
+
+    Since NRE is fully backwards-compatible, duplicates are resolved by
+    ``_deduplicate`` (newest wins). This warning gives operators visibility
+    so the scene database can be cleaned up over time.
+    """
+    dupes = (
+        df.group_by("scene_id")
+        .agg(pl.col("nre_version_string").unique().alias("nre_versions"))
+        .filter(pl.col("nre_versions").list.len() > 1)
+    )
+    if dupes.height > 0:
+        details = "\n".join(
+            f"  {row['scene_id']}: {sorted(row['nre_versions'])}"
+            for row in dupes.iter_rows(named=True)
+        )
+        logger.warning(
+            f"Found {dupes.height} scene(s) with artifacts for multiple NRE versions. "
+            "The newest artifact per scene will be used. "
+            "Consider cleaning up the scene database to remove stale entries.\n"
+            f"{details}"
+        )
 
 
 # TODO(mwatson): unify with car2sim.py logic wrt metadata extraction
@@ -181,8 +240,10 @@ class USDZManager:
             # Use the local_usdz_dir as the cache directory for scenesets
             cache_dir = cfg.local_usdz_dir
         else:
-            sim_scenes = pl.read_csv(cfg.scenes_csv)
-            sim_suites = pl.read_csv(cfg.suites_csv)
+            sim_scenes = _load_and_merge_csvs(cfg.scenes_csv, dedup_key="uuid")
+            sim_suites = _load_and_merge_csvs(
+                cfg.suites_csv, dedup_key=["test_suite_id", "scene_id"]
+            )
             cache_dir = cfg.scene_cache
 
         # Ensure directories exist
@@ -206,28 +267,21 @@ class USDZManager:
 
         return manager
 
-    def query_by_scene_ids(
-        self, scene_ids: list[str], nre_versions: list[str]
-    ) -> list[SceneIdAndUuid]:
-        """Query scenes by scene IDs and compatible NRE versions."""
+    def query_by_scene_ids(self, scene_ids: list[str]) -> list[SceneIdAndUuid]:
+        """Query scenes by scene IDs."""
         if len(scene_ids) == 0:
             return []
 
-        if len(nre_versions) == 0:
-            raise ValueError("At least one nre_version must be provided.")
-
-        df = self.sim_scenes.filter(
-            pl.col("scene_id").is_in(scene_ids)
-            & pl.col("nre_version_string").is_in(nre_versions)
-        ).select(["scene_id", "uuid", "last_modified", "nre_version_string"])
+        df = self.sim_scenes.filter(pl.col("scene_id").is_in(scene_ids)).select(
+            ["scene_id", "uuid", "last_modified", "nre_version_string"]
+        )
 
         found = set(df["scene_id"].to_list()) if df.height > 0 else set()
         missing = set(scene_ids) - found
         if missing:
-            raise USDZQueryError(
-                f"Failed to find scenes for {missing} compatible with {nre_versions=}."
-            )
+            raise USDZQueryError(f"Failed to find scenes for {missing}.")
 
+        _warn_duplicate_scenes(df)
         deduplicated = _deduplicate(df)
         logger.info(
             f"Scenes: \n{deduplicated.select(['scene_id', 'nre_version_string'])}"
@@ -235,40 +289,29 @@ class USDZManager:
 
         return SceneIdAndUuid.list_from_df(deduplicated)
 
-    def query_by_suite_id(
-        self, test_suite_id: str, nre_versions: list[str]
-    ) -> list[SceneIdAndUuid]:
-        """Query scenes by test suite ID and compatible NRE versions."""
-        if len(nre_versions) == 0:
-            raise ValueError("At least one nre_version must be provided.")
-
+    def query_by_suite_id(self, test_suite_id: str) -> list[SceneIdAndUuid]:
+        """Query scenes by test suite ID."""
         # Filter suites first
         suite_scenes = self.sim_suites.filter(pl.col("test_suite_id") == test_suite_id)
 
-        # Left join with scenes filtered by nre_version
-        scenes_filtered = self.sim_scenes.filter(
-            pl.col("nre_version_string").is_in(nre_versions)
-        )
-
         df = suite_scenes.join(
-            scenes_filtered,
+            self.sim_scenes,
             on="scene_id",
             how="left",
         ).select(["uuid", "scene_id", "nre_version_string", "last_modified"])
 
         if df.height == 0:
-            raise USDZQueryError(
-                f"Failed to find any scenes for {test_suite_id=} with {nre_versions=}."
-            )
+            raise USDZQueryError(f"Failed to find any scenes for {test_suite_id=}.")
 
         if df["uuid"].null_count() > 0:
             missing = df.filter(pl.col("uuid").is_null())["scene_id"].to_list()
             raise USDZQueryError(
-                f"Failed to find some scenes for scene suite {test_suite_id} with {nre_versions=}. "
+                f"Failed to find some scenes for scene suite {test_suite_id}. "
                 f"Missing: {missing}."
                 "A sceneset is expected to contain a valid artifact for each scene_id."
             )
 
+        _warn_duplicate_scenes(df)
         deduplicated = _deduplicate(df)
         logger.info(
             f"Scenes: \n{deduplicated.select(['scene_id', 'nre_version_string'])}"

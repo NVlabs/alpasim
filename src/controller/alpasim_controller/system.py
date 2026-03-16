@@ -24,6 +24,7 @@ from alpasim_controller.mpc_controller import (
 )
 from alpasim_controller.vehicle_model import VehicleModel
 from alpasim_grpc.v0 import common_pb2, controller_pb2
+from alpasim_plugins.plugins import mpc_controllers
 from alpasim_utils.geometry import (
     Pose,
     Trajectory,
@@ -77,6 +78,7 @@ class System:
         self._first_reference_pose_rig: Pose = Pose.identity()
         self.control_input: np.ndarray = np.array([0.0, 0.0])
         self._solve_time_ms: float = 0.0
+        self._last_mpc_time_us: int | None = None
 
     def _dynamic_state_to_cg_velocity(
         self, dynamic_state: common_pb2.DynamicState
@@ -123,6 +125,11 @@ class System:
                 f"future_time_us ({request.future_time_us}) must be greater than "
                 f"current timestamp ({request.state.timestamp_us})"
             )
+        if request.pose_reporting_interval_us < 0:
+            raise ValueError(
+                f"pose_reporting_interval_us must be non-negative, got "
+                f"{request.pose_reporting_interval_us}"
+            )
 
         # Update the pose (corrected for ground constraints) for the current timestamp
         if request.state.timestamp_us != self._trajectory.timestamps_us[-1]:
@@ -149,37 +156,65 @@ class System:
             velocity_cg = self._dynamic_state_to_cg_velocity(request.state.state)
             self._vehicle_model.set_velocity(velocity_cg[0], velocity_cg[1])
 
-        # Choose the number of steps such that:
-        # - we do at least one step
-        # - all the steps are DT_MPC seconds long, except possibly the last one
-        # - the last step can be shorter or slightly longer than DT_MPC seconds
-        dt_request_us = request.future_time_us - self._timestamp_us
+        # Determine intermediate reporting timestamps
+        if request.pose_reporting_interval_us > 0:
+            reporting_timestamps = set(
+                range(
+                    self._timestamp_us + request.pose_reporting_interval_us,
+                    request.future_time_us,
+                    request.pose_reporting_interval_us,
+                )
+            )
+        else:
+            reporting_timestamps = set()
+
+        # MPC run times
+        start_time_us = self._timestamp_us
         dt_mpc_us = int(1e6 * self._controller.DT_MPC)
-        n_steps = dt_request_us // dt_mpc_us
-        if (dt_request_us % dt_mpc_us) / dt_mpc_us > 0.1:
-            n_steps += 1
-        n_steps = max(1, n_steps)
+        if self._last_mpc_time_us is not None:
+            first_mpc_time = self._last_mpc_time_us + dt_mpc_us
+        else:
+            first_mpc_time = start_time_us
+        mpc_run_times = set(range(first_mpc_time, request.future_time_us, dt_mpc_us))
 
-        for i in range(n_steps):
-            if i == n_steps - 1:
-                dt_us = request.future_time_us - self._timestamp_us
-            else:
-                dt_us = int(1e6 * self._controller.DT_MPC)
-            self._step(dt_us)
-
-        current_pose_local_to_rig = common_pb2.PoseAtTime(
-            timestamp_us=self._timestamp_us,
-            pose=pose_to_grpc(self._trajectory.last_pose),
+        # Build sorted list of all timestamps to step to: MPC period
+        # boundaries (excluding start, which we're already at), reporting
+        # timestamps, and the final future_time_us.
+        step_targets = sorted(
+            (mpc_run_times - {start_time_us})
+            | reporting_timestamps
+            | {request.future_time_us}
         )
 
-        # Build dynamic state with velocities and accelerations in rig frame
-        dynamic_state = self._build_dynamic_state_in_rig_frame()
+        # Step through all targets. The controller runs when self._timestamp_us
+        # (the time *before* propagation) is at an MPC boundary.
+        reported_states: list[
+            controller_pb2.RunControllerAndVehicleModelResponse.PropagatedState
+        ] = []
+        for target_ts in step_targets:
+            pre_step_time = self._timestamp_us
+            run_ctrl = pre_step_time in mpc_run_times
+            self._step(
+                target_ts - pre_step_time,
+                run_controller=run_ctrl,
+            )
+
+            # Record state at reporting timestamps and at the final timestamp
+            if target_ts in reporting_timestamps or target_ts == request.future_time_us:
+                pose_grpc = pose_to_grpc(self._trajectory.last_pose)
+                dyn_state = self._build_dynamic_state_in_rig_frame()
+                reported_states.append(
+                    controller_pb2.RunControllerAndVehicleModelResponse.PropagatedState(
+                        timestamp_us=self._timestamp_us,
+                        pose_local_to_rig=pose_grpc,
+                        pose_local_to_rig_estimated=pose_grpc,
+                        dynamic_state=dyn_state,
+                        dynamic_state_estimated=dyn_state,
+                    )
+                )
 
         return controller_pb2.RunControllerAndVehicleModelResponse(
-            pose_local_to_rig=current_pose_local_to_rig,
-            pose_local_to_rig_estimated=current_pose_local_to_rig,
-            dynamic_state=dynamic_state,
-            dynamic_state_estimated=dynamic_state,
+            states=reported_states,
         )
 
     def _build_dynamic_state_in_rig_frame(self) -> common_pb2.DynamicState:
@@ -229,33 +264,44 @@ class System:
             angular_acceleration=common_pb2.Vec3(x=0.0, y=0.0, z=d_yaw_rate),
         )
 
-    def _step(self, dt_us: int) -> None:
-        """Execute one MPC step."""
+    def _step(self, dt_us: int, run_controller: bool = True) -> None:
+        """Execute one simulation step.
+
+        Args:
+            dt_us: Time step in microseconds.
+            run_controller: If True, run the MPC controller to update
+                control_input before propagating. If False, propagate using the
+                existing control_input
+        """
         # Reset the integrated positional states (x, y, psi)
         # This is equivalent to resetting the vehicle model to the origin so we can
         # compute the relative pose over the propagation time
         self._vehicle_model.reset_origin()
 
-        # Transform reference trajectory to rig frame
-        ref_in_rig = self._get_reference_in_rig_frame()
-        if ref_in_rig is None:
-            raise ValueError("Cannot step controller: no reference trajectory set. ")
+        if run_controller:
+            # Transform reference trajectory to rig frame
+            ref_in_rig = self._get_reference_in_rig_frame()
+            if ref_in_rig is None:
+                raise ValueError(
+                    "Cannot step controller: no reference trajectory set. "
+                )
 
-        # Build controller input
-        ctrl_input = ControllerInput(
-            state=self._vehicle_model.state.copy(),
-            reference_trajectory=ref_in_rig,
-            timestamp_us=self._timestamp_us,
-        )
+            # Build controller input
+            ctrl_input = ControllerInput(
+                state=self._vehicle_model.state.copy(),
+                reference_trajectory=ref_in_rig,
+                timestamp_us=self._timestamp_us,
+            )
 
-        # Compute control
-        ctrl_output = self._controller.compute_control(ctrl_input)
-        self.control_input = ctrl_output.control
+            # Compute control
+            ctrl_output = self._controller.compute_control(ctrl_input)
+            self.control_input = ctrl_output.control
+            self._last_mpc_time_us = self._timestamp_us
 
-        # Cache info for logging
-        self._solve_time_ms = ctrl_output.solve_time_ms
-        if ref_in_rig is not None and len(ref_in_rig) > 0:
-            self._first_reference_pose_rig = ref_in_rig.get_pose(0)
+            # Cache info for logging
+            self._solve_time_ms = ctrl_output.solve_time_ms
+            if ref_in_rig is not None and len(ref_in_rig) > 0:
+                self._first_reference_pose_rig = ref_in_rig.get_pose(0)
 
         # Advance the vehicle model and update the trajectory history
         pose_rig_t0_to_rig_t1 = self._vehicle_model.advance(
@@ -342,7 +388,7 @@ class System:
         self._log_file_handle.write(f"{self._vehicle_model.state[7]},")
         for i in range(2):
             self._log_file_handle.write(f"{self._first_reference_pose_rig.vec3[i]},")
-        self._log_file_handle.write(f"{self._first_reference_pose_rig.yaw}\n")
+        self._log_file_handle.write(f"{self._first_reference_pose_rig.yaw()}\n")
 
 
 def create_system(
@@ -377,20 +423,9 @@ def create_system(
         initial_yaw_rate=initial_state.state.angular_velocity.z,
     )
 
-    # Create controller based on mpc_implementation
-    if mpc_implementation == "linear":
-        from alpasim_controller.mpc_impl import LinearMPC
-
-        controller = LinearMPC(vehicle_model.parameters)
-    elif mpc_implementation == "nonlinear":
-        from alpasim_controller.mpc_impl import NonlinearMPC
-
-        controller = NonlinearMPC(vehicle_model.parameters)
-    else:
-        raise ValueError(
-            f"Unknown mpc_implementation: {mpc_implementation}. "
-            "Use 'linear' or 'nonlinear'."
-        )
+    controller = mpc_controllers.create(
+        mpc_implementation, vehicle_params=vehicle_model.parameters
+    )
 
     return System(
         log_file=log_file,

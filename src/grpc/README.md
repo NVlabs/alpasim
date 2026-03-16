@@ -4,13 +4,11 @@ This folder contains gRPC definitions for interoperation between alpasim compone
 Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md#coordinate-systems) for the coordinate frame conventions shared across the runtime and gRPC APIs.
 
 ## gRPC APIs
-The APIs defined in this repository are used by the alpasim components,
-including in additional repositories:
-1. [Neural rendering engine](https://www.nvidia.com/en-us/glossary/3d-reconstruction/)
-2. Traffic model (coming soon)
-3. [Physics model](/src/physics)
-4. [Driver](/src/driver)
-
+The APIs defined in this repository are used by the alpasim components, including in additional repositories:
+- [Neural rendering engine](https://www.nvidia.com/en-us/glossary/3d-reconstruction/)
+- Traffic model (coming soon)
+- [Physics model](../physics)
+- [Driver](../driver)
 
 ### Building and installing
 
@@ -27,7 +25,6 @@ You can also clean them with
 ```python
 uv run clean-protos
 ```
-
 
 ### Usage
 Primarily this repository contains protobufs specifying the microservice APIs. 

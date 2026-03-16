@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
+import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -561,6 +564,57 @@ class TestAggregateAndWriteMetricsResultsTxt:
 
         with pytest.raises(pl.exceptions.ComputeError):
             aggregate_and_write_metrics_results_txt(invalid_df, force_same_run=True)
+
+    def test_force_same_run_combined_uuid_is_deterministic_across_hash_seeds(
+        self, unified_metrics_df: pl.DataFrame, tmp_path: pathlib.Path
+    ) -> None:
+        base_df = unified_metrics_df.filter(
+            (pl.col("run_name") == "test_run_1") & (pl.col("clipgt_id") == "clip1")
+        )
+        valid_df = pl.concat(
+            [
+                base_df,
+                base_df.with_columns(
+                    pl.col("run_uuid").str.replace("uuid1", "uuid3"),
+                    pl.col("clipgt_id").str.replace("clip1", "clip3"),
+                ),
+            ]
+        )
+
+        input_path = tmp_path / "metrics.parquet"
+        valid_df.write_parquet(input_path)
+
+        eval_src_path = pathlib.Path(__file__).resolve().parents[1] / "src"
+        script = "\n".join(
+            [
+                "import polars as pl",
+                "from eval.aggregation.processing import aggregate_and_write_metrics_results_txt",
+                f"df = pl.read_parquet(r'{input_path}')",
+                "result = aggregate_and_write_metrics_results_txt(df, force_same_run=True)",
+                "print(result.combined_run_uuids)",
+            ]
+        )
+
+        outputs: list[str] = []
+        for seed in ("1", "2"):
+            env = os.environ.copy()
+            env["PYTHONHASHSEED"] = seed
+            existing_pythonpath = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{eval_src_path}:{existing_pythonpath}"
+                if existing_pythonpath
+                else str(eval_src_path)
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            outputs.append(completed.stdout.strip().splitlines()[-1])
+
+        assert outputs[0] == outputs[1]
 
     def test_with_modifiers(self, unified_metrics_df: pl.DataFrame) -> None:
         """Test with custom modifiers."""

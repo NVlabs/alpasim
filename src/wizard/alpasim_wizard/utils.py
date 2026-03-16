@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
 import os
@@ -7,9 +7,11 @@ import re
 import subprocess
 import sys
 from enum import Enum
+from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from alpasim_utils.yaml_utils import load_yaml_dict
 from filelock import FileLock
 from omegaconf import OmegaConf
 
@@ -17,8 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def read_yaml(file_path: str) -> dict[str, Any]:
-    with open(file_path, "r") as stream:
-        return yaml.safe_load(stream)
+    return load_yaml_dict(file_path)
 
 
 class LiteralStr(str):
@@ -45,11 +46,11 @@ def write_yaml(data: dict[str, Any], file_path: str) -> None:
 def nre_image_to_nre_version(image: str) -> str:
     """
     Extract the NRE version from the NRE image URL.
-    The format is assumed to be `docker.io/carlasimulator/nvidia-nurec-grpc:<version>`.
+    Accepts both legacy and newer image references, including:
+    - `nvcr.io/nvidian/alpamayo/nre:{version}`
+    - `http://nvcr.io/.../nre_run:{version}`
     """
-    match = re.match(
-        r"docker.io/carlasimulator/nvidia-nurec-grpc:(?P<version>.+)", image
-    )
+    match = re.search(r":(?P<version>[^/:@]+)$", image.strip())
     if match is None:
         raise ValueError(f"Failed to extract NRE version from {image=}")
     return match.group("version")
@@ -57,7 +58,7 @@ def nre_image_to_nre_version(image: str) -> str:
 
 def image_to_sqsh_basename(image: str) -> str:
     """Return the canonical .sqsh basename for a docker image URL (e.g. for caching)."""
-    return os.path.basename(image).replace(":", "_").replace("-", "_") + ".sqsh"
+    return Path(image).name.replace(":", "_").replace("-", "_") + ".sqsh"
 
 
 def image_url_to_sqsh_filename(image: str, squash_caches: list[str]) -> str:
@@ -79,7 +80,11 @@ def image_url_to_sqsh_filename(image: str, squash_caches: list[str]) -> str:
 
 
 def _image_to_enroot_uri(image: str) -> str:
-    """Convert docker image URL to enroot URI. Auth is handled via enroot credentials."""
+    """Convert docker image URL to enroot URI with auth placeholder (nvcr.io)."""
+    # enroot reads $oauthtoken from credentials; pass literal so enroot can substitute
+    if image.startswith("nvcr.io/"):
+        return "docker://$oauthtoken@nvcr.io#" + image[len("nvcr.io/") :]
+    # Other registries: pass through and rely on enroot credentials if configured
     return f"docker://{image}"
 
 
@@ -95,7 +100,7 @@ def ensure_sqsh_path(
     file lock so concurrent wizard instances do not race.
 
     Args:
-        image: Full docker image URL (e.g. org/repo:tag).
+        image: Full docker image URL (e.g. nvcr.io/nvidian/alpamayo/alpasim-runtime:0.3.1).
         squash_caches: List of cache directories to search and, for the first writable one, create.
         enroot_config_path: Directory containing .credentials for registry auth.
             If None, uses ENROOT_CONFIG_PATH from the environment.

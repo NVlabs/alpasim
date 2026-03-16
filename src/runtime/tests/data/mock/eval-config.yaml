@@ -1,6 +1,4 @@
 # Minimal eval config for mock tests
-run_in_runtime: true
-
 vec_map:
   incl_road_edges: true
   incl_traffic_signs: true

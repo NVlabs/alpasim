@@ -9,16 +9,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# Get the repository root directory
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# Get the repository root directory (based on script location)
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Probably not necessary, but just in case, we do an lfs pull
-echo "Ensuring Git LFS files are pulled..."
-git lfs pull
-if [[ $? -ne 0 ]]; then
-    echo "❌ Git LFS pull failed. Exiting."
-    return 1
-fi
 
 # Check for Rust toolchain (required for utils_rs maturin build)
 if ! command -v cargo &> /dev/null; then
@@ -54,33 +47,10 @@ if [[ $? -ne 0 ]]; then
 fi
 popd > /dev/null
 
-# refresh utils_rs package (it doesn't auto-update because it's a compiled extension)
-uv pip install --force-reinstall -e "${REPO_ROOT}/src/utils_rs"
-
-
-# Download vavam models if not already present
-VAVAM_DIR="${REPO_ROOT}/data/drivers"
-if [[ ! -d "${VAVAM_DIR}" ]]; then
-    echo "Downloading vavam assets..."
-    ./data/download_vavam_assets.sh --model vavam-b
-    if [[ $? -ne 0 ]]; then
-        echo "❌ Failed to download VAVAM models. Exiting."
-        rm -rf "${VAVAM_DIR}"
-        return 1
-    fi
-else
-    echo "VAVAM models already present. Skipping download."
-fi
-
-# Install Wizard in development mode
-echo "Installing Wizard in development mode..."
-uv tool install --python 3.12 -e "${REPO_ROOT}/src/wizard"
-
 # Ensure Hugging Face token is available (needed to download files)
 if [[ -z "${HF_TOKEN}" ]]; then
-    echo "❌ Hugging Face token (HF_TOKEN) not found in environment."
+    echo "⚠️   Hugging Face token (HF_TOKEN) not found in environment."
     echo "If you need to download files from Hugging Face, please set HF_TOKEN."
-    return 1
 fi
 
 # Ensure that the hugging face cache is available
@@ -97,5 +67,36 @@ if [[ -z "${HF_HOME}" ]]; then
         fi
     fi
 fi
+
+# refresh utils_rs package (it doesn't auto-update because it's a compiled extension)
+uv pip install --force-reinstall -e "${REPO_ROOT}/src/utils_rs"
+
+
+# Install all core packages via extras, auto-detecting available plugins
+cd "${REPO_ROOT}" || { echo "❌ Failed to change to repository root: ${REPO_ROOT}" >&2; return 1; }
+
+EXTRAS=("--extra" "all")
+
+# Map plugin directories to their pyproject.toml extra names
+declare -A PLUGIN_EXTRAS=(
+    ["plugins/internal"]="internal"
+    ["plugins/transfuser_driver"]="transfuser"
+)
+
+echo "Detecting available plugins..."
+for plugin_dir in "${!PLUGIN_EXTRAS[@]}"; do
+    if [[ -d "${REPO_ROOT}/${plugin_dir}" && -f "${REPO_ROOT}/${plugin_dir}/pyproject.toml" ]]; then
+        extra_name="${PLUGIN_EXTRAS[$plugin_dir]}"
+        echo "  Found plugin: ${plugin_dir} (extra: ${extra_name})"
+        EXTRAS+=("--extra" "${extra_name}")
+    fi
+done
+
+echo "Installing packages with extras: ${EXTRAS[*]}"
+uv sync "${EXTRAS[@]}"
+if [[ $? -ne 0 ]]; then
+    echo "⚠️  Failed to sync packages. You may need to check your environment."
+fi
+
 
 echo "Setup complete"

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Unit tests for worker IPC types.
@@ -7,46 +7,131 @@ Unit tests for worker IPC types.
 
 import pickle
 from multiprocessing import Queue
-from unittest import mock
+from unittest.mock import MagicMock
 
-from alpasim_runtime.config import ScenarioConfig
+from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
+from alpasim_runtime.address_pool import ServiceAddress
 from alpasim_runtime.worker.ipc import (
-    JOB_POLL_TIMEOUT_S,
-    RESULT_POLL_TIMEOUT_S,
     SHUTDOWN_SENTINEL,
+    AssignedRolloutJob,
     JobResult,
-    RolloutJob,
-    ServiceAllocations,
+    PendingRolloutJob,
+    ServiceEndpoints,
+    WorkerArgs,
     _ShutdownSentinel,
-    poll_job_queue,
-    poll_result_queue,
 )
 
 
-class TestRolloutJob:
-    """Tests for RolloutJob dataclass."""
+def _make_endpoints() -> ServiceEndpoints:
+    """Create a test ServiceEndpoints instance."""
+    return ServiceEndpoints(
+        driver=ServiceAddress("driver:50051", skip=False),
+        sensorsim=ServiceAddress("sensorsim:50052", skip=False),
+        physics=ServiceAddress("physics:50053", skip=False),
+        trafficsim=ServiceAddress("trafficsim:50054", skip=False),
+        controller=ServiceAddress("controller:50055", skip=False),
+    )
+
+
+class TestPendingRolloutJob:
+    """Tests for PendingRolloutJob dataclass."""
 
     def test_creation(self):
-        """Test basic creation."""
-        scenario = ScenarioConfig(scene_id="test-scene", n_sim_steps=100, n_rollouts=5)
-        job = RolloutJob(job_id="test-123", scenario=scenario, seed=42)
+        """Pending jobs contain only identity and scene."""
+        job = PendingRolloutJob(
+            job_id="test-123",
+            scene_id="test-scene",
+            rollout_spec_index=2,
+            artifact_path="/tmp/test-scene.usdz",
+        )
 
         assert job.job_id == "test-123"
-        assert job.scenario.scene_id == "test-scene"
-        assert job.seed == 42
+        assert job.scene_id == "test-scene"
+        assert job.rollout_spec_index == 2
+        assert job.artifact_path == "/tmp/test-scene.usdz"
 
     def test_pickling(self):
-        """RolloutJob should be picklable for multiprocessing Queue."""
-        scenario = ScenarioConfig(scene_id="test-scene", n_sim_steps=100, n_rollouts=5)
-        job = RolloutJob(job_id="test-123", scenario=scenario, seed=42)
-
-        # Pickle and unpickle
+        """PendingRolloutJob should be picklable."""
+        job = PendingRolloutJob(
+            job_id="test-123",
+            scene_id="test-scene",
+            rollout_spec_index=1,
+            artifact_path="/tmp/test-scene.usdz",
+        )
         pickled = pickle.dumps(job)
         unpickled = pickle.loads(pickled)
 
         assert unpickled.job_id == job.job_id
-        assert unpickled.scenario.scene_id == job.scenario.scene_id
-        assert unpickled.seed == job.seed
+        assert unpickled.scene_id == job.scene_id
+        assert unpickled.rollout_spec_index == job.rollout_spec_index
+        assert unpickled.artifact_path == job.artifact_path
+
+
+class TestAssignedRolloutJob:
+    """Tests for AssignedRolloutJob dataclass."""
+
+    def test_creation(self):
+        """Assigned jobs include artifact path and service endpoints."""
+        ep = _make_endpoints()
+        job = AssignedRolloutJob(
+            request_id="req-1",
+            job_id="test-123",
+            scene_id="test-scene",
+            rollout_spec_index=0,
+            artifact_path="/tmp/test-scene.usdz",
+            endpoints=ep,
+        )
+        assert job.artifact_path == "/tmp/test-scene.usdz"
+        assert job.endpoints.driver.address == "driver:50051"
+
+    def test_pickling(self):
+        """AssignedRolloutJob should be picklable for multiprocessing Queue."""
+        ep = _make_endpoints()
+        job = AssignedRolloutJob(
+            request_id="req-1",
+            job_id="test-123",
+            scene_id="test-scene",
+            rollout_spec_index=0,
+            artifact_path="/tmp/test-scene.usdz",
+            endpoints=ep,
+        )
+
+        pickled = pickle.dumps(job)
+        unpickled = pickle.loads(pickled)
+
+        assert unpickled.job_id == job.job_id
+        assert unpickled.artifact_path == "/tmp/test-scene.usdz"
+        assert unpickled.endpoints.driver.address == "driver:50051"
+        assert unpickled.endpoints.physics.skip is False
+
+
+class TestServiceEndpoints:
+    """Tests for ServiceEndpoints dataclass."""
+
+    def test_creation(self):
+        ep = _make_endpoints()
+        assert ep.driver.address == "driver:50051"
+        assert ep.sensorsim.address == "sensorsim:50052"
+        assert ep.physics.address == "physics:50053"
+        assert ep.trafficsim.address == "trafficsim:50054"
+        assert ep.controller.address == "controller:50055"
+
+    def test_with_skip(self):
+        ep = ServiceEndpoints(
+            driver=ServiceAddress("skip", skip=True),
+            sensorsim=ServiceAddress("addr:1", skip=False),
+            physics=ServiceAddress("skip", skip=True),
+            trafficsim=ServiceAddress("addr:2", skip=False),
+            controller=ServiceAddress("skip", skip=True),
+        )
+        assert ep.driver.skip is True
+        assert ep.sensorsim.skip is False
+
+    def test_pickling(self):
+        ep = _make_endpoints()
+        pickled = pickle.dumps(ep)
+        unpickled = pickle.loads(pickled)
+        assert unpickled.driver.address == ep.driver.address
 
 
 class TestJobResult:
@@ -55,7 +140,9 @@ class TestJobResult:
     def test_success_result(self):
         """Test successful result."""
         result = JobResult(
+            request_id="req-1",
             job_id="test-123",
+            rollout_spec_index=0,
             success=True,
             error=None,
             error_traceback=None,
@@ -69,7 +156,9 @@ class TestJobResult:
     def test_failure_result(self):
         """Test failure result."""
         result = JobResult(
+            request_id="req-1",
             job_id="test-123",
+            rollout_spec_index=0,
             success=False,
             error="Something went wrong",
             error_traceback="Traceback...",
@@ -83,7 +172,9 @@ class TestJobResult:
     def test_pickling(self):
         """JobResult should be picklable for multiprocessing Queue."""
         result = JobResult(
+            request_id="req-1",
             job_id="test-123",
+            rollout_spec_index=0,
             success=False,
             error="Error message",
             error_traceback="Full traceback",
@@ -96,6 +187,7 @@ class TestJobResult:
         assert unpickled.job_id == result.job_id
         assert unpickled.success == result.success
         assert unpickled.error == result.error
+        assert unpickled.request_id == result.request_id
 
 
 class TestShutdownSentinel:
@@ -117,90 +209,43 @@ class TestShutdownSentinel:
         assert isinstance(unpickled, _ShutdownSentinel)
 
 
-class TestServiceAllocations:
-    """Tests for ServiceAllocations dataclass."""
+class TestWorkerArgs:
+    """Tests for WorkerArgs dataclass."""
 
-    def test_pickling(self):
-        """ServiceAllocations should be picklable."""
-        alloc = ServiceAllocations(
-            driver={"addr1": 4},
-            sensorsim={"addr2": 3},
-            physics={"addr3": 2},
-            trafficsim={"addr4": 1},
-            controller={"addr5": 5},
+    def test_creation_with_version_ids(self):
+        """WorkerArgs should include version_ids."""
+        from alpasim_grpc.v0.common_pb2 import VersionId
+
+        version_ids = RolloutMetadata.VersionIds(
+            runtime_version=VersionId(version_id="0.3.0", git_hash="abc"),
+        )
+        args = WorkerArgs(
+            worker_id=0,
+            num_workers=2,
+            job_queue=Queue(),
+            result_queue=Queue(),
+            num_consumers=4,
+            user_config_path="/tmp/config.yaml",
+            log_dir="/tmp/logs",
+            eval_config=MagicMock(),
+            version_ids=version_ids,
+        )
+        assert args.version_ids is version_ids
+        assert args.worker_id == 0
+        assert args.num_consumers == 4
+
+    def test_version_ids_field_round_trips(self):
+        """version_ids protobuf should survive serialization (as it would through multiprocessing)."""
+        from alpasim_grpc.v0.common_pb2 import VersionId
+
+        version_ids = RolloutMetadata.VersionIds(
+            runtime_version=VersionId(version_id="0.3.0", git_hash="abc"),
+            egodriver_version=VersionId(version_id="1.0.0", git_hash="def"),
         )
 
-        pickled = pickle.dumps(alloc)
+        # Protobuf messages are picklable by default
+        pickled = pickle.dumps(version_ids)
         unpickled = pickle.loads(pickled)
 
-        assert unpickled.driver == alloc.driver
-        assert unpickled.sensorsim == alloc.sensorsim
-
-
-class TestQueueHelpers:
-    """Tests for queue helper functions."""
-
-    def test_poll_job_queue_returns_job(self):
-        """Should return job when available."""
-        queue: Queue = Queue()
-        scenario = ScenarioConfig(scene_id="test", n_sim_steps=100, n_rollouts=1)
-        job = RolloutJob(job_id="123", scenario=scenario, seed=1)
-        queue.put(job)
-
-        result = poll_job_queue(queue)
-        assert result is not None
-        assert result.job_id == "123"
-
-    def test_poll_job_queue_returns_none_on_timeout(self):
-        """Should return None on timeout."""
-        queue: Queue = Queue()
-
-        with mock.patch("alpasim_runtime.worker.ipc.JOB_POLL_TIMEOUT_S", 0.01):
-            result = poll_job_queue(queue)
-        assert result is None
-
-    def test_poll_job_queue_returns_sentinel(self):
-        """Should return sentinel when it's in the queue."""
-        queue: Queue = Queue()
-        queue.put(SHUTDOWN_SENTINEL)
-
-        result = poll_job_queue(queue)
-        assert isinstance(result, _ShutdownSentinel)
-
-    def test_poll_result_queue_returns_result(self):
-        """Should return result when available."""
-        queue: Queue = Queue()
-        result = JobResult(
-            job_id="123",
-            success=True,
-            error=None,
-            error_traceback=None,
-            rollout_uuid="456",
-        )
-        queue.put(result)
-
-        got = poll_result_queue(queue)
-        assert got is not None
-        assert got.job_id == "123"
-
-    def test_poll_result_queue_returns_none_on_timeout(self):
-        """Should return None on timeout."""
-        queue: Queue = Queue()
-
-        with mock.patch("alpasim_runtime.worker.ipc.RESULT_POLL_TIMEOUT_S", 0.01):
-            result = poll_result_queue(queue)
-        assert result is None
-
-
-class TestTimeoutConstants:
-    """Tests for timeout constants."""
-
-    def test_job_poll_timeout(self):
-        """Job poll timeout should be reasonable."""
-        assert JOB_POLL_TIMEOUT_S > 0
-        assert JOB_POLL_TIMEOUT_S == 10.0
-
-    def test_result_poll_timeout(self):
-        """Result poll timeout should be reasonable."""
-        assert RESULT_POLL_TIMEOUT_S > 0
-        assert RESULT_POLL_TIMEOUT_S == 30.0
+        assert unpickled.runtime_version.version_id == "0.3.0"
+        assert unpickled.egodriver_version.version_id == "1.0.0"

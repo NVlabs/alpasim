@@ -31,7 +31,9 @@ from typing import Any
 
 import numpy as np
 import pygame
+import torch
 
+from ..schema import ModelConfig
 from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
 
 logger = logging.getLogger(__name__)
@@ -571,6 +573,22 @@ class ManualModel(BaseTrajectoryModel):
     # Singleton GUI instance (shared across all ManualModel instances)
     _gui_instance: ManualModelGUI | None = None
     _gui_lock = threading.Lock()
+
+    @classmethod
+    def from_config(
+        cls,
+        model_cfg: ModelConfig,
+        device: torch.device,
+        camera_ids: list[str],
+        context_length: int | None,
+        output_frequency_hz: int,
+    ) -> "ManualModel":
+        """Create ManualModel from driver configuration."""
+        return cls(
+            camera_ids=camera_ids,
+            output_frequency_hz=output_frequency_hz,
+            context_length=context_length or 1,
+        )
 
     def __init__(
         self,

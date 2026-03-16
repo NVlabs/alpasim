@@ -10,6 +10,29 @@ This module provides shared path parsing utilities used across alpasim component
 from pathlib import Path
 
 
+def find_repo_root(start_path: str | Path) -> Path:
+    """Find the nearest git repository root for a path.
+
+    The lookup walks up parent directories until it finds a `.git` marker.
+    This works for both regular repositories (`.git/`) and git worktrees
+    (`.git` file).
+    """
+    start = Path(start_path).resolve()
+    probe = start if start.is_dir() else start.parent
+
+    for candidate in (probe, *probe.parents):
+        git_marker = candidate / ".git"
+        if git_marker.exists():
+            return candidate
+
+    raise FileNotFoundError(f"Could not find git repository root from {start}")
+
+
+def image_to_sqsh_basename(image: str) -> str:
+    """Return the canonical .sqsh basename for a docker image URL."""
+    return Path(image).name.replace(":", "_").replace("-", "_") + ".sqsh"
+
+
 def extract_ids_from_path(file_path: str) -> tuple[str, str, str]:
     """
     Extract clipgt_id, batch_id, and rollout_id from a file path.

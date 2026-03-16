@@ -5,7 +5,7 @@
 # These settings optimize for human reaction time and visual feedback.
 
 runtime:
-  default_scenario_parameters:
+  simulation_config:
     # Longer force_gt to give human time to orient
     force_gt_duration_us: 3_000_000  # 3 seconds
 
@@ -14,7 +14,6 @@ runtime:
     n_rollouts: 1
 
     # Slower control loop to match human reaction time
-    egopose_interval_us: 200_000   # 5 Hz egomotion updates
     control_timestep_us: 200_000   # 5 Hz control (drive() calls)
 
     time_start_offset_us: 500_000  # 0.5s offset for scene loading

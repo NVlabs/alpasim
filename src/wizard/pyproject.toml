@@ -12,6 +12,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "alpasim-utils",
     "hydra-core",
     "pyYAML",
     "GitPython",
@@ -23,22 +24,24 @@ dependencies = [
     "huggingface_hub",
     "tqdm",
     "typing-extensions",
-    "pandas",
     "pytest",
     "pytest-asyncio",
     "pandas-stubs",
     "types-PyYAML",
-    # Pin cryptography to avoid GLIBC 2.33 requirement on compute nodes
-    "cryptography>=41.0.3,<42.0.0",
 ]
+
+[tool.uv.sources]
+alpasim-utils = {workspace = true}
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 
-[tool.setuptools]
-py-modules  = ["alpasim_wizard"]
+[tool.setuptools.packages.find]
+# Include the wizard package and the Hydra SearchPathPlugin namespace package.
+# hydra_plugins/ is a namespace package (no __init__.py) that Hydra auto-discovers
+# at startup, enabling automatic config search path registration from plugins.
+include = ["alpasim_wizard*", "hydra_plugins*"]
 
-# Executable for `uv tool run`
 [project.scripts]
 alpasim_wizard = "alpasim_wizard.__main__:main"
 alpasim_check_config = "alpasim_wizard.check_config:main"

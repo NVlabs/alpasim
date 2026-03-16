@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright (c) 2025 NVIDIA Corporation
+// Copyright (c) 2025-2026 NVIDIA Corporation
 
 syntax = "proto3";
 
@@ -7,11 +7,12 @@ import "alpasim_grpc/v0/common.proto";
 
 service RuntimeService {
     rpc simulate (SimulationRequest) returns (SimulationReturn);
+    rpc shut_down (common.Empty) returns (common.Empty);
 }
 
 message RolloutSpec {
     string scenario_id = 1;
-    fixed64 random_seed = 2;
+    uint32 nr_rollouts = 2;
 }
 
 message SimulationRequest {
@@ -21,13 +22,37 @@ message SimulationRequest {
     }
 
     repeated DriverAddress available_drivers = 1;
-    repeated RolloutSpec rollout_specs = 2; // note a scenario may be requested multiple times
+    repeated RolloutSpec rollout_specs = 2; // scenario may be repeated across specs
+    uint32 n_concurrent_per_driver = 3;
+}
+
+// How per-timestep metric values should be reduced to a single scalar.
+enum TimeAggregation {
+    TIME_AGGREGATION_UNSPECIFIED = 0;
+    TIME_AGGREGATION_MEAN = 1;
+    TIME_AGGREGATION_MEDIAN = 2;
+    TIME_AGGREGATION_MAX = 3;
+    TIME_AGGREGATION_MIN = 4;
+    TIME_AGGREGATION_LAST = 5;
 }
 
 message SimulationReturn {
+    // A single named metric sampled at each simulation timestep.
+    message TimestepMetric {
+        string name = 1;
+        repeated fixed64 timestamps_us = 2;
+        repeated double values = 3;
+        repeated bool valid = 4;
+        TimeAggregation time_aggregation = 5;
+    }
+
     message RolloutReturn {
         RolloutSpec rollout_spec = 1;
-        string results_json = 2;
+        bool success = 2;
+        string rollout_uuid = 3;
+        string error = 4;
+        repeated TimestepMetric timestep_metrics = 5;
+        map<string, double> aggregated_metrics = 6;
     }
 
     common.VersionId runtime_version = 1;

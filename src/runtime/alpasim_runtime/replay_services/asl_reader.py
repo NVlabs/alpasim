@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 ASL (Alpasim Simulation Log) replay infrastructure for integration testing.
@@ -16,6 +16,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Type, Unio
 
 from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage
+from alpasim_grpc.v0.sensorsim_pb2 import RGBRenderRequest
 from alpasim_utils.logs import async_read_pb_log
 from google.protobuf import json_format
 from google.protobuf.json_format import MessageToDict
@@ -50,6 +52,11 @@ SERVICE_VERSION_MAP = {
 }
 
 
+def _pair_response_fifo(pending_requests: Deque[Any], _response: Any) -> Any:
+    """Return the next pending request in FIFO order."""
+    return pending_requests.popleft()
+
+
 @dataclass
 class ExchangeConfig:
     """Configuration for a request/response exchange."""
@@ -60,6 +67,7 @@ class ExchangeConfig:
         str, Type, None
     ]  # Entry type name for paired response, or Type for direct response
     processor: Optional[Callable] = None  # Optional special processing
+    response_matcher: Callable[[Deque[Any], Any], Any] = _pair_response_fifo
 
     @property
     def is_direct(self) -> bool:
@@ -82,6 +90,50 @@ def _find_config_for_entry(
     return None, None
 
 
+def _pop_deque_at_index(values: Deque[Any], index: int) -> Any:
+    """Pop the element at ``index`` from a deque while preserving relative order."""
+    values.rotate(-index)
+    item = values.popleft()
+    values.rotate(index)
+    return item
+
+
+def _physics_request_response_distance(request: Any, response: Any) -> float:
+    """Compute squared position distance between physics request and response.
+
+    Compares the last pose from the request ego_trajectory_aabb against
+    the last pose from the response ego_trajectory_aabb.
+    """
+    request_vec = request.ego_data.ego_trajectory_aabb.poses[-1].pose.vec
+    response_vec = response.ego_trajectory_aabb.poses[-1].pose.vec
+
+    dx = request_vec.x - response_vec.x
+    dy = request_vec.y - response_vec.y
+    dz = request_vec.z - response_vec.z
+    return dx * dx + dy * dy + dz * dz
+
+
+def _pair_physics_response_by_closest_pose(
+    pending_requests: Deque[Any], response: Any
+) -> Any:
+    """Pair a physics response with the closest pending request future position."""
+    best_index = 0
+    best_distance: Optional[float] = None
+
+    for idx, request in enumerate(pending_requests):
+        distance = _physics_request_response_distance(request, response)
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best_index = idx
+
+    return _pop_deque_at_index(pending_requests, best_index)
+
+
+def _render_dynamic_object_sort_key(item: dict[str, Any]) -> tuple[str, str]:
+    """Build a deterministic sort key for render request dynamic objects."""
+    return (item.get("trackId", ""), json.dumps(item, sort_keys=True))
+
+
 # Hierarchical service configuration
 SERVICE_EXCHANGES = {
     "driver": [
@@ -92,7 +144,6 @@ SERVICE_EXCHANGES = {
             method="start_session",
             request_entry="driver_session_request",
             response=common_pb2.SessionRequestStatus,
-            processor=lambda self, entry: self._process_driver_session(entry),
         ),
         ExchangeConfig(
             method="submit_image_observation",
@@ -121,6 +172,7 @@ SERVICE_EXCHANGES = {
             method="ground_intersection",
             request_entry="physics_request",
             response="physics_return",
+            response_matcher=_pair_physics_response_by_closest_pose,
         ),
     ],
     "trafficsim": [
@@ -152,6 +204,11 @@ SERVICE_EXCHANGES = {
             method="get_available_cameras",
             request_entry="available_cameras_request",
             response="available_cameras_return",
+        ),
+        ExchangeConfig(
+            method="get_available_ego_masks",
+            request_entry="available_ego_masks_request",
+            response="available_ego_masks_return",
         ),
     ],
 }
@@ -203,6 +260,7 @@ class ASLReader:
             service, config = _find_config_for_entry(entry_type)
             if not config:
                 raise AssertionError(f"Unknown entry type: {entry_type}")
+            assert service is not None  # Guaranteed by _find_config_for_entry
 
             entry_data = getattr(log_entry, entry_type)
 
@@ -211,7 +269,9 @@ class ASLReader:
                 # This is a request
                 if config.is_direct:
                     # Direct exchange - create immediately
-                    response = config.response() if config.response else None
+                    response_factory = config.response
+                    assert not isinstance(response_factory, str)
+                    response = response_factory() if response_factory else None
                     self._add_exchange(service, config.method, entry_data, response)
                 else:
                     # Paired exchange - queue the request
@@ -220,7 +280,13 @@ class ASLReader:
             else:
                 # This is a response - pop matching request
                 queue_key = f"{service}.{config.method}"
-                request = pending_requests[queue_key].popleft()
+                pending_queue = pending_requests[queue_key]
+                if not pending_queue:
+                    raise AssertionError(
+                        f"Response without pending request for {queue_key}"
+                    )
+
+                request = config.response_matcher(pending_queue, entry_data)
                 self._add_exchange(service, config.method, request, entry_data)
 
             # Run any special processing
@@ -264,21 +330,21 @@ class ASLReader:
 
         self._exchanges[key].append((request, response))
 
-    def _process_driver_session(
-        self, session_request: common_pb2.SessionRequest
-    ) -> None:
-        """Special processor for driver session requests"""
-        pass
+    def get_exchanges(
+        self, service: str, method: str
+    ) -> list[tuple[Message, Optional[Message]]]:
+        """Return recorded exchanges for a service.method pair."""
+        return self._exchanges.get(f"{service}.{method}", [])
 
     def get_exchange_summary(self) -> Dict[str, Any]:
         """Get summary of exchanges loaded and consumed"""
-        summary = {}
+        summary: Dict[str, Any] = {}
         for key, exchanges in self._exchanges.items():
             consumed_set = self._consumed_indices.get(key, set())
             consumed_count = len(consumed_set)
             total = len(exchanges)
 
-            result = {
+            result: Dict[str, Any] = {
                 "total": total,
                 "consumed": consumed_count,
                 "remaining": total - consumed_count,
@@ -404,37 +470,69 @@ class ASLReader:
             The image bytes if found, None otherwise
         """
 
-        # Find the image with matching camera index and closest timestamp
-        best_match = None
-        best_time_diff = float("inf")
+        camera_images = [
+            image
+            for image in self.driver_images
+            if image.camera_image.logical_id == camera_id
+        ]
 
-        for image in self.driver_images:
-            # Check if camera index matches
-            if image.camera_image.logical_id == camera_id:
-                # If timestamp is 0, return the first matching camera
-                if timestamp_us == 0:
-                    return image.camera_image.image_bytes
-                # Otherwise, find the closest timestamp match
-                time_diff = abs(image.camera_image.frame_start_us - timestamp_us)
-                if time_diff < best_time_diff:
-                    best_time_diff = time_diff
-                    best_match = image
-
-        if best_match is None:
+        if not camera_images:
             logger.error("No image found for camera %s", camera_id)
             return None
 
-        assert best_time_diff == 0
+        # If timestamp is 0, return the first matching camera.
+        if timestamp_us == 0:
+            return camera_images[0].camera_image.image_bytes
 
-        return best_match.camera_image.image_bytes
+        # Find exact/closest timestamp match.
+        best_match = min(
+            camera_images,
+            key=lambda image: abs(image.camera_image.frame_start_us - timestamp_us),
+        )
+        best_time_diff = abs(best_match.camera_image.frame_start_us - timestamp_us)
+
+        if best_time_diff == 0:
+            return best_match.camera_image.image_bytes
+
+        earliest_timestamp_us = min(
+            image.camera_image.frame_start_us for image in camera_images
+        )
+
+        # Warmup render can occur before the first logged driver frame.
+        if timestamp_us < earliest_timestamp_us:
+            logger.info(
+                "Expected warmup timestamp miss for camera %s at %d us "
+                "(first available: %d us). Returning first available frame.",
+                camera_id,
+                timestamp_us,
+                earliest_timestamp_us,
+            )
+            return best_match.camera_image.image_bytes
+
+        logger.error(
+            "Unexpected non-exact timestamp for camera %s at %d us "
+            "(closest available: %d us, diff: %d us).",
+            camera_id,
+            timestamp_us,
+            best_match.camera_image.frame_start_us,
+            best_time_diff,
+        )
+        return None
 
     def generate_diff(self, expected: Any, actual: Any) -> str:
         """Generate a detailed diff between expected and actual messages"""
 
         # Convert protobuf messages to dict for comparison
 
-        expected_dict = MessageToDict(expected) if expected else {}
-        actual_dict = MessageToDict(actual) if actual else {}
+        if isinstance(expected, Message):
+            expected_dict = self._normalize_request_dict(expected)
+        else:
+            expected_dict = MessageToDict(expected) if expected else {}
+
+        if isinstance(actual, Message):
+            actual_dict = self._normalize_request_dict(actual)
+        else:
+            actual_dict = MessageToDict(actual) if actual else {}
 
         expected_json = json.dumps(expected_dict, indent=2, sort_keys=True).splitlines()
         actual_json = json.dumps(actual_dict, indent=2, sort_keys=True).splitlines()
@@ -450,7 +548,12 @@ class ASLReader:
         return "\n".join(diff)
 
     def requests_match(self, actual: Any, expected: Any) -> bool:
-        """Compare requests, ignoring dynamic fields that change between runs."""
+        """Compare requests, ignoring dynamic fields and tolerating float drift.
+
+        Floating-point values may differ by up to ~1 ULP after proto→Pose→proto
+        round-trips (e.g. quaternion normalization).  We use approximate
+        comparison for floats to avoid false negatives.
+        """
         # If they're exactly equal, no need for complex comparison
         if actual == expected:
             return True
@@ -458,16 +561,30 @@ class ASLReader:
         # For protobuf messages, do field-by-field comparison
         if isinstance(actual, Message) and isinstance(expected, Message):
             # Convert to dicts for easier manipulation
-            actual_dict = json_format.MessageToDict(actual)
-            expected_dict = json_format.MessageToDict(expected)
+            actual_dict = self._normalize_request_dict(actual)
+            expected_dict = self._normalize_request_dict(expected)
 
             actual_normalized = _remove_dynamic_fields(actual_dict)
             expected_normalized = _remove_dynamic_fields(expected_dict)
 
-            return actual_normalized == expected_normalized
+            return _approx_equal(actual_normalized, expected_normalized)
 
         # For non-protobuf messages, use direct comparison
         return actual == expected
+
+    def _normalize_request_dict(self, request: Message) -> dict[str, Any]:
+        """Normalize request messages for comparison."""
+        request_dict = json_format.MessageToDict(request)
+
+        if isinstance(request, RGBRenderRequest):
+            dynamic_objects = request_dict.get("dynamicObjects")
+            if isinstance(dynamic_objects, list):
+                request_dict["dynamicObjects"] = sorted(
+                    dynamic_objects,
+                    key=_render_dynamic_object_sort_key,
+                )
+
+        return request_dict
 
     def get_map_id(self) -> str:
         """Get the scene ID from the ASL metadata"""
@@ -515,3 +632,48 @@ def _remove_dynamic_fields(d: Any) -> Any:
     elif isinstance(d, list):
         return [_remove_dynamic_fields(item) for item in d]
     return d
+
+
+# Tolerances for float comparison.  Simulation state accumulates small
+# float-precision differences across steps (e.g. quaternion normalization,
+# spline resampling), so route waypoints and poses drift over the 60-step
+# replay.  rel_tol=1e-3 and abs_tol=1e-4 provide ~100× headroom over the
+# largest observed per-step drift while still catching gross regressions.
+_FLOAT_REL_TOL = 1e-3
+_FLOAT_ABS_TOL = 1e-4
+
+
+def _approx_equal(a: Any, b: Any) -> bool:
+    """Recursively compare two structures with approximate float matching.
+
+    Handles protobuf ``MessageToDict`` quirks: default-valued fields (0, 0.0,
+    "", False) are omitted from the dict, so a near-zero float in one dict
+    may correspond to a missing key in the other.
+    """
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        all_keys = a.keys() | b.keys()
+        for k in all_keys:
+            va = a.get(k)
+            vb = b.get(k)
+            if va is None and isinstance(vb, float):
+                # Key absent in a → protobuf default 0.0
+                if not math.isclose(0.0, vb, abs_tol=_FLOAT_ABS_TOL):
+                    return False
+            elif vb is None and isinstance(va, float):
+                if not math.isclose(va, 0.0, abs_tol=_FLOAT_ABS_TOL):
+                    return False
+            elif va is None or vb is None:
+                # Non-float key present in only one dict
+                return False
+            elif not _approx_equal(va, vb):
+                return False
+        return True
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return False
+        return all(_approx_equal(ai, bi) for ai, bi in zip(a, b))
+    if isinstance(a, float):
+        return math.isclose(a, b, rel_tol=_FLOAT_REL_TOL, abs_tol=_FLOAT_ABS_TOL)
+    return a == b

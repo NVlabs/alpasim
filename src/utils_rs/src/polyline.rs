@@ -67,10 +67,7 @@ impl Polyline {
     /// Compute squared distance between two points.
     #[inline]
     fn distance_squared(a: &[f32], b: &[f32]) -> f32 {
-        a.iter()
-            .zip(b.iter())
-            .map(|(x, y)| (x - y) * (x - y))
-            .sum()
+        a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
     }
 
     /// Compute distance between two points.
@@ -215,11 +212,14 @@ impl Polyline {
         let n = self.len();
 
         if n == 0 {
-            return (Vec::new(), ProjectionResult {
-                point: vec![0.0; self.dimension],
-                segment_idx: 0,
-                distance_along: 0.0,
-            });
+            return (
+                Vec::new(),
+                ProjectionResult {
+                    point: vec![0.0; self.dimension],
+                    segment_idx: 0,
+                    distance_along: 0.0,
+                },
+            );
         }
 
         let projection = self.project_point_impl(point_slice);
@@ -246,7 +246,8 @@ impl Polyline {
                     .zip(second_last.iter())
                     .map(|(e, s)| e - s)
                     .collect();
-                let segment_dir: Vec<f32> = segment_vec.iter().map(|v| v / segment_length).collect();
+                let segment_dir: Vec<f32> =
+                    segment_vec.iter().map(|v| v / segment_length).collect();
                 let t_unclamped = Self::dot(&to_point, &segment_dir);
 
                 if t_unclamped > segment_length + 1e-6 {
@@ -288,7 +289,10 @@ impl Polyline {
                 dimension
             )));
         }
-        Ok(Self { points: data, dimension })
+        Ok(Self {
+            points: data,
+            dimension,
+        })
     }
 
     /// Create an empty Polyline with the specified dimension (default 3).
@@ -371,9 +375,11 @@ impl Polyline {
                 .map(|c| c.to_vec())
                 .collect::<Vec<_>>(),
         )
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!(
-            "Failed to create numpy array from polyline points: {e}"
-        )))
+        .map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Failed to create numpy array from polyline points: {e}"
+            ))
+        })
     }
 
     /// Total arc length of the polyline.
@@ -534,7 +540,10 @@ impl Polyline {
 
         // Validate distances are within range
         if !distances_slice.is_empty() {
-            let min_dist = distances_slice.iter().cloned().fold(f32::INFINITY, f32::min);
+            let min_dist = distances_slice
+                .iter()
+                .cloned()
+                .fold(f32::INFINITY, f32::min);
             let max_dist = distances_slice
                 .iter()
                 .cloned()
@@ -619,7 +628,14 @@ impl Polyline {
         };
 
         let proj_point = PyArray1::from_vec(py, projection.point);
-        Ok((remaining, (proj_point, projection.segment_idx, projection.distance_along)))
+        Ok((
+            remaining,
+            (
+                proj_point,
+                projection.segment_idx,
+                projection.distance_along,
+            ),
+        ))
     }
 
     /// Uniformly resample the remainder of the polyline after a start point.
@@ -879,9 +895,12 @@ impl Polyline {
         let mut new_points = Vec::with_capacity(self.points.len());
         for i in 0..self.len() {
             let p = self.get_point(i);
-            let x = rot_mat[0][0] * p[0] + rot_mat[0][1] * p[1] + rot_mat[0][2] * p[2] + translation[0];
-            let y = rot_mat[1][0] * p[0] + rot_mat[1][1] * p[1] + rot_mat[1][2] * p[2] + translation[1];
-            let z = rot_mat[2][0] * p[0] + rot_mat[2][1] * p[1] + rot_mat[2][2] * p[2] + translation[2];
+            let x =
+                rot_mat[0][0] * p[0] + rot_mat[0][1] * p[1] + rot_mat[0][2] * p[2] + translation[0];
+            let y =
+                rot_mat[1][0] * p[0] + rot_mat[1][1] * p[1] + rot_mat[1][2] * p[2] + translation[1];
+            let z =
+                rot_mat[2][0] * p[0] + rot_mat[2][1] * p[1] + rot_mat[2][2] * p[2] + translation[2];
             new_points.push(x);
             new_points.push(y);
             new_points.push(z);

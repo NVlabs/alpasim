@@ -39,7 +39,7 @@ WORKDIR /repo
 
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync --all-packages
+    NETRC=/root/.netrc uv sync --extra all
 
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1

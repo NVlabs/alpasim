@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import argparse
 import functools
 import logging
 from concurrent import futures
 
-from alpasim_grpc.v0.common_pb2 import AvailableScenesReturn, Empty, VersionId
+from alpasim_grpc.v0.common_pb2 import (
+    AvailableScenesReturn,
+    Empty,
+    Pose,
+    PoseAtTime,
+    Trajectory,
+    VersionId,
+)
 from alpasim_grpc.v0.physics_pb2 import (
     PhysicsGroundIntersectionRequest,
     PhysicsGroundIntersectionReturn,
@@ -19,10 +26,13 @@ from alpasim_physics import VERSION_MESSAGE
 from alpasim_physics.backend import PhysicsBackend
 from alpasim_physics.utils import (
     aabb_to_ndarray,
+    ndarray_to_vec3,
     pose_grpc_to_ndarray,
     pose_status_to_grpc,
+    scipy_to_quat,
 )
 from alpasim_utils.artifact import Artifact
+from scipy.spatial.transform import Rotation as R
 
 import grpc
 
@@ -85,18 +95,29 @@ class PhysicsSimService(PhysicsServiceServicer):
                 )
 
             if request.HasField("ego_data"):
-                # if ego data is provided
-                predicted_pose = pose_grpc_to_ndarray(
-                    request.ego_data.pose_pair.future_pose
-                )
                 ego_aabb = aabb_to_ndarray(request.ego_data.aabb)
-
-                updated_ego_pose, updated_ego_status = backend.update_pose(
-                    predicted_pose, ego_aabb, request.future_us
-                )
+                corrected_poses = []
+                ego_statuses = []
+                for pat in request.ego_data.ego_trajectory_aabb.poses:
+                    pose_nd = pose_grpc_to_ndarray(pat.pose)
+                    updated_pose, status = backend.update_pose(
+                        pose_nd, ego_aabb, pat.timestamp_us
+                    )
+                    quat = R.from_matrix(updated_pose[:3, :3]).as_quat(canonical=False)
+                    corrected_poses.append(
+                        PoseAtTime(
+                            pose=Pose(
+                                vec=ndarray_to_vec3(updated_pose[:3, 3]),
+                                quat=scipy_to_quat(quat),
+                            ),
+                            timestamp_us=pat.timestamp_us,
+                        )
+                    )
+                    ego_statuses.append(status.to_grpc())
 
                 response = PhysicsGroundIntersectionReturn(
-                    ego_pose=pose_status_to_grpc(updated_ego_pose, updated_ego_status),
+                    ego_trajectory_aabb=Trajectory(poses=corrected_poses),
+                    ego_status=ego_statuses,
                     other_poses=[
                         pose_status_to_grpc(pose, status)
                         for pose, status in other_updates

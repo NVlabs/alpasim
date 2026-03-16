@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Shared utilities for CSV operations on scene/suite data."""
 
@@ -10,7 +10,7 @@ import os
 import re
 from enum import Enum
 
-import polars as pl  # type: ignore[import-not-found]
+import polars as pl
 
 logger = logging.getLogger(__name__)
 

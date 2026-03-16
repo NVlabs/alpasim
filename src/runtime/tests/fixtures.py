@@ -7,6 +7,6 @@ from alpasim_utils.artifact import Artifact
 
 @pytest.fixture(scope="session")
 def sample_artifact():
-    usdz_file = "tests/data/mock/026d6a39-bd8f-4175-bc61-fe50ed0403a3.usdz"
+    usdz_file = "tests/data/mock/dataset-clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71_runid-2lwtrh0z/last.usdz"
     artifact = Artifact(source=usdz_file)
     return artifact

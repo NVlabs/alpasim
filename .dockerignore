@@ -8,12 +8,15 @@
 !src/utils_rs/**
 !src/ddb/**
 !src/eval/**
-!src/avmf/**
 !src/physics/**
 !src/controller/**
-!pyproject.toml
+!src/tools/**
+!src/plugins/**
 !src/driver/**
-!src/wizard/configs/**
+!src/wizard/**
+!plugins/internal/**
+!plugins/transfuser_driver/**
+!pyproject.toml
 
 # Exclude specific runtime directories/files we don't need
 src/runtime/build.env
@@ -25,3 +28,5 @@ src/runtime/test_output
 **/dist
 **/build
 **/.mypy_cache
+**/runs
+**/outputs

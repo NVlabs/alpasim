@@ -47,11 +47,9 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         self,
         address: str,
         skip: bool,
-        connection_timeout_s: int,
-        id: int,
         camera_catalog: CameraCatalog,
     ):
-        super().__init__(address, skip, connection_timeout_s, id)
+        super().__init__(address, skip)
         self._available_ego_masks: Optional[AvailableEgoMasksReturn] = None
         self._available_ego_masks_lock = Lock()
         self._camera_catalog = camera_catalog
@@ -83,6 +81,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         if self.skip:
             return []
 
+        session_info = self._require_session_info()
+
         if scene_id in self._available_cameras:
             return self._copy_available_cameras(self._available_cameras[scene_id])
 
@@ -90,7 +90,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         async with lock:
             if scene_id not in self._available_cameras:
                 request = AvailableCamerasRequest(scene_id=scene_id)
-                await self.session_info.broadcaster.broadcast(
+                await session_info.broadcaster.broadcast(
                     LogEntry(available_cameras_request=request)
                 )
 
@@ -102,7 +102,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                     request,
                 )
 
-                await self.session_info.broadcaster.broadcast(
+                await session_info.broadcaster.broadcast(
                     LogEntry(available_cameras_return=response)
                 )
 
@@ -119,6 +119,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         if self.skip:
             return AvailableEgoMasksReturn()
 
+        session_info = self._require_session_info()
+
         # Fast path: return cached value without acquiring lock
         if self._available_ego_masks is not None:
             return self._available_ego_masks
@@ -128,15 +130,25 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             if self._available_ego_masks is not None:
                 return self._available_ego_masks
 
+            request = Empty()
+            await session_info.broadcaster.broadcast(
+                LogEntry(available_ego_masks_request=request)
+            )
+
             self._available_ego_masks = await profiled_rpc_call(
                 "get_available_ego_masks",
                 "sensorsim",
                 self.stub.get_available_ego_masks,
-                Empty(),
+                request,
             )
+
+            await session_info.broadcaster.broadcast(
+                LogEntry(available_ego_masks_return=self._available_ego_masks)
+            )
+
             logger.info(
                 f"Available ego masks: {self._available_ego_masks} "
-                f"(session={self.session_info.uuid}, service_addr={self.address})"
+                f"(session={session_info.uuid}, service_addr={self.address})"
             )
 
         return self._available_ego_masks
@@ -176,6 +188,21 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         image_format: ImageFormat,
         ego_mask_id: Optional[str] = None,
     ) -> RGBRenderRequest:
+        """Construct an RGBRenderRequest for a single camera trigger.
+
+        Interpolates ego and traffic poses at the trigger's time range,
+        resolves the camera definition from the catalog, and assembles the
+        full render request including dynamic objects and ego mask.
+
+        Args:
+            ego_trajectory: Ego vehicle trajectory in local frame.
+            traffic_trajectories: Mapping of track_id to traffic trajectories.
+            camera: Camera to render from.
+            trigger: Clock trigger defining the time range for rendering.
+            scene_id: Scene identifier for camera definition lookup.
+            image_format: Desired output image format.
+            ego_mask_id: Optional ego mask identifier to include in the render.
+        """
         start_us = trigger.time_range_us.start
         end_us = trigger.time_range_us.stop - 1
 
@@ -247,6 +274,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         Returns a tuple containing a list of ImageWithMetadata containing the rendered images
         and optional driver data bytes (forwarded without processing to the driver).
         """
+        session_info = self._require_session_info()
         available_ego_masks = await self.get_available_ego_masks()
 
         request = AggregatedRenderRequest()
@@ -268,7 +296,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             request.rgb_requests.append(rgb_request)
 
         # TODO(mwatson): Add requests/handling for lidars
-        await self.session_info.broadcaster.broadcast(
+        await session_info.broadcaster.broadcast(
             LogEntry(aggregated_render_request=request)
         )
 
@@ -314,6 +342,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 camera_logical_id=camera.logical_id,
             )
 
+        session_info = self._require_session_info()
         available_ego_masks = await self.get_available_ego_masks()
         ego_mask_id = self.determine_ego_mask_id(
             available_ego_masks, camera.logical_id, ego_mask_rig_config_id
@@ -329,7 +358,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             ego_mask_id,
         )
 
-        await self.session_info.broadcaster.broadcast(LogEntry(render_request=request))
+        await session_info.broadcaster.broadcast(LogEntry(render_request=request))
 
         response: RGBRenderReturn = await profiled_rpc_call(
             "render_rgb", "sensorsim", self.stub.render_rgb, request

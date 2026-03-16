@@ -13,10 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-from .compatibility import CompatibilityMatrix
 from .scenes import LOCAL_SUITE_ID, SceneIdAndUuid, USDZManager
 from .schema import AlpasimConfig
-from .utils import nre_image_to_nre_version
 
 logger = logging.getLogger(__name__)
 
@@ -24,18 +22,7 @@ logger = logging.getLogger(__name__)
 def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
     """Fetch artifacts using the scene manager."""
 
-    compatibility_matrix = CompatibilityMatrix.from_config(
-        cfg.scenes.artifact_compatibility_matrix
-    )
     Path(cfg.scenes.scene_cache).mkdir(parents=True, exist_ok=True)
-
-    # Get compatible NRE versions
-    if cfg.scenes.nre_version_string is not None:
-        nre_version = cfg.scenes.nre_version_string
-    else:
-        assert cfg.services.sensorsim is not None  # For mypy
-        nre_version = nre_image_to_nre_version(cfg.services.sensorsim.image)
-    compatible_versions = list(compatibility_matrix.lookup(nre_version))
 
     # Query scenes
     manager = USDZManager.from_cfg(cfg.scenes)
@@ -70,9 +57,9 @@ def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
                 "Both scene_ids and test_suite_id are set; using test_suite_id=%s",
                 test_suite_id,
             )
-        artifacts = manager.query_by_suite_id(test_suite_id, compatible_versions)
+        artifacts = manager.query_by_suite_id(test_suite_id)
     elif scene_ids is not None:
-        artifacts = manager.query_by_scene_ids(scene_ids, compatible_versions)
+        artifacts = manager.query_by_scene_ids(scene_ids)
     else:
         raise ValueError("Either scene_ids or test_suite_id must be set")
 
@@ -104,6 +91,7 @@ def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
         )
         logger.info(f"Relative sceneset path: {sceneset_dir_relative_path}")
 
+    cfg.scenes.sceneset_path = sceneset_dir_relative_path
     return artifacts, sceneset_dir_relative_path
 
 
@@ -166,14 +154,7 @@ class WizardContext:
     @property
     def all_services_to_run(self) -> list[str]:
         """Get all services that should be run."""
-        result = []
-        if self.cfg.wizard.run_sim_services:
-            result.extend(self.cfg.wizard.run_sim_services)
-        if self.cfg.wizard.run_eval_services:
-            result.extend(self.cfg.wizard.run_eval_services)
-        if self.cfg.wizard.run_aggregation_services:
-            result.extend(self.cfg.wizard.run_aggregation_services)
-        return result
+        return list(self.cfg.wizard.run_sim_services or [])
 
     @staticmethod
     def create(cfg: AlpasimConfig) -> WizardContext:

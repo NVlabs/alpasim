@@ -16,10 +16,9 @@ dependencies = [
     "alpasim_runtime",
     "matplotlib",
     "alpasim_grpc",
-    "alpasim_utils",
+    "alpasim_utils[geometry]",
     "alpasim_eval",
     "opencv-python-headless",
-    "trajdata-alpasim==1.4.3",
     "polars",
     "tqdm",
     "rich",
@@ -44,6 +43,4 @@ alpasim_eval = {workspace = true}
 [tool.hatch.build.targets.wheel]
 packages = [
     "map_utils",
-    "data_generation",
-    "mock-driver",
 ]

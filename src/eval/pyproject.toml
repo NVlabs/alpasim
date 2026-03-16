@@ -17,10 +17,10 @@ dependencies = [
   "papermill",
   "ipykernel",
   "alpasim_grpc",
-  "alpasim_utils",
+  "alpasim_utils[geometry]",
   "omegaconf",
   "shapely",
-  "trajdata-alpasim @ git+https://github.com/NVlabs/trajdata.git@alpasim",
+  "trajdata-alpasim==1.4.3",
   "rich[jupyter]",
   "pytest",
   "csaps",
@@ -28,6 +28,7 @@ dependencies = [
   "opencv-python-headless",
   "Pillow",
   "numpy",
+  "termplotlib",
   "yappi",
   "dataclasses-json"
 ]
@@ -35,7 +36,12 @@ dependencies = [
   [project.scripts]
   alpasim-eval = "eval.main:main"
   alpasim-aggregation = "eval.aggregation.main:main"
+  alpasim-reeval = "eval.reeval:main"
 
 [tool.uv.sources]
 alpasim_grpc = {workspace = true}
 alpasim_utils = {workspace = true}
+
+[tool.uv.sources.trajdata-alpasim]
+git = "https://github.com/NVlabs/trajdata"
+branch = "alpasim"

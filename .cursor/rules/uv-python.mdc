@@ -1,0 +1,32 @@
+---
+description: Use uv to run Python instead of activating venvs
+globs:
+alwaysApply: true
+---
+# Running Python with uv
+
+This repository uses `uv` for Python environment management. Do not activate virtual environments explicitly.
+
+## Commands
+
+```bash
+# ✅ Run Python code
+uv run python -c "..."
+uv run python script.py
+
+# ✅ Run all tests
+uv run pytest
+
+# ✅ Run tests for a specific module
+uv run --project src/runtime pytest src/runtime/tests
+
+# ❌ Don't do this
+source .venv/bin/activate
+python script.py
+```
+
+## Sub-projects
+
+Use `--project src/<name>` to select a sub-environment:
+- `uv run --project src/runtime python -c "..."`
+- `uv run --project src/utils python -c "..."`

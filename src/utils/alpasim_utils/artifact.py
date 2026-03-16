@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from __future__ import annotations
 
 import glob
 import logging
+import os
+import tempfile
 import threading
 import zipfile
 from dataclasses import dataclass, field
@@ -18,6 +20,7 @@ from alpasim_utils.scenario import Rig, TrafficObjects
 logger = logging.getLogger(__name__)
 
 try:
+    from trajdata.dataset_specific.mads.mads_utils import populate_vector_map
     from trajdata.dataset_specific.xodr.geo_transform import get_t_rig_enu_from_ecef
     from trajdata.dataset_specific.xodr.vector_map_export import (
         populate_vector_map_from_xodr,
@@ -26,6 +29,14 @@ try:
 except ImportError:
     logger.warning("Could not import trajdata (missing). Map loading will be disabled.")
     VectorMap = None
+
+    def populate_vector_map(dum_one, dum_two):
+        """
+        Dummy function to avoid ImportError when trajdata is not installed.
+        """
+        raise FileNotFoundError(
+            "Map loading is disabled because trajdata is not installed."
+        )
 
     def get_t_rig_enu_from_ecef(dum_one, dum_two):
         """
@@ -238,14 +249,17 @@ class Artifact:
             # Try loading map data
             map_loaded = False
             with zipfile.ZipFile(self.source, "r") as zip_file:
-                # Try loading map from xodr
-                if self._load_xodr_map(zip_file):
+                # Try loading from different sources in order of preference
+                if self._load_clipgt_map(zip_file):
+                    map_loaded = True
+                    logger.info("Successfully loaded map from clipgt/map_data")
+                elif self._load_xodr_map(zip_file):
                     map_loaded = True
                     logger.info("Successfully loaded map from XODR")
 
             if not map_loaded:
                 logger.warning(
-                    f"No map data (XODR) found in {self.source}. "
+                    f"No map data (clipgt or XODR) found in {self.source}. "
                     "Skipping map loading."
                 )
                 self._map = None
@@ -259,6 +273,31 @@ class Artifact:
             # Mark as attempted AFTER map is fully loaded and finalized
             self._attempted_map_load = True
             return self._map
+
+    def _load_clipgt_map(self, zip_file: zipfile.ZipFile) -> bool:
+        """Load map from clipgt/map_data directories.
+
+        Args:
+            zip_file: Open ZipFile instance
+
+        Returns:
+            True if map was successfully loaded, False otherwise
+        """
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Find and extract map directories
+                map_dir = self._extract_map_directories(zip_file, temp_dir)
+                if map_dir is None:
+                    logger.debug("No map_data or clipgt directories found")
+                    return False
+
+                # Load the map data
+                map_root = os.path.join(temp_dir, map_dir)
+                populate_vector_map(self._map, map_root)
+                return True
+        except (FileNotFoundError, ValueError, AttributeError) as e:
+            logger.warning(f"Could not load clipgt map: {e}")
+            return False
 
     def _load_xodr_map(self, zip_file: zipfile.ZipFile) -> bool:
         """Load map from XODR file.

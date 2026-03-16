@@ -86,7 +86,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     assets_dir = _ensure_vavam_assets()
     raw_cfg = _config_overrides(raw_cfg, tmp_path, assets_dir)
 
-    # Merge with schema to properly convert enums (e.g., model_type string -> ModelType enum)
+    # Merge with schema to apply defaults and validate structure
     schema = OmegaConf.structured(DriverConfig)
     cfg = OmegaConf.merge(schema, raw_cfg)
 
@@ -161,7 +161,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
             egomotion_request = RolloutEgoTrajectory(
                 session_uuid=session_uuid,
                 trajectory=traj_msg,
-                dynamic_state=dynamic_state,
+                dynamic_states=[dynamic_state],
             )
             await service.submit_egomotion_observation(egomotion_request, None)
 

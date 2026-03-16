@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """SLURM deployment strategy."""
 
@@ -35,78 +35,15 @@ class SlurmDeployment:
         self.container_set = build_container_set(context, use_address_string="0.0.0.0")
 
     def deploy_all_services(self) -> None:
-        """Deploy all services (simulation, evaluation, aggregation)."""
-        self.deploy_simulation()
-
-        # Deploy evaluation, then aggregation with dependencies
-        job_ids = []
-        if self.container_set.eval:
-            job_ids = self.deploy_evaluation()
-            logger.info(f"Evaluation services submitted job ids: {job_ids}")
-        else:
-            logger.info("Skipping evaluation phase (no eval services configured)")
-
-        if self.container_set.agg:
-            self.deploy_aggregation(job_ids)
-        else:
-            logger.info(
-                "Skipping aggregation phase (no aggregation services configured)"
-            )
-
-    def deploy_simulation(self) -> List[int]:
-        """Deploy simulation services (including runtime) on SLURM.
-
-        Returns:
-            List of job IDs for submitted jobs
-        """
+        """Deploy simulation services (including runtime) on SLURM."""
         logger.info("Running simulation services")
         containers_to_start_last = (
             self.container_set.runtime if self.container_set.runtime else []
         )
-        return self.deploy(
+        self.deploy(
             containers=self.container_set.sim,
             containers_to_start_last=containers_to_start_last,
             requires_sbatch=False,
-        )
-
-    def deploy_evaluation(self, dependencies: Optional[List[int]] = None) -> List[int]:
-        """Deploy evaluation services on SLURM.
-
-        Args:
-            dependencies: Job IDs to depend on
-
-        Returns:
-            List of job IDs for submitted jobs
-        """
-
-        logger.info(
-            "Running evaluation services with dependencies: %s",
-            dependencies,
-        )
-        return self.deploy(
-            containers=self.container_set.eval,
-            requires_sbatch=True,
-            dependencies=dependencies,
-        )
-
-    def deploy_aggregation(self, dependencies: Optional[List[int]] = None) -> List[int]:
-        """Deploy aggregation services on SLURM.
-
-        Args:
-            dependencies: Job IDs to depend on
-
-        Returns:
-            List of job IDs for submitted jobs
-        """
-        logger.info(
-            "Running aggregation services with dependencies: %s",
-            dependencies,
-        )
-
-        return self.deploy(
-            containers=self.container_set.agg,
-            requires_sbatch=True,
-            dependencies=dependencies,
         )
 
     def deploy(
