@@ -83,8 +83,106 @@ jobs:
       fail-fast: false
       matrix:
         service: [physics, controller, driver]
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - run: echo "Disabled pending infra/image strategy migration."
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            python3 -m ensurepip --upgrade || true
+          fi
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-pip
+          fi
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Compute source/image
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            CHANGED_FILES="$(git ls-files)"
+          else
+            CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          fi
+
+          SOURCE="stable"
+          if echo "${CHANGED_FILES}" | grep -Eq "^src/${SERVICE}/"; then
+            SOURCE="build"
+          fi
+
+          SHORT_SHA="$(echo "${{ github.sha }}" | cut -c1-8)"
+          TAG="pr-${SHORT_SHA}"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "${DEFAULT_BRANCH}" ]]; then
+            TAG="release-${SHORT_SHA}"
+          fi
+          IMAGE="alpasim-${SERVICE}:${TAG}"
+
+          echo "source=${SOURCE}" >> "${GITHUB_OUTPUT}"
+          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip non-build sources
+        if: steps.plan.outputs.source != 'build'
+        run: |
+          echo "Skipping ${{ matrix.service }} (source=${{ steps.plan.outputs.source }})"
+
+      - name: Build service image
+        if: steps.plan.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          IMAGE="${{ steps.plan.outputs.image }}"
+          LOG_DIR="${GITHUB_WORKSPACE}/wizard_logs"
+
+          git lfs pull --include="src/**/*" || true
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
+
+          cd "${GITHUB_WORKSPACE}"
+          docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
+
+      - name: Run tests in docker container
+        if: steps.plan.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          IMAGE="${{ steps.plan.outputs.image }}"
+          PYTEST_OPTS="-vvs --tb=short"
+
+          set +e
+          docker run --rm --gpus all --entrypoint bash "${IMAGE}" -c \
+            "cd /repo/src/${SERVICE} && uv sync --all-extras && uv run pytest ${PYTEST_OPTS}"
+          status=$?
+          set -e
+
+          if [[ $status -eq 5 ]]; then
+            echo "No tests collected for ${SERVICE}; treating as success."
+            exit 0
+          fi
+          exit $status
 
   # Equivalent to GitLab test-docker-compose (requires storage/fake_lustre).
   # This must run only on runners that provide the fake lustre mount.
@@ -99,8 +197,51 @@ jobs:
     env:
       OUTPUT_PATH: /raid/fake_lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
       LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
+      ENABLE_INTERNAL_DOCKER_TESTS: ${{ vars.ENABLE_INTERNAL_DOCKER_TESTS || 'false' }}
     steps:
-      - run: echo "Disabled pending fake_lustre runner setup and script migration."
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate fake_lustre mount
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /raid/fake_lustre
+          test -d /lustre
+          docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            python3 -m ensurepip --upgrade || true
+          fi
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-pip
+          fi
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Skip internal variant unless explicitly enabled
+        if: matrix.variant == 'docker_internal' && env.ENABLE_INTERNAL_DOCKER_TESTS != 'true'
+        run: |
+          echo "Skipping docker_internal variant. Set ENABLE_INTERNAL_DOCKER_TESTS=true to enable."
+
+      - name: Generate and validate docker-compose config
+        if: matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${LOCAL_OUTPUT_PATH}" "${LOCAL_OUTPUT_PATH}/data" "${LOCAL_OUTPUT_PATH}/src"
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          uv run alpasim_wizard +cicd=${{ matrix.variant }} wizard.log_dir="${LOCAL_OUTPUT_PATH}" wizard.run_method=NONE defines.filesystem="${LOCAL_OUTPUT_PATH}/data"
+
+          test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+          echo "docker-compose configuration validated for ${{ matrix.variant }}"
 
   # Equivalent to GitLab test-slurm.
   # Explicitly disabled for now due SLURM infra dependency.
