@@ -272,7 +272,15 @@ jobs:
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
-          uv run alpasim_wizard +cicd=${{ matrix.variant }} wizard.log_dir="${LOCAL_OUTPUT_PATH}" wizard.run_method=NONE defines.filesystem="${LOCAL_OUTPUT_PATH}/data"
+          # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
+          uv run alpasim_wizard \
+            +cicd=${{ matrix.variant }} \
+            wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
+            wizard.run_method=NONE \
+            defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            services.sensorsim.gpus=[0] \
+            services.physics.gpus=[0] \
+            services.driver.gpus=[0]
 
           test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
           docker-compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
