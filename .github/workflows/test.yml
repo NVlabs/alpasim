@@ -268,12 +268,17 @@ jobs:
             "${LOCAL_OUTPUT_PATH}" \
             "${LOCAL_OUTPUT_PATH}/data" \
             "${LOCAL_OUTPUT_PATH}/data/drivers" \
+            "${LOCAL_OUTPUT_PATH}/data/alpackages" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
+            "${LOCAL_OUTPUT_PATH}/data/trafficsim/unified_data_cache" \
+            "${LOCAL_OUTPUT_PATH}/data/huggingface" \
             "${LOCAL_OUTPUT_PATH}/src"
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
-          uv run alpasim_wizard \
+          HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
             +cicd=${{ matrix.variant }} \
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
