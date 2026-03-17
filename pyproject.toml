@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.42.0"
+version = "0.43.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -37,6 +37,7 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+internal = ["alpasim-internal"]
 
 [tool.uv.workspace]
 members = [
@@ -66,6 +67,7 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
+alpasim-internal = { workspace = true }
 
 [tool.uv]
 override-dependencies = [
