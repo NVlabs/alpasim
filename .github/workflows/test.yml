@@ -264,7 +264,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${LOCAL_OUTPUT_PATH}" "${LOCAL_OUTPUT_PATH}/data" "${LOCAL_OUTPUT_PATH}/src"
+          mkdir -p \
+            "${LOCAL_OUTPUT_PATH}" \
+            "${LOCAL_OUTPUT_PATH}/data" \
+            "${LOCAL_OUTPUT_PATH}/data/drivers" \
+            "${LOCAL_OUTPUT_PATH}/src"
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
