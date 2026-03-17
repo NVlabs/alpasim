@@ -215,6 +215,8 @@ jobs:
       OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
       LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
       ENABLE_INTERNAL_DOCKER_TESTS: ${{ vars.ENABLE_INTERNAL_DOCKER_TESTS || 'false' }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - name: Install git for checkout
         shell: bash
@@ -233,6 +235,17 @@ jobs:
           apt-get update
           apt-get install -y python3 python3-pip git-lfs docker.io docker-compose
           python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Verify Hugging Face token is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is not available in this workflow context."
+            echo "If this is a trusted branch in the main repo, verify repo/org secret configuration."
+            echo "If this is an untrusted context (e.g. fork), GitHub will not expose secrets."
+            exit 1
+          fi
 
       - name: Validate fake_lustre mount
         shell: bash
