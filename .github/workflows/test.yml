@@ -211,11 +211,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [docker_internal, docker_oss]
+        variant: [docker_oss]
     env:
       OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
       LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
-      ENABLE_INTERNAL_DOCKER_TESTS: ${{ vars.ENABLE_INTERNAL_DOCKER_TESTS || 'false' }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -255,13 +254,7 @@ jobs:
           test -d /lustre
           docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
 
-      - name: Skip internal variant unless explicitly enabled
-        if: matrix.variant == 'docker_internal' && env.ENABLE_INTERNAL_DOCKER_TESTS != 'true'
-        run: |
-          echo "Skipping docker_internal variant. Set ENABLE_INTERNAL_DOCKER_TESTS=true to enable."
-
       - name: Generate and validate docker-compose config
-        if: matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -300,7 +293,6 @@ jobs:
           echo "docker-compose configuration validated for ${{ matrix.variant }}"
 
       - name: Run docker-compose integration stack
-        if: matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -310,7 +302,7 @@ jobs:
           docker-compose -f docker-compose.yaml --project-name "${PROJECT}" up --abort-on-container-failure --remove-orphans
 
       - name: Collect compose logs and tear down
-        if: always() && (matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true')
+        if: always()
         shell: bash
         run: |
           set +e
@@ -324,6 +316,105 @@ jobs:
             docker-compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
           done
 
+          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
+
+  # Tutorial smoke test (OSS only): generate tutorial-style compose and run core sim services.
+  test-tutorial-smoke:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
+    name: test-tutorial-smoke
+    runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
+    timeout-minutes: 120
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --gpus all
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /raid/fake_lustre:/lustre
+    env:
+      OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}-tutorial
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Install git for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y git git-lfs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies in job container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python3-pip git-lfs docker.io docker-compose
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Verify Hugging Face token is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is not available in this workflow context."
+            exit 1
+          fi
+
+      - name: Validate fake_lustre mount
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /lustre
+          docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
+
+      - name: Generate tutorial compose config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "${OUTPUT_PATH}" \
+            "${GITHUB_WORKSPACE}/data/drivers" \
+            "${GITHUB_WORKSPACE}/data/alpackages" \
+            "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" \
+            "${GITHUB_WORKSPACE}/data/trafficsim/unified_data_cache" \
+            "${GITHUB_WORKSPACE}/data/huggingface"
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          HF_HOME="${GITHUB_WORKSPACE}/data/huggingface" uv run alpasim_wizard \
+            +deploy=local \
+            wizard.log_dir="${OUTPUT_PATH}" \
+            wizard.run_method=NONE \
+            runtime.simulation_config.n_rollouts=1 \
+            runtime.simulation_config.n_sim_steps=60
+
+          test -f "${OUTPUT_PATH}/docker-compose.yaml"
+          test -f "${OUTPUT_PATH}/generated-user-config-0.yaml"
+          docker-compose -f "${OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+
+      - name: Run tutorial compose stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cd "${OUTPUT_PATH}"
+          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
+
+      - name: Collect tutorial logs and tear down
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          LOG_DIR="${OUTPUT_PATH}/txt-logs"
+          mkdir -p "${LOG_DIR}"
+          cd "${OUTPUT_PATH}" || exit 0
+          services="$(docker-compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          for service in ${services}; do
+            docker-compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+          done
           docker-compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
 
   # Equivalent to GitLab test-slurm.
