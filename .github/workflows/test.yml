@@ -74,9 +74,9 @@ jobs:
           exit $status
 
   # Equivalent to GitLab test-services-in-docker.
-  # Disabled by default until image handoff and infra runner labels are finalized.
+  # Runs automatically on PR/push. On manual runs, can be disabled via input.
   test-services-in-docker:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_infra_tests == 'true' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-${{ matrix.service }}
     runs-on: [self-hosted, gpu]
     strategy:
@@ -89,7 +89,7 @@ jobs:
   # Equivalent to GitLab test-docker-compose (requires storage/fake_lustre).
   # This must run only on runners that provide the fake lustre mount.
   test-docker-compose:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_infra_tests == 'true' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-compose-${{ matrix.variant }}
     runs-on: [self-hosted, gpu, storage-fake_lustre]
     strategy:
@@ -103,9 +103,9 @@ jobs:
       - run: echo "Disabled pending fake_lustre runner setup and script migration."
 
   # Equivalent to GitLab test-slurm.
-  # Explicitly manual/opt-in due SLURM infra dependency.
+  # Explicitly disabled for now due SLURM infra dependency.
   test-slurm:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_slurm_tests == 'true' }}
+    if: ${{ false }}
     name: test-slurm-${{ matrix.variant }}
     runs-on: [self-hosted, slurm]
     strategy:
