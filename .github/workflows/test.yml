@@ -201,6 +201,7 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-compose-${{ matrix.variant }}
     runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
+    timeout-minutes: 120
     container:
       image: ubuntu:22.04
       options: >-
@@ -275,6 +276,13 @@ jobs:
             "${LOCAL_OUTPUT_PATH}/data/huggingface" \
             "${LOCAL_OUTPUT_PATH}/src"
 
+          if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/" || true
+          fi
+
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
@@ -290,6 +298,33 @@ jobs:
           test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
           docker-compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
           echo "docker-compose configuration validated for ${{ matrix.variant }}"
+
+      - name: Run docker-compose integration stack
+        if: matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
+          echo "Using compose project: ${PROJECT}"
+          cd "${LOCAL_OUTPUT_PATH}"
+          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" up --abort-on-container-failure --remove-orphans
+
+      - name: Collect compose logs and tear down
+        if: always() && (matrix.variant != 'docker_internal' || env.ENABLE_INTERNAL_DOCKER_TESTS == 'true')
+        shell: bash
+        run: |
+          set +e
+          PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
+          LOG_DIR="${LOCAL_OUTPUT_PATH}/txt-logs"
+          mkdir -p "${LOG_DIR}"
+          cd "${LOCAL_OUTPUT_PATH}" || exit 0
+
+          services="$(docker-compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          for service in ${services}; do
+            docker-compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+          done
+
+          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
 
   # Equivalent to GitLab test-slurm.
   # Explicitly disabled for now due SLURM infra dependency.
