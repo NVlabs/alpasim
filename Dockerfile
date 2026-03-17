@@ -1,4 +1,7 @@
 # Build command (run from repo root):
+#   docker build -t alpasim-base .
+#
+# For private dependencies (requires ~/.netrc with credentials):
 #   docker build --secret id=netrc,src=$HOME/.netrc -t alpasim-base .
 #
 # Automatically detects architecture:
@@ -32,14 +35,14 @@ ENV UV_LINK_MODE=copy
 WORKDIR /repo/src/grpc
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync
+    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync'
 RUN uv run compile-protos --no-sync
 
 WORKDIR /repo
 
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    NETRC=/root/.netrc uv sync --extra all
+    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all'
 
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1

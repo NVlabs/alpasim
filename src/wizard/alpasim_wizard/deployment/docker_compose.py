@@ -92,12 +92,14 @@ class DockerComposeDeployment:
         repo_root = str(find_repo_root(__file__))
 
         if not container.service_config.external_image:
-            ret["build"] = {
+            build_config: dict[str, Any] = {
                 "context": repo_root,
                 "dockerfile": "Dockerfile",
                 "tags": [container.service_config.image],
-                "secrets": ["netrc"],
             }
+            if Path.home().joinpath(".netrc").exists():
+                build_config["secrets"] = ["netrc"]
+            ret["build"] = build_config
 
         if container.command:
             ret["entrypoint"] = "bash"
@@ -186,11 +188,12 @@ class DockerComposeDeployment:
             services[c.uuid] = service
 
         # Create compose structure with ordered services
-        compose = {
+        compose: dict[str, Any] = {
             "networks": {"microservices_network": {"driver": "bridge"}},
-            "secrets": {"netrc": {"file": "${HOME}/.netrc"}},
             "services": services,  # Services maintain insertion order in Python 3.7+
         }
+        if Path.home().joinpath(".netrc").exists():
+            compose["secrets"] = {"netrc": {"file": "${HOME}/.netrc"}}
 
         # Write to file
         filename = "docker-compose.yaml"

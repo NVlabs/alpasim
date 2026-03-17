@@ -2,6 +2,9 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Make ~/.netrc optional for public users (17.03.26)
+References to `~/.netrc` in the Dockerfile and wizard's Docker Compose generation were unconditional, requiring all users to have the file. The Dockerfile now conditionally sets `NETRC` only when the secret is provided, and the wizard only includes the `netrc` secret in the compose config when `~/.netrc` exists on the host.
+
 ## Composable dependency management (12.03.26)
 The root `pyproject.toml` now exposes every workspace member as a named optional-dependency extra, enabling composable installs from the repo root. A bare `uv sync` installs nothing (avoiding heavy deps like torch by default).
 
