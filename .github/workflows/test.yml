@@ -78,7 +78,7 @@ jobs:
   test-services-in-docker:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-${{ matrix.service }}
-    runs-on: [self-hosted, gpu]
+    runs-on: [self-hosted, type/gpu]
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +91,7 @@ jobs:
   test-docker-compose:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-compose-${{ matrix.variant }}
-    runs-on: [self-hosted, gpu, storage-fake_lustre]
+    runs-on: [self-hosted, type/gpu, storage/fake_lustre]
     strategy:
       fail-fast: false
       matrix:
