@@ -298,6 +298,9 @@ jobs:
             "${LOCAL_OUTPUT_PATH}/src" \
             "${LOCAL_OUTPUT_PATH}/plugins"
 
+          # Match local smoke setup: ensure VaVAM assets exist for OSS driver.
+          bash "${GITHUB_WORKSPACE}/data/download_vavam_assets.sh" --model VaVAM-B
+
           if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
             cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
           fi
@@ -447,6 +450,9 @@ jobs:
             "${LOCAL_OUTPUT_PATH}/data/huggingface" \
             "${LOCAL_OUTPUT_PATH}/src" \
             "${LOCAL_OUTPUT_PATH}/plugins"
+
+          # Match local smoke setup: ensure VaVAM assets exist for OSS driver.
+          bash "${GITHUB_WORKSPACE}/data/download_vavam_assets.sh" --model VaVAM-B
 
           if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
             cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
