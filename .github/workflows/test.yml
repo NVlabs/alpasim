@@ -112,7 +112,17 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y python3 python3-pip git-lfs docker.io docker-compose
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
           python3 -m pip install --upgrade pip setuptools wheel uv
 
       - name: Compute source/image
@@ -168,7 +178,7 @@ jobs:
           uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
 
           cd "${GITHUB_WORKSPACE}"
-          docker-compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
+          docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
 
       - name: Run tests in docker container
         if: steps.plan.outputs.source == 'build'
@@ -229,7 +239,17 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y python3 python3-pip git-lfs docker.io docker-compose
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
           python3 -m pip install --upgrade pip setuptools wheel uv
 
       - name: Verify Hugging Face token is available
@@ -250,7 +270,7 @@ jobs:
           test -d /lustre
           docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
 
-      - name: Generate and validate docker-compose config
+      - name: Generate and validate docker compose config
         shell: bash
         run: |
           set -euo pipefail
@@ -285,17 +305,17 @@ jobs:
             services.driver.gpus=[0]
 
           test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
-          docker-compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
-          echo "docker-compose configuration validated for ${{ matrix.variant }}"
+          docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+          echo "docker compose configuration validated for ${{ matrix.variant }}"
 
-      - name: Run docker-compose integration stack
+      - name: Run docker compose integration stack
         shell: bash
         run: |
           set -euo pipefail
           PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
           echo "Using compose project: ${PROJECT}"
           cd "${LOCAL_OUTPUT_PATH}"
-          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" up --abort-on-container-failure --remove-orphans
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --abort-on-container-failure --remove-orphans
 
       - name: Collect compose logs and tear down
         if: always()
@@ -307,12 +327,12 @@ jobs:
           mkdir -p "${LOG_DIR}"
           cd "${LOCAL_OUTPUT_PATH}" || exit 0
 
-          services="$(docker-compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
           for service in ${services}; do
-            docker-compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+            docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
           done
 
-          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
 
   # Tutorial smoke test (OSS only): generate tutorial-style compose and run core sim services.
   test-tutorial-smoke:
@@ -346,7 +366,17 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y python3 python3-pip git-lfs docker.io docker-compose
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
           python3 -m pip install --upgrade pip setuptools wheel uv
 
       - name: Verify Hugging Face token is available
@@ -388,7 +418,7 @@ jobs:
 
           test -f "${OUTPUT_PATH}/docker-compose.yaml"
           test -f "${OUTPUT_PATH}/generated-user-config-0.yaml"
-          docker-compose -f "${OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+          docker compose -f "${OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
 
       - name: Run tutorial compose stack
         shell: bash
@@ -396,7 +426,7 @@ jobs:
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${OUTPUT_PATH}"
-          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
 
       - name: Collect tutorial logs and tear down
         if: always()
@@ -407,11 +437,11 @@ jobs:
           LOG_DIR="${OUTPUT_PATH}/txt-logs"
           mkdir -p "${LOG_DIR}"
           cd "${OUTPUT_PATH}" || exit 0
-          services="$(docker-compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
           for service in ${services}; do
-            docker-compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+            docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
           done
-          docker-compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
 
   # Equivalent to GitLab test-slurm.
   # Explicitly disabled for now due SLURM infra dependency.
