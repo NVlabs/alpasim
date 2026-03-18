@@ -130,11 +130,7 @@ jobs:
             HEAD_SHA="${{ github.sha }}"
           fi
 
-          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
-            CHANGED_FILES="$(git ls-files)"
-          else
-            CHANGED_FILES="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
-          fi
+          CHANGED_FILES="$(bash ./.github/scripts/changed-files.sh "${{ github.event_name }}" "${BASE_SHA}" "${HEAD_SHA}")"
 
           SOURCE="stable"
           if echo "${CHANGED_FILES}" | grep -Eq "^src/${SERVICE}/"; then

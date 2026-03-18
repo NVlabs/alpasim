@@ -29,18 +29,41 @@ jobs:
       - name: Run pre-commit (pull_request)
         if: github.event_name == 'pull_request'
         run: |
-          SKIP=insert-license pre-commit run -c .pre-commit-config.yaml \
-            --from-ref "${{ github.event.pull_request.base.sha }}" \
-            --to-ref "${{ github.event.pull_request.head.sha }}"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          mapfile -t CHANGED_FILES < <(bash ./.github/scripts/changed-files.sh pull_request "${BASE_SHA}" "${HEAD_SHA}")
+
+          EXISTING_FILES=()
+          for path in "${CHANGED_FILES[@]}"; do
+            if [[ -e "${path}" ]]; then
+              EXISTING_FILES+=("${path}")
+            fi
+          done
+
+          if [[ ${#EXISTING_FILES[@]} -eq 0 ]]; then
+            echo "No changed files to lint."
+            exit 0
+          fi
+
+          SKIP=insert-license pre-commit run -c .pre-commit-config.yaml --files "${EXISTING_FILES[@]}"
 
       - name: Run pre-commit (push)
         if: github.event_name == 'push'
         run: |
           BEFORE_SHA="${{ github.event.before }}"
-          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            SKIP=insert-license pre-commit run -c .pre-commit-config.yaml --all-files
-          else
-            SKIP=insert-license pre-commit run -c .pre-commit-config.yaml \
-              --from-ref "$BEFORE_SHA" \
-              --to-ref "${{ github.sha }}"
+          HEAD_SHA="${{ github.sha }}"
+          mapfile -t CHANGED_FILES < <(bash ./.github/scripts/changed-files.sh push "${BEFORE_SHA}" "${HEAD_SHA}")
+
+          EXISTING_FILES=()
+          for path in "${CHANGED_FILES[@]}"; do
+            if [[ -e "${path}" ]]; then
+              EXISTING_FILES+=("${path}")
+            fi
+          done
+
+          if [[ ${#EXISTING_FILES[@]} -eq 0 ]]; then
+            echo "No changed files to lint."
+            exit 0
           fi
+
+          SKIP=insert-license pre-commit run -c .pre-commit-config.yaml --files "${EXISTING_FILES[@]}"
