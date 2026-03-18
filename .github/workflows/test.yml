@@ -505,7 +505,7 @@ jobs:
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${LOCAL_OUTPUT_PATH}"
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
 
       - name: Collect tutorial logs and tear down
         if: always()
