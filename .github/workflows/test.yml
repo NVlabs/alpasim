@@ -295,13 +295,20 @@ jobs:
             "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
             "${LOCAL_OUTPUT_PATH}/data/trafficsim/unified_data_cache" \
             "${LOCAL_OUTPUT_PATH}/data/huggingface" \
-            "${LOCAL_OUTPUT_PATH}/src"
+            "${LOCAL_OUTPUT_PATH}/src" \
+            "${LOCAL_OUTPUT_PATH}/plugins"
 
           if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
             cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
           fi
           if [[ -d "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" ]]; then
             cp -r "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/src" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/src/." "${LOCAL_OUTPUT_PATH}/src/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
           fi
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
@@ -321,6 +328,16 @@ jobs:
             services.driver.gpus=[0]
 
           test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+
+          # In Docker-socket mode, compose mounts must use host-visible paths.
+          REPO_ROOT_SRC="$(realpath "${GITHUB_WORKSPACE}/src")"
+          sed -i "s|${LOCAL_OUTPUT_PATH}|${OUTPUT_PATH}|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          sed -i "s|${REPO_ROOT_SRC}|${OUTPUT_PATH}/src|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            REPO_ROOT_PLUGINS="$(realpath "${GITHUB_WORKSPACE}/plugins")"
+            sed -i "s|${REPO_ROOT_PLUGINS}|${OUTPUT_PATH}/plugins|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          fi
+
           docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
           echo "docker compose configuration validated for ${{ matrix.variant }}"
 
@@ -364,6 +381,7 @@ jobs:
         -v /raid/fake_lustre:/lustre
     env:
       OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}-tutorial
+      LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}-tutorial
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -416,19 +434,35 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p \
-            "${OUTPUT_PATH}" \
-            "${GITHUB_WORKSPACE}/data/drivers" \
-            "${GITHUB_WORKSPACE}/data/alpackages" \
-            "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" \
-            "${GITHUB_WORKSPACE}/data/trafficsim/unified_data_cache" \
-            "${GITHUB_WORKSPACE}/data/huggingface"
+            "${LOCAL_OUTPUT_PATH}" \
+            "${LOCAL_OUTPUT_PATH}/data/drivers" \
+            "${LOCAL_OUTPUT_PATH}/data/alpackages" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
+            "${LOCAL_OUTPUT_PATH}/data/trafficsim/unified_data_cache" \
+            "${LOCAL_OUTPUT_PATH}/data/huggingface" \
+            "${LOCAL_OUTPUT_PATH}/src" \
+            "${LOCAL_OUTPUT_PATH}/plugins"
+
+          if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/src" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/src/." "${LOCAL_OUTPUT_PATH}/src/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
+          fi
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
-          HF_HOME="${GITHUB_WORKSPACE}/data/huggingface" uv run alpasim_wizard \
+          HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
             +deploy=local \
-            wizard.log_dir="${OUTPUT_PATH}" \
+            wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
+            defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
             services.driver.workdir=/repo/src/driver \
             services.physics.workdir=/repo/src/physics \
             services.runtime.workdir=/repo/src/runtime \
@@ -436,16 +470,25 @@ jobs:
             runtime.simulation_config.n_rollouts=1 \
             runtime.simulation_config.n_sim_steps=60
 
-          test -f "${OUTPUT_PATH}/docker-compose.yaml"
-          test -f "${OUTPUT_PATH}/generated-user-config-0.yaml"
-          docker compose -f "${OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+          test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          test -f "${LOCAL_OUTPUT_PATH}/generated-user-config-0.yaml"
+
+          REPO_ROOT_SRC="$(realpath "${GITHUB_WORKSPACE}/src")"
+          sed -i "s|${LOCAL_OUTPUT_PATH}|${OUTPUT_PATH}|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          sed -i "s|${REPO_ROOT_SRC}|${OUTPUT_PATH}/src|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            REPO_ROOT_PLUGINS="$(realpath "${GITHUB_WORKSPACE}/plugins")"
+            sed -i "s|${REPO_ROOT_PLUGINS}|${OUTPUT_PATH}/plugins|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          fi
+
+          docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
 
       - name: Run tutorial compose stack
         shell: bash
         run: |
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          cd "${OUTPUT_PATH}"
+          cd "${LOCAL_OUTPUT_PATH}"
           docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
 
       - name: Collect tutorial logs and tear down
@@ -454,9 +497,9 @@ jobs:
         run: |
           set +e
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          LOG_DIR="${OUTPUT_PATH}/txt-logs"
+          LOG_DIR="${LOCAL_OUTPUT_PATH}/txt-logs"
           mkdir -p "${LOG_DIR}"
-          cd "${OUTPUT_PATH}" || exit 0
+          cd "${LOCAL_OUTPUT_PATH}" || exit 0
           services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
           for service in ${services}; do
             docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
