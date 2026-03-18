@@ -300,6 +300,10 @@ jobs:
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            services.driver.workdir=/repo/src/driver \
+            services.physics.workdir=/repo/src/physics \
+            services.runtime.workdir=/repo/src/runtime \
+            services.controller.workdir=/repo/src/controller \
             services.sensorsim.gpus=[0] \
             services.physics.gpus=[0] \
             services.driver.gpus=[0]
@@ -413,6 +417,10 @@ jobs:
             +deploy=local \
             wizard.log_dir="${OUTPUT_PATH}" \
             wizard.run_method=NONE \
+            services.driver.workdir=/repo/src/driver \
+            services.physics.workdir=/repo/src/physics \
+            services.runtime.workdir=/repo/src/runtime \
+            services.controller.workdir=/repo/src/controller \
             runtime.simulation_config.n_rollouts=1 \
             runtime.simulation_config.n_sim_steps=60
 
