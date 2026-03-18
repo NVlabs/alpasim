@@ -41,6 +41,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Mark checkout as safe for git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
       - name: Install test dependencies in job container
         shell: bash
         run: |
@@ -106,6 +112,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Mark checkout as safe for git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
       - name: Install dependencies in job container
         shell: bash
