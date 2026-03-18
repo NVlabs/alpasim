@@ -319,7 +319,7 @@ jobs:
           PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
           echo "Using compose project: ${PROJECT}"
           cd "${LOCAL_OUTPUT_PATH}"
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --abort-on-container-failure --remove-orphans
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --build --abort-on-container-failure --remove-orphans
 
       - name: Collect compose logs and tear down
         if: always()
@@ -434,7 +434,7 @@ jobs:
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${OUTPUT_PATH}"
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0
 
       - name: Collect tutorial logs and tear down
         if: always()
