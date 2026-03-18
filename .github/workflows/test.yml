@@ -311,6 +311,11 @@ jobs:
             cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
           fi
 
+          # Compose mounts the copied src tree; generate grpc python files there.
+          cd "${LOCAL_OUTPUT_PATH}/src/grpc"
+          uv sync
+          uv run compile-protos
+
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
@@ -455,6 +460,11 @@ jobs:
           if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
             cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
           fi
+
+          # Compose mounts the copied src tree; generate grpc python files there.
+          cd "${LOCAL_OUTPUT_PATH}/src/grpc"
+          uv sync
+          uv run compile-protos
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
