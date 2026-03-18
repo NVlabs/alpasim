@@ -276,7 +276,7 @@ jobs:
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
           HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
-            +cicd=${{ matrix.variant }} \
+            +deploy=local \
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
