@@ -38,14 +38,13 @@ from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
 from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
 from alpasim_runtime.unbound_rollout import UnboundRollout
-from alpasim_runtime.worker.artifact_cache import make_artifact_loader
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
     JobResult,
     WorkerArgs,
     _ShutdownSentinel,
 )
-from alpasim_utils.artifact import Artifact
+from alpasim_utils.scene_data_source import SceneDataSource
 
 from eval.schema import EvalConfig
 
@@ -60,7 +59,7 @@ def _is_orphaned(parent_pid: int) -> bool:
 async def run_single_rollout(
     job: AssignedRolloutJob,
     user_config: UserSimulatorConfig,
-    artifacts: dict[str, Artifact],
+    data_source: SceneDataSource,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
@@ -103,7 +102,7 @@ async def run_single_rollout(
                 simulation_config=user_config.simulation_config,
                 scene_id=job.scene_id,
                 version_ids=version_ids,
-                available_artifacts=artifacts,
+                data_source=data_source,
                 rollouts_dir=rollouts_dir,
             ),
         )
@@ -158,8 +157,6 @@ async def run_worker_loop(
     result_queue: Queue,
     num_consumers: int,
     user_config: UserSimulatorConfig,
-    smooth_trajectories: bool,
-    artifact_cache_size: int | None,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
@@ -175,9 +172,6 @@ async def run_worker_loop(
         result_queue: Queue to push JobResult to.
         num_consumers: Number of concurrent consumer tasks.
         user_config: User simulator configuration.
-        smooth_trajectories: Whether to smooth trajectories when loading artifacts.
-        artifact_cache_size: Max worker-local artifact cache size.
-            None = unlimited cache, 0 = disable cache.
         camera_catalog: Camera catalog for sensorsim.
         version_ids: Canonical version IDs from the parent process.
         rollouts_dir: Directory for rollout outputs.
@@ -201,11 +195,6 @@ async def run_worker_loop(
 
     # Install event loop idle profiler
     install_event_loop_idle_profiler(loop)
-
-    load_artifact = make_artifact_loader(
-        smooth_trajectories=smooth_trajectories,
-        max_cache_size=artifact_cache_size,
-    )
 
     async def job_consumer() -> None:
         """
@@ -244,13 +233,11 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
-            artifact = load_artifact(job.scene_id, job.artifact_path)
-
-            # Process the job
+            # Process the job using data_source from the job
             result = await run_single_rollout(
                 job=job,
                 user_config=user_config,
-                artifacts={job.scene_id: artifact},
+                data_source=job.data_source,
                 camera_catalog=camera_catalog,
                 version_ids=version_ids,
                 rollouts_dir=rollouts_dir,
@@ -341,8 +328,6 @@ async def worker_async_main(args: WorkerArgs) -> None:
             result_queue=args.result_queue,
             num_consumers=args.num_consumers,
             user_config=user_config,
-            smooth_trajectories=user_config.smooth_trajectories,
-            artifact_cache_size=user_config.artifact_cache_size,
             camera_catalog=camera_catalog,
             version_ids=args.version_ids,
             rollouts_dir=rollouts_dir,
