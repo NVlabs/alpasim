@@ -14,6 +14,7 @@ from multiprocessing import Queue
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import ServiceAddress
 from alpasim_runtime.telemetry.rpc_wrapper import SharedRpcTracking
+from alpasim_utils.scene_data_source import SceneDataSource
 
 from eval.scenario_evaluator import ScenarioEvalResult
 from eval.schema import EvalConfig
@@ -42,8 +43,8 @@ class PendingRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
+    # SceneDataSource for this job's scene
+    data_source: SceneDataSource
 
 
 @dataclass
@@ -58,8 +59,8 @@ class AssignedRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
+    # SceneDataSource for this job's scene
+    data_source: SceneDataSource
     # Concrete service addresses assigned by the parent dispatch loop.
     endpoints: ServiceEndpoints
 
