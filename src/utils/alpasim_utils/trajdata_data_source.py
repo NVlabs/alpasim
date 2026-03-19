@@ -293,8 +293,8 @@ class TrajdataDataSource(SceneDataSource):
 
         try:
             timestamps_us = []
-            poses_vec3 = []
-            poses_quat = []
+            positions_agent_world = []
+            quaternions_agent_world = []
 
             # Iterate through all timesteps
             for ts in range(agent.first_timestep, agent.last_timestep + 1):
@@ -336,11 +336,11 @@ class TrajdataDataSource(SceneDataSource):
                         timestamp_us = int(base_timestamp_us + ts * dt * 1e6)
 
                     timestamps_us.append(timestamp_us)
-                    poses_vec3.append([x_val, y_val, z_val])
+                    positions_agent_world.append([x_val, y_val, z_val])
 
                     # Convert heading to quaternion
                     quat = R.from_euler("z", heading_val).as_quat()  # [x, y, z, w]
-                    poses_quat.append(quat)
+                    quaternions_agent_world.append(quat)
 
                 except Exception as e:
                     logger.debug(
@@ -354,8 +354,8 @@ class TrajdataDataSource(SceneDataSource):
             # Create Trajectory
             trajectory = Trajectory(
                 timestamps=np.array(timestamps_us, dtype=np.uint64),
-                positions=np.array(poses_vec3, dtype=np.float32),
-                quaternions=np.array(poses_quat, dtype=np.float32),
+                positions=np.array(positions_agent_world, dtype=np.float32),
+                quaternions=np.array(quaternions_agent_world, dtype=np.float32),
             )
 
             # Create VehicleConfig (extract from extent)
@@ -411,10 +411,10 @@ class TrajdataDataSource(SceneDataSource):
         # Calculate world_to_nre transformation matrix (use first trajectory point as origin)
         world_to_nre = np.eye(4)
         if len(ego_trajectory) > 0:
-            first_pose_position = ego_trajectory.positions[0]
-            world_to_nre[:3, 3] = -first_pose_position
+            position_ego_first_world = ego_trajectory.positions[0]
+            world_to_nre[:3, 3] = -position_ego_first_world
             logger.info(
-                f"Setting world_to_nre origin at first pose: {first_pose_position}, "
+                f"Setting world_to_nre origin at first pose: {position_ego_first_world}, "
                 f"translation: {world_to_nre[:3, 3]}"
             )
 
@@ -424,11 +424,11 @@ class TrajdataDataSource(SceneDataSource):
             local_positions = ego_trajectory.positions + translation
 
             # Validate transform
-            first_pose_local = local_positions[0]
-            if np.linalg.norm(first_pose_local[:2]) > 1.0:
+            position_ego_first_local = local_positions[0]
+            if np.linalg.norm(position_ego_first_local[:2]) > 1.0:
                 logger.warning(
-                    f"First pose after transformation is not at origin: {first_pose_local}. "
-                    f"Expected [0, 0, ~z], got {first_pose_local}"
+                    f"First pose after transformation is not at origin: {position_ego_first_local}. "
+                    f"Expected [0, 0, ~z], got {position_ego_first_local}"
                 )
 
             local_quat = ego_trajectory.quaternions.copy()
@@ -491,26 +491,28 @@ class TrajdataDataSource(SceneDataSource):
             try:
                 unique_camera_id = f"{camera_name}@{self.scene_id}"
 
-                position = calibration_info.get(
+                position_sensor_to_ego = calibration_info.get(
                     "sensor2ego_translation", [0.0, 0.0, 0.0]
                 )
-                rotation = calibration_info.get(
+                rotation_sensor_to_ego = calibration_info.get(
                     "sensor2ego_rotation", [0.0, 0.0, 0.0, 1.0]
                 )
 
-                if isinstance(position, (int, float)):
-                    position = [float(position), 0.0, 0.0]
-                elif len(position) < 3:
-                    position = list(position) + [0.0] * (3 - len(position))
+                if isinstance(position_sensor_to_ego, (int, float)):
+                    position_sensor_to_ego = [float(position_sensor_to_ego), 0.0, 0.0]
+                elif len(position_sensor_to_ego) < 3:
+                    position_sensor_to_ego = list(position_sensor_to_ego) + [0.0] * (
+                        3 - len(position_sensor_to_ego)
+                    )
 
-                if isinstance(rotation, (int, float)):
-                    rotation = [0.0, 0.0, 0.0, 1.0]
-                elif len(rotation) < 4:
-                    if len(rotation) == 3:
-                        r = R.from_euler("xyz", rotation)
-                        rotation = r.as_quat()
+                if isinstance(rotation_sensor_to_ego, (int, float)):
+                    rotation_sensor_to_ego = [0.0, 0.0, 0.0, 1.0]
+                elif len(rotation_sensor_to_ego) < 4:
+                    if len(rotation_sensor_to_ego) == 3:
+                        r = R.from_euler("xyz", rotation_sensor_to_ego)
+                        rotation_sensor_to_ego = r.as_quat()
                     else:
-                        rotation = [0.0, 0.0, 0.0, 1.0]
+                        rotation_sensor_to_ego = [0.0, 0.0, 0.0, 1.0]
 
                 camera_id = CameraId(
                     logical_name=camera_name,
