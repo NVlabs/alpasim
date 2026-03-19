@@ -17,6 +17,42 @@ from omegaconf import MISSING, OmegaConf
 C = TypeVar("C")
 
 
+@dataclass
+class DataSourceConfig:
+    """Configuration for trajdata's UnifiedDataset.
+
+    This config unifies all scene data loading through trajdata's UnifiedDataset,
+    supporting both USDZ files and standard trajdata datasets like NuPlan, Waymo, etc.
+
+    Attributes:
+        desired_data: List of dataset names to load (e.g., ["nuplan_test", "usdz"])
+        data_dirs: Dict mapping dataset names to their data directories
+        cache_location: Path to trajdata cache directory
+        config_dir: Optional directory containing YAML scene config files for batch mode
+        asset_base_path: Base path for rendering assets (e.g., MTGS assets)
+        incl_vector_map: Whether to load vector maps
+        rebuild_cache: Whether to force rebuild the trajdata cache
+        rebuild_maps: Whether to force rebuild maps
+        desired_dt: Desired time delta between frames in seconds
+        num_workers: Number of workers for data loading
+        num_timesteps_before: Number of timesteps before central token (batch mode)
+        num_timesteps_after: Number of timesteps after central token (batch mode)
+    """
+
+    desired_data: list[str] = MISSING
+    data_dirs: dict[str, str] = MISSING
+    cache_location: str = MISSING
+    config_dir: Optional[str] = None  # For YAML batch mode
+    asset_base_path: Optional[str] = None
+    incl_vector_map: bool = True
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    desired_dt: float = 0.1  # 10 Hz default
+    num_workers: int = 1
+    num_timesteps_before: int = 30  # For batch mode
+    num_timesteps_after: int = 80  # For batch mode
+
+
 def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
     """Reads a yaml file at `path` and parses it into a provided type using omegaconf."""
     yaml_config = OmegaConf.create(load_yaml_dict(path))
@@ -252,6 +288,10 @@ class UserSimulatorConfig:
     # 1 = inline mode, all in one process, good for debugging
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
+
+    # Unified data source configuration (optional for backward compatibility)
+    # When provided, data loading goes through trajdata's UnifiedDataset
+    data_source: Optional[DataSourceConfig] = None
 
 
 @dataclass
