@@ -30,6 +30,7 @@ defines:
   drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
+  trajdata_cache: "${defines.filesystem}/trajdata_cache"  # Trajdata unified cache location
 
   sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
   helper: scripts
@@ -224,7 +225,59 @@ services:
 runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
+  # Unified data source configuration using trajdata
+  # This replaces the old USDZ artifact glob pattern approach
+  data_source:
+    desired_data:
+      - usdz  # Load USDZ scenes (NuRec artifacts)
+
+    data_dirs:
+      # Point to all-usdzs directory to scan all scene batches recursively
+      # This covers paths like: all-usdzs/sample_set/25.07_release/Batch000X/
+      usdz: "${scenes.scene_cache}/all-usdzs/sample_set/25.07_release/Batch0001"
+
+    cache_location: "${defines.trajdata_cache}"  # Trajdata unified cache
+
+    # Map and cache settings
+    incl_vector_map: true  # Include vector map data (roads, lanes, etc.)
+    rebuild_cache: false   # Set to true to force rebuild cache
+    rebuild_maps: false    # Set to true to force rebuild maps
+
+    # Trajectory processing
+    desired_dt: 0.1        # 10 Hz sampling rate (matches control_timestep_us)
+    num_workers: 4         # Parallel workers for cache creation
+
+    # Optional: Base path for MTGS rendering assets
+    asset_base_path: null
+
+    # YAML config mode parameters (for NuPlan central token processing)
+    config_dir: null       # Set to enable YAML batch preprocessing mode
+    num_timesteps_before: 30  # Timesteps before central token
+    num_timesteps_after: 80   # Timesteps after central token
+
+  # Enable cubic spline smoothing for trajectories
+  smooth_trajectories: true
+
   endpoints:
+    sensorsim:
+      # how many rollouts can run on a single worker at once
+      n_concurrent_rollouts: 2
+
+    driver:
+      n_concurrent_rollouts: 14
+
+    physics:
+      n_concurrent_rollouts: 14
+      skip: false # physics supports skipping
+
+    controller:
+      n_concurrent_rollouts: 14
+      skip: false # controller supports skipping
+
+    trafficsim:
+      n_concurrent_rollouts: 14
+      skip: true # trafficsim is not included yet
+
     # shut down the system after simulation is finished. without this flag the microservice servers
     # will remain on forever requring a manual interrupt (useful for debugging)
     do_shutdown: true

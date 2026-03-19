@@ -62,6 +62,29 @@ uv run --project src/runtime python -c "..." # run in a sub-project context
 
 All members share one dependency resolution; there is no per-member version isolation. See [Plugin System](PLUGIN_SYSTEM.md) for how plugins integrate with the workspace.
 
+## Key Dependencies
+
+### Trajdata (Unified Data Loading)
+
+AlpaSim uses [trajdata](https://github.com/NVlabs/trajdata) for unified scene data loading across
+different autonomous driving datasets (USDZ, NuPlan, Waymo, etc.). The dependency is automatically
+installed via `uv` from the `alpasim` branch:
+
+```toml
+# src/runtime/pyproject.toml
+[tool.uv.sources.trajdata-alpasim]
+git = "https://github.com/NVlabs/trajdata"
+branch = "alpasim"  # Custom branch with AlpaSim-specific extensions
+```
+
+**You don't need to manually install trajdata** - it's handled automatically when you run
+`setup_local_env.sh` or `uv sync --extra runtime`.
+
+The `alpasim` branch includes:
+- USDZ data format support
+- Custom trajectory smoothing
+- Performance optimizations for simulation workloads
+
 ## Troubleshooting
 
 **`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` during NRE warmup**
