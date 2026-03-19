@@ -3,6 +3,11 @@
 
 """Manual integration replay test for runtime request determinism.
 
+TODO: This test needs to be updated for the new trajdata-based data flow.
+The test currently references usdz_glob which has been removed in favor of
+DataSourceConfig. This test is marked as @pytest.mark.manual and is not
+run in regular CI, so it can be updated as part of a follow-up task.
+
 This test boots one replay gRPC server per service and re-runs runtime against
 recorded artifacts. It asserts that runtime emits requests matching the ASL
 recording exactly (ignoring expected dynamic fields).
