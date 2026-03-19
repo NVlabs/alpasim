@@ -143,7 +143,6 @@ async def test_daemon_main_serve_starts_and_drains(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         listen_address="[::]:50051",
     )
@@ -194,7 +193,6 @@ async def test_daemon_main_serve_stops_on_app_shutdown_request(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         listen_address="[::]:50051",
     )
@@ -418,7 +416,6 @@ def _make_one_shot_args() -> Namespace:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         array_job_dir=None,
     )
@@ -532,7 +529,6 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     fake_engine.startup.assert_awaited_once()
