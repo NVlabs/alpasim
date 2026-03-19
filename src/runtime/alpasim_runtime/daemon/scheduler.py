@@ -146,7 +146,7 @@ class DaemonScheduler:
                 job_id=pending_job.job_id,
                 scene_id=pending_job.scene_id,
                 rollout_spec_index=pending_job.rollout_spec_index,
-                artifact_path=pending_job.artifact_path,
+                data_source=pending_job.data_source,
                 endpoints=ServiceEndpoints(
                     driver=acquired["driver"],
                     sensorsim=acquired["sensorsim"],
