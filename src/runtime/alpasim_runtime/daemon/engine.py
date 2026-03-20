@@ -267,13 +267,8 @@ class DaemonEngine:
             validate_config_scenes=self._validate_config_scenes,
         )
 
-        # Create UnifiedDataset for on-demand scene loading
-        data_source_config = runtime_context.config.user.data_source
-        trajdata_params = data_source_config.to_trajdata_params()
-        self._dataset = UnifiedDataset(**trajdata_params)
-        logger.info(f"Created UnifiedDataset with {self._dataset.num_scenes()} scenes")
-
-        # Store scene_id to index mapping from RuntimeContext
+        # Use UnifiedDataset from RuntimeContext (created once in build_runtime_context)
+        self._dataset = runtime_context.dataset
         self._scene_id_to_idx = runtime_context.scene_id_to_idx
         self._config = runtime_context.config
 
