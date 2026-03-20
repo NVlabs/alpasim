@@ -8,14 +8,6 @@ from collections import defaultdict
 from typing import Callable
 from uuid import uuid4
 
-try:
-    from trajdata.dataset import UnifiedDataset
-
-    TRAJDATA_AVAILABLE = True
-except ImportError:
-    TRAJDATA_AVAILABLE = False
-    UnifiedDataset = None
-
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
@@ -27,6 +19,7 @@ from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
 from alpasim_runtime.worker.runtime import WorkerRuntime, start_worker_runtime
 from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.trajdata_data_source import TrajdataDataSource
+from trajdata.dataset import UnifiedDataset
 
 from eval.data import AggregationType
 
@@ -212,7 +205,7 @@ class DaemonEngine:
             return self._scene_id_to_data_source[scene_id]
 
         # Lazy load from dataset
-        if self._dataset is None or not TRAJDATA_AVAILABLE:
+        if self._dataset is None:
             raise RuntimeError(f"Dataset not initialized, cannot load scene {scene_id}")
 
         if self._config is None:
@@ -227,10 +220,10 @@ class DaemonEngine:
             if scene is None:
                 raise UnknownSceneError(scene_id)
 
-            # Get asset_base_path from config
+            # Get asset_base_path from USDZ config
             asset_base_path = None
-            if self._config.user.data_source is not None:
-                asset_base_path = self._config.user.data_source.asset_base_path
+            if self._config.user.data_source.usdz is not None:
+                asset_base_path = self._config.user.data_source.usdz.asset_base_path
 
             # Create scene_cache (pre-create to avoid pickle errors)
             scene_cache = self._dataset.cache_class(
@@ -275,26 +268,9 @@ class DaemonEngine:
         )
 
         # Create UnifiedDataset for on-demand scene loading
-        if not TRAJDATA_AVAILABLE:
-            raise ImportError(
-                "trajdata is required for data source loading. "
-                "Please install trajdata."
-            )
-
         data_source_config = runtime_context.config.user.data_source
-        if data_source_config is None:
-            raise ValueError("data_source is required in user config")
-
-        self._dataset = UnifiedDataset(
-            desired_data=data_source_config.desired_data,
-            data_dirs=data_source_config.data_dirs,
-            cache_location=data_source_config.cache_location,
-            incl_vector_map=data_source_config.incl_vector_map,
-            rebuild_cache=data_source_config.rebuild_cache,
-            rebuild_maps=data_source_config.rebuild_maps,
-            desired_dt=data_source_config.desired_dt,
-            num_workers=data_source_config.num_workers,
-        )
+        trajdata_params = data_source_config.to_trajdata_params()
+        self._dataset = UnifiedDataset(**trajdata_params)
         logger.info(f"Created UnifiedDataset with {self._dataset.num_scenes()} scenes")
 
         # Store scene_id to index mapping from RuntimeContext

@@ -183,12 +183,6 @@ async def run_simulation(args: argparse.Namespace) -> bool:
     config = parse_simulator_config(args.user_config, args.network_config)
     eval_config = typed_parse_config(args.eval_config, EvalConfig)
 
-    # Require data_source in config (unified data flow)
-    if config.user.data_source is None:
-        raise ValueError(
-            "No data source specified. Please set 'data_source' in user config YAML. "
-        )
-
     # Derive output directories from log_dir
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
     telemetry_dir = os.path.join(args.log_dir, "telemetry")

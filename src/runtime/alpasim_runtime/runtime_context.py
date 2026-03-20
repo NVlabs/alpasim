@@ -20,19 +20,11 @@ from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
+from trajdata.dataset import UnifiedDataset
 
 from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
-
-# Optional trajdata support
-try:
-    from trajdata.dataset import UnifiedDataset
-
-    TRAJDATA_AVAILABLE = True
-except ImportError:
-    TRAJDATA_AVAILABLE = False
-    UnifiedDataset = None
 
 ALL_SKIP_PER_WORKER_CONCURRENCY = 16
 
@@ -179,13 +171,7 @@ async def build_runtime_context(
     config = parse_simulator_config(user_config_path, network_config_path)
     eval_config = typed_parse_config(eval_config_path, EvalConfig)
 
-    # Require data_source in config (unified data flow)
-    if config.user.data_source is None:
-        raise ValueError(
-            "No data source specified in user config. "
-            "Please set 'data_source' in your YAML config file."
-        )
-
+    # Validate configuration
     version_ids = await gather_versions_from_addresses(
         config.network,
         config.user.endpoints,
@@ -203,25 +189,13 @@ async def build_runtime_context(
 
     # Create UnifiedDataset and build scene_id to data source mapping
     logger.info("Creating UnifiedDataset from config")
-    if not TRAJDATA_AVAILABLE:
-        raise ImportError(
-            "trajdata is required for data source loading. " "Please install trajdata."
-        )
 
     data_source_config = config.user.data_source
-    dataset = UnifiedDataset(
-        desired_data=data_source_config.desired_data,
-        data_dirs=data_source_config.data_dirs,
-        cache_location=data_source_config.cache_location,
-        incl_vector_map=data_source_config.incl_vector_map,
-        rebuild_cache=data_source_config.rebuild_cache,
-        rebuild_maps=data_source_config.rebuild_maps,
-        desired_dt=data_source_config.desired_dt,
-        num_workers=data_source_config.num_workers,
-    )
+    trajdata_params = data_source_config.to_trajdata_params()
+    dataset = UnifiedDataset(**trajdata_params)
     logger.info(
         f"Created UnifiedDataset with {dataset.num_scenes()} scenes, "
-        f"desired_data={data_source_config.desired_data}"
+        f"desired_data={trajdata_params['desired_data']}"
     )
 
     # Build scene_id to index mapping (once, in main process)
