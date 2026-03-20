@@ -115,12 +115,8 @@ class UnboundRollout:
 
         camera_configs = list(simulation_config.cameras)
 
-        # Get time range from data source rig
-        rig_time_range_start = data_source.rig.trajectory.time_range_us.start
-        rig_time_range_stop = data_source.rig.trajectory.time_range_us.stop
-
         control_timestamps_us_arr: np.ndarray = (
-            rig_time_range_start
+            data_source.rig.trajectory.time_range_us.start
             + simulation_config.time_start_offset_us
             + np.arange(
                 simulation_config.n_sim_steps + 2
@@ -129,9 +125,11 @@ class UnboundRollout:
         )
 
         control_timestamps_us = [
-            int(min(t, rig_time_range_stop - 1))
+            int(min(t, data_source.rig.trajectory.time_range_us.stop - 1))
             for t in control_timestamps_us_arr
-            if t < rig_time_range_stop + ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US
+            if t
+            < data_source.rig.trajectory.time_range_us.stop
+            + ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US
         ]
 
         start_us = control_timestamps_us[0]

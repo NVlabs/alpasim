@@ -342,7 +342,8 @@ AlpaSim uses [trajdata](https://github.com/NVlabs/trajdata/tree/alpasim) (custom
 for unified data loading across different autonomous driving datasets. The trajdata library is
 automatically installed via `uv` when you run `setup_local_env.sh`.
 
-Before running simulations, you need to prepare a trajdata cache from your scene data.
+The wizard automatically prepares the trajdata cache when needed. However, you can manually
+prepare or rebuild the cache for optimization or debugging purposes.
 
 ### Preparing USDZ Scene Cache
 

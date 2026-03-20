@@ -37,19 +37,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
-
-# Optional trajdata import
-try:
-    from trajdata.dataset import UnifiedDataset
-
-    TRAJDATA_AVAILABLE = True
-
-except ImportError:
-    TRAJDATA_AVAILABLE = False
-    UnifiedDataset = None
-    env_utils = None
 
 
 def load_yaml_configs(config_dir: Path) -> Dict[str, List[Dict[str, str]]]:
@@ -189,10 +179,6 @@ def preprocess_from_yaml_configs(
     Returns:
         True if successful, False otherwise.
     """
-    if not TRAJDATA_AVAILABLE:
-        logger.error("trajdata is not installed. Please install it first.")
-        return False
-
     # Load all YAML configs
     configs_by_log = load_yaml_configs(config_dir)
 
@@ -292,9 +278,7 @@ def preprocess_basic(
     Returns:
         True if successful, False otherwise.
     """
-    if not TRAJDATA_AVAILABLE:
-        logger.error("trajdata is not installed. Please install it first.")
-        return False
+    # Convert config to flat params for UnifiedDataset
 
     logger.info("Data source configuration:")
     logger.info(f"  desired_data: {desired_data}")
@@ -616,11 +600,6 @@ def main(arg_list: Optional[List[str]] = None) -> int:
     logger.info("=" * 60)
     logger.info("Alpasim Data Preparation Tool")
     logger.info("=" * 60)
-
-    if not TRAJDATA_AVAILABLE:
-        logger.error("trajdata is not installed. Please install it first:")
-        logger.error("pip install trajdata")
-        return 1
 
     # Determine mode and load configuration
     try:
