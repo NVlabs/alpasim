@@ -131,6 +131,7 @@ class RuntimeContext:
     eval_config: EvalConfig
     version_ids: RolloutMetadata.VersionIds
     scene_id_to_idx: dict[str, int]
+    dataset: UnifiedDataset
     pools: dict[str, AddressPool]
     max_in_flight: int
 
@@ -218,6 +219,7 @@ async def build_runtime_context(
         eval_config=eval_config,
         version_ids=version_ids,
         scene_id_to_idx=scene_id_to_idx,
+        dataset=dataset,
         pools=pools,
         max_in_flight=max_in_flight,
     )
