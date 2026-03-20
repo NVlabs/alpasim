@@ -18,39 +18,120 @@ C = TypeVar("C")
 
 
 @dataclass
-class DataSourceConfig:
-    """Configuration for trajdata's UnifiedDataset.
-
-    This config unifies all scene data loading through trajdata's UnifiedDataset,
-    supporting both USDZ files and standard trajdata datasets like NuPlan, Waymo, etc.
+class USDZSourceConfig:
+    """Configuration for USDZ data source.
 
     Attributes:
-        desired_data: List of dataset names to load (e.g., ["nuplan_test", "usdz"])
-        data_dirs: Dict mapping dataset names to their data directories
-        cache_location: Path to trajdata cache directory
-        config_dir: Optional directory containing YAML scene config files for batch mode
+        enabled: Whether this data source is enabled
+        data_dir: Path to directory containing USDZ files
+        desired_dt: Desired time delta between trajectory frames in seconds
+        incl_vector_map: Whether to load vector maps (roads, lanes, etc.)
         asset_base_path: Base path for rendering assets (e.g., MTGS assets)
-        incl_vector_map: Whether to load vector maps
-        rebuild_cache: Whether to force rebuild the trajdata cache
-        rebuild_maps: Whether to force rebuild maps
-        desired_dt: Desired time delta between frames in seconds
-        num_workers: Number of workers for data loading
-        num_timesteps_before: Number of timesteps before central token (batch mode)
-        num_timesteps_after: Number of timesteps after central token (batch mode)
     """
 
-    desired_data: list[str] = MISSING
-    data_dirs: dict[str, str] = MISSING
-    cache_location: str = MISSING
-    config_dir: Optional[str] = None  # For YAML batch mode
-    asset_base_path: Optional[str] = None
+    enabled: bool = True
+    data_dir: str = MISSING
+    desired_dt: float = 0.1  # 10 Hz sampling
     incl_vector_map: bool = True
+    asset_base_path: Optional[str] = None
+
+
+@dataclass
+class NuPlanSourceConfig:
+    """Configuration for NuPlan data source.
+
+    Attributes:
+        enabled: Whether this data source is enabled
+        data_dir: Path to NuPlan dataset directory
+        config_dir: Directory containing YAML scene config files for batch mode
+        num_timesteps_before: Number of timesteps before central token (batch mode)
+        num_timesteps_after: Number of timesteps after central token (batch mode)
+        desired_dt: Desired time delta between frames in seconds
+        incl_vector_map: Whether to load vector maps
+    """
+
+    enabled: bool = False
+    data_dir: Optional[str] = None
+    config_dir: Optional[str] = None
+    num_timesteps_before: int = 30
+    num_timesteps_after: int = 80
+    desired_dt: float = 0.1
+    incl_vector_map: bool = True
+
+
+@dataclass
+class DataSourceConfig:
+    """Configuration for unified data loading through trajdata.
+
+    This provides a hierarchical structure where common configuration is separated
+    from data source-specific settings, making it easier to understand which
+    parameters affect which data sources.
+
+    Attributes:
+        cache_location: Path to shared trajdata cache directory
+        rebuild_cache: Whether to force rebuild the cache for all sources
+        rebuild_maps: Whether to force rebuild maps for all sources
+        num_workers: Number of parallel workers for cache creation
+        usdz: USDZ-specific configuration
+        nuplan: NuPlan-specific configuration
+    """
+
+    # Common configuration (applies to all data sources)
+    cache_location: str = MISSING
     rebuild_cache: bool = False
     rebuild_maps: bool = False
-    desired_dt: float = 0.1  # 10 Hz default
-    num_workers: int = 1
-    num_timesteps_before: int = 30  # For batch mode
-    num_timesteps_after: int = 80  # For batch mode
+    num_workers: int = 4
+
+    # Source-specific configurations
+    usdz: Optional[USDZSourceConfig] = None
+    nuplan: Optional[NuPlanSourceConfig] = None
+
+    def to_trajdata_params(self) -> dict:
+        """Convert hierarchical config to flat parameters for trajdata's UnifiedDataset.
+
+        Returns:
+            Dictionary with keys expected by UnifiedDataset constructor
+
+        Raises:
+            ValueError: If no data sources are enabled
+        """
+        desired_data = []
+        data_dirs = {}
+
+        # Collect enabled sources
+        if self.usdz is not None and self.usdz.enabled:
+            desired_data.append("usdz")
+            data_dirs["usdz"] = self.usdz.data_dir
+
+        if self.nuplan is not None and self.nuplan.enabled:
+            desired_data.append("nuplan")
+            data_dirs["nuplan"] = self.nuplan.data_dir
+
+        if not desired_data:
+            raise ValueError("No data sources enabled in configuration")
+
+        # Use first enabled source for common parameters
+        # (desired_dt, incl_vector_map are typically consistent across sources)
+        primary_source = self.usdz if (self.usdz and self.usdz.enabled) else self.nuplan
+
+        params = {
+            "desired_data": desired_data,
+            "data_dirs": data_dirs,
+            "cache_location": self.cache_location,
+            "rebuild_cache": self.rebuild_cache,
+            "rebuild_maps": self.rebuild_maps,
+            "num_workers": self.num_workers,
+            "desired_dt": primary_source.desired_dt,
+            "incl_vector_map": primary_source.incl_vector_map,
+        }
+
+        # Add source-specific parameters
+        if self.nuplan and self.nuplan.enabled and self.nuplan.config_dir:
+            params["config_dir"] = self.nuplan.config_dir
+            params["num_timesteps_before"] = self.nuplan.num_timesteps_before
+            params["num_timesteps_after"] = self.nuplan.num_timesteps_after
+
+        return params
 
 
 def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
@@ -279,9 +360,6 @@ class UserSimulatorConfig:
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
-    # Max worker-local artifact cache size.
-    # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: Optional[int] = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.
@@ -289,9 +367,9 @@ class UserSimulatorConfig:
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
 
-    # Unified data source configuration (optional for backward compatibility)
-    # When provided, data loading goes through trajdata's UnifiedDataset
-    data_source: Optional[DataSourceConfig] = None
+    # Unified data source configuration (required)
+    # Data loading goes through trajdata's UnifiedDataset
+    data_source: DataSourceConfig = MISSING
 
 
 @dataclass

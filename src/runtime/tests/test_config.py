@@ -53,38 +53,71 @@ def test_typed_parse_config_invalid_yaml(tmp_path):
 
 
 def test_data_source_config_defaults():
-    """Test that DataSourceConfig has sensible defaults."""
+    """Test that DataSourceConfig has sensible defaults for hierarchical structure."""
     cfg = config.DataSourceConfig(
-        desired_data=["nuplan_mini"],
-        data_dirs={"nuplan_mini": "/data/nuplan"},
         cache_location="/tmp/cache",
+        usdz=config.USDZSourceConfig(data_dir="/data/usdz"),
     )
-    assert cfg.desired_data == ["nuplan_mini"]
-    assert cfg.data_dirs == {"nuplan_mini": "/data/nuplan"}
     assert cfg.cache_location == "/tmp/cache"
-    assert cfg.incl_vector_map is True
     assert cfg.rebuild_cache is False
     assert cfg.rebuild_maps is False
-    assert cfg.desired_dt == 0.1
-    assert cfg.num_workers == 1
-    assert cfg.num_timesteps_before == 30
-    assert cfg.num_timesteps_after == 80
-    assert cfg.config_dir is None
-    assert cfg.asset_base_path is None
+    assert cfg.num_workers == 4
+    assert cfg.usdz is not None
+    assert cfg.usdz.enabled is True
+    assert cfg.usdz.data_dir == "/data/usdz"
+    assert cfg.usdz.desired_dt == 0.1
+    assert cfg.usdz.incl_vector_map is True
 
 
-def test_data_source_config_optional_fields():
-    """Test that DataSourceConfig optional fields work correctly."""
+def test_data_source_config_to_trajdata_params():
+    """Test conversion from hierarchical config to flat trajdata parameters."""
     cfg = config.DataSourceConfig(
-        desired_data=["usdz"],
-        data_dirs={"usdz": "/data/usdz"},
         cache_location="/tmp/cache",
-        config_dir="/configs",
-        asset_base_path="/assets",
         rebuild_cache=True,
-        desired_dt=0.05,
+        num_workers=8,
+        usdz=config.USDZSourceConfig(
+            data_dir="/data/usdz",
+            desired_dt=0.05,
+            asset_base_path="/assets",
+        ),
     )
-    assert cfg.config_dir == "/configs"
-    assert cfg.asset_base_path == "/assets"
-    assert cfg.rebuild_cache is True
-    assert cfg.desired_dt == 0.05
+    params = cfg.to_trajdata_params()
+
+    assert params["desired_data"] == ["usdz"]
+    assert params["data_dirs"] == {"usdz": "/data/usdz"}
+    assert params["cache_location"] == "/tmp/cache"
+    assert params["rebuild_cache"] is True
+    assert params["num_workers"] == 8
+    assert params["desired_dt"] == 0.05
+    assert params["incl_vector_map"] is True
+
+
+def test_data_source_config_multiple_sources():
+    """Test configuration with multiple data sources enabled."""
+    cfg = config.DataSourceConfig(
+        cache_location="/tmp/cache",
+        usdz=config.USDZSourceConfig(data_dir="/data/usdz"),
+        nuplan=config.NuPlanSourceConfig(
+            enabled=True,
+            data_dir="/data/nuplan",
+            config_dir="/configs",
+        ),
+    )
+    params = cfg.to_trajdata_params()
+
+    assert set(params["desired_data"]) == {"usdz", "nuplan"}
+    assert params["data_dirs"]["usdz"] == "/data/usdz"
+    assert params["data_dirs"]["nuplan"] == "/data/nuplan"
+    assert params["config_dir"] == "/configs"
+    assert params["num_timesteps_before"] == 30
+
+
+def test_data_source_config_no_sources_enabled():
+    """Test that error is raised when no data sources are enabled."""
+    cfg = config.DataSourceConfig(
+        cache_location="/tmp/cache",
+        nuplan=config.NuPlanSourceConfig(enabled=False),
+    )
+
+    with pytest.raises(ValueError, match="No data sources enabled"):
+        cfg.to_trajdata_params()
