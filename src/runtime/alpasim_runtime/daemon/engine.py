@@ -15,11 +15,10 @@ from alpasim_runtime.runtime_context import (
     build_runtime_context,
     compute_num_consumers_per_worker,
 )
+from alpasim_runtime.scene_loader import SceneLoader
 from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
 from alpasim_runtime.worker.runtime import WorkerRuntime, start_worker_runtime
 from alpasim_utils.scene_data_source import SceneDataSource
-from alpasim_utils.trajdata_data_source import TrajdataDataSource
-from trajdata.dataset import UnifiedDataset
 
 from eval.data import AggregationType
 
@@ -185,9 +184,7 @@ class DaemonEngine:
 
         self._version_ids: logging_pb2.RolloutMetadata.VersionIds | None = None
         self._config = None  # Will be set during startup
-        self._dataset: UnifiedDataset | None = None
-        self._scene_id_to_idx: dict[str, int] = {}
-        self._scene_id_to_data_source: dict[str, SceneDataSource] = {}
+        self._scene_loader: SceneLoader | None = None
         self._scheduler: DaemonScheduler | None = None
         self._worker_runtime: WorkerRuntime | None = None
         self._started = False
@@ -199,55 +196,22 @@ class DaemonEngine:
         return self._version_ids
 
     def _get_data_source(self, scene_id: str) -> SceneDataSource:
-        """Get or create a data source for the given scene_id."""
-        # Check cache first
-        if scene_id in self._scene_id_to_data_source:
-            return self._scene_id_to_data_source[scene_id]
+        """Get or create a data source for the given scene_id.
 
-        # Lazy load from dataset
-        if self._dataset is None:
-            raise RuntimeError(f"Dataset not initialized, cannot load scene {scene_id}")
+        Delegates to SceneLoader for lazy loading and caching.
 
-        if self._config is None:
-            raise RuntimeError("Config not initialized")
+        Args:
+            scene_id: Scene identifier to load
 
-        scene_idx = self._scene_id_to_idx.get(scene_id)
-        if scene_idx is None:
-            raise UnknownSceneError(scene_id)
+        Returns:
+            SceneDataSource for the requested scene
 
-        try:
-            scene = self._dataset.get_scene(scene_idx)
-            if scene is None:
-                raise UnknownSceneError(scene_id)
-
-            # Get asset_base_path from USDZ config
-            asset_base_path = None
-            if self._config.user.data_source.usdz is not None:
-                asset_base_path = self._config.user.data_source.usdz.asset_base_path
-
-            # Create scene_cache (pre-create to avoid pickle errors)
-            scene_cache = self._dataset.cache_class(
-                self._dataset.cache_path, scene, self._dataset.augmentations
-            )
-            scene_cache.set_obs_format(self._dataset.obs_format)
-
-            # Create TrajdataDataSource
-            data_source = TrajdataDataSource.from_trajdata_scene(
-                scene=scene,
-                dataset=None,  # Don't pass dataset to avoid pickle errors
-                scene_cache=scene_cache,
-                smooth_trajectories=self._config.user.smooth_trajectories,
-                asset_base_path=asset_base_path,
-            )
-
-            # Cache for future use
-            self._scene_id_to_data_source[scene_id] = data_source
-            logger.debug(f"Loaded data source for scene {scene_id}")
-            return data_source
-
-        except Exception as e:
-            logger.error(f"Failed to load scene {scene_id}: {e}")
-            raise UnknownSceneError(scene_id)
+        Raises:
+            RuntimeError: If SceneLoader not initialized
+        """
+        if self._scene_loader is None:
+            raise RuntimeError("SceneLoader not initialized")
+        return self._scene_loader.get_data_source(scene_id)
 
     async def startup(self) -> None:
         """Initialize the runtime context, start workers, and begin scheduling.
@@ -267,9 +231,12 @@ class DaemonEngine:
             validate_config_scenes=self._validate_config_scenes,
         )
 
-        # Use UnifiedDataset from RuntimeContext (created once in build_runtime_context)
-        self._dataset = runtime_context.dataset
-        self._scene_id_to_idx = runtime_context.scene_id_to_idx
+        # Create SceneLoader from RuntimeContext
+        self._scene_loader = SceneLoader(
+            dataset=runtime_context.dataset,
+            scene_id_to_idx=runtime_context.scene_id_to_idx,
+            config=runtime_context.config,
+        )
         self._config = runtime_context.config
 
         num_consumers_per_worker = compute_num_consumers_per_worker(

@@ -185,8 +185,10 @@ async def test_engine_simulate_submits_without_global_request_lock() -> None:
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_idx = {"clipgt-a": 0}
-    engine._scene_id_to_data_source = {"clipgt-a": MagicMock()}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -233,8 +235,10 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_idx = {"clipgt-a": 0}
-    engine._scene_id_to_data_source = {"clipgt-a": MagicMock()}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -286,8 +290,10 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_idx = {"clipgt-a": 0}
-    engine._scene_id_to_data_source = {"clipgt-a": MagicMock()}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),

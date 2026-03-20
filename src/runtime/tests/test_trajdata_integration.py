@@ -5,8 +5,7 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0 import runtime_pb2
@@ -119,90 +118,64 @@ def test_build_pending_jobs_drops_zero_rollouts():
 def test_daemon_engine_get_data_source_caching(
     mock_trajdata_dataset, mock_trajdata_scene
 ):
-    """Test that DaemonEngine caches data sources and doesn't reload them."""
-    with patch("alpasim_runtime.daemon.engine.TRAJDATA_AVAILABLE", True):
-        engine = DaemonEngine(
-            user_config="u.yaml",
-            network_config="n.yaml",
-            eval_config="e.yaml",
-            log_dir="/tmp/log",
-        )
+    """Test that DaemonEngine uses SceneLoader for caching data sources."""
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
 
-        # Set up engine state
-        engine._started = True
-        engine._dataset = mock_trajdata_dataset
-        engine._scene_id_to_idx = {"test_scene_001": 0}
-        engine._scene_id_to_data_source = {}
-        engine._config = SimpleNamespace(
-            user=SimpleNamespace(
-                smooth_trajectories=True,
-                data_source=SimpleNamespace(asset_base_path="/tmp/assets"),
-            )
-        )
+    # Set up engine with mock SceneLoader
+    engine._started = True
+    mock_scene_loader = MagicMock()
+    mock_data_source = MagicMock()
+    mock_scene_loader.get_data_source.return_value = mock_data_source
+    engine._scene_loader = mock_scene_loader
 
-        # Mock TrajdataDataSource.from_trajdata_scene
-        with patch(
-            "alpasim_runtime.daemon.engine.TrajdataDataSource.from_trajdata_scene"
-        ) as mock_from_scene:
-            mock_data_source = MagicMock()
-            mock_from_scene.return_value = mock_data_source
+    # First call should delegate to SceneLoader
+    data_source_1 = engine._get_data_source("test_scene_001")
+    assert data_source_1 is mock_data_source
+    assert mock_scene_loader.get_data_source.call_count == 1
 
-            # First call should create the data source
-            data_source_1 = engine._get_data_source("test_scene_001")
-            assert data_source_1 is mock_data_source
-            assert mock_from_scene.call_count == 1
-
-            # Second call should return cached data source
-            data_source_2 = engine._get_data_source("test_scene_001")
-            assert data_source_2 is mock_data_source
-            assert mock_from_scene.call_count == 1  # Not called again
-
-            # Verify cache contains the data source
-            assert "test_scene_001" in engine._scene_id_to_data_source
-            assert engine._scene_id_to_data_source["test_scene_001"] is mock_data_source
+    # Second call should also delegate (SceneLoader handles caching internally)
+    data_source_2 = engine._get_data_source("test_scene_001")
+    assert data_source_2 is mock_data_source
+    assert mock_scene_loader.get_data_source.call_count == 2
 
 
 def test_daemon_engine_get_data_source_unknown_scene():
     """Test that _get_data_source raises UnknownSceneError for unknown scenes."""
-    with patch("alpasim_runtime.daemon.engine.TRAJDATA_AVAILABLE", True):
-        engine = DaemonEngine(
-            user_config="u.yaml",
-            network_config="n.yaml",
-            eval_config="e.yaml",
-            log_dir="/tmp/log",
-        )
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
 
-        engine._started = True
-        engine._dataset = MagicMock()
-        engine._scene_id_to_idx = {"known_scene": 0}
-        engine._scene_id_to_data_source = {}
-        engine._config = SimpleNamespace(
-            user=SimpleNamespace(
-                smooth_trajectories=True,
-                data_source=SimpleNamespace(asset_base_path=None),
-            )
-        )
+    engine._started = True
+    # Mock SceneLoader that raises UnknownSceneError
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.side_effect = UnknownSceneError("unknown_scene")
+    engine._scene_loader = mock_scene_loader
 
-        with pytest.raises(UnknownSceneError) as exc_info:
-            engine._get_data_source("unknown_scene")
+    with pytest.raises(UnknownSceneError) as exc_info:
+        engine._get_data_source("unknown_scene")
 
-        assert exc_info.value.scene_id == "unknown_scene"
+    assert exc_info.value.scene_id == "unknown_scene"
 
 
 def test_daemon_engine_get_data_source_without_dataset():
-    """Test that _get_data_source raises RuntimeError if dataset is not initialized."""
-    with patch("alpasim_runtime.daemon.engine.TRAJDATA_AVAILABLE", True):
-        engine = DaemonEngine(
-            user_config="u.yaml",
-            network_config="n.yaml",
-            eval_config="e.yaml",
-            log_dir="/tmp/log",
-        )
+    """Test that _get_data_source raises RuntimeError if SceneLoader is not initialized."""
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
 
-        engine._started = True
-        engine._dataset = None
-        engine._scene_id_to_idx = {"test_scene": 0}
-        engine._scene_id_to_data_source = {}
+    engine._started = True
+    engine._scene_loader = None
 
-        with pytest.raises(RuntimeError, match="Dataset not initialized"):
-            engine._get_data_source("test_scene")
+    with pytest.raises(RuntimeError, match="SceneLoader not initialized"):
+        engine._get_data_source("test_scene")
