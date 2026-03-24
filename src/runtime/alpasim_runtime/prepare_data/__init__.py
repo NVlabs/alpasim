@@ -4,53 +4,69 @@
 """
 Data preprocessing module for building trajdata cache.
 
-This module provides tools for preparing scene data before running simulations.
-It supports:
+This module provides two approaches for preparing scene data before simulations:
 
-1. Basic preprocessing - Build trajdata cache for all scenes in a dataset
-2. YAML config preprocessing - Batch process specific scenes based on YAML configs
-3. Central token mode - Process scenes around specific central tokens (NuPlan)
+1. **User Config Path** (Recommended for complex scenarios):
+   - Load configuration from YAML file
+   - Supports multiple data sources with individual settings
+   - Automatic NuPlan YAML batch processing when config_dir is provided
+   - Full control over per-dataset parameters
 
-Main functions:
-    - preprocess_basic: Basic preprocessing for all scenes
-    - preprocess_from_yaml_configs: Batch preprocessing from YAML configs
-    - load_yaml_configs: Load YAML configuration files
+2. **CLI Path** (For simple, quick preprocessing):
+   - Specify parameters via command line
+   - Uniform parameters applied to all datasets
+   - Good for testing or simple caching tasks
 
-Example usage:
+Main exports:
+    - preprocess_basic: Unified preprocessing function (handles both basic and NuPlan YAML modes)
+    - process_nuplan_yaml_configs: Process NuPlan YAML configs into central_tokens format
+    - load_yaml_configs: Load and parse YAML configuration files
+    - PrepareDataConfig: Configuration class for CLI mode
+    - main: CLI entry point
 
-    from alpasim_runtime.prepare_data import preprocess_basic, preprocess_from_yaml_configs
+Example usage (programmatic):
 
-    # Basic preprocessing
-    preprocess_basic(
-        desired_data=["nuplan_test"],
-        data_dirs={"nuplan_test": "/path/to/nuplan"},
+    from alpasim_runtime.prepare_data import preprocess_basic, PrepareDataConfig
+
+    # Simple preprocessing with CLI config
+    config = PrepareDataConfig(
+        desired_data=["waymo"],
+        data_dirs={"waymo": "/path/to/waymo"},
         cache_location="/path/to/cache",
+        desired_dt=0.1,
     )
+    preprocess_basic(config, verbose=True)
 
-    # YAML config batch preprocessing
-    preprocess_from_yaml_configs(
-        config_dir=Path("/path/to/configs"),
-        cache_location="/path/to/cache",
-        data_dirs={"nuplan_test": "/path/to/nuplan"},
-        env_name="nuplan_test",
-        num_timesteps_before=30,
-        num_timesteps_after=80,
-    )
+    # Or use user config (recommended for production)
+    from alpasim_runtime.config import typed_parse_config, UserSimulatorConfig
+    user_config = typed_parse_config("user.yaml", UserSimulatorConfig)
+    preprocess_basic(user_config.data_source, verbose=True)
 
 CLI usage:
-    python -m alpasim_runtime.prepare_data --help
+    # Simple mode
+    python -m alpasim_runtime.prepare_data \\
+        --desired-data waymo \\
+        --data-dir /path/to/waymo \\
+        --cache-location /path/to/cache
+
+    # Complex mode with user config
+    python -m alpasim_runtime.prepare_data \\
+        --user-config user.yaml \\
+        --rebuild-cache
 """
 
 from alpasim_runtime.prepare_data.__main__ import (
+    PrepareDataConfig,
     load_yaml_configs,
     main,
     preprocess_basic,
-    preprocess_from_yaml_configs,
+    process_nuplan_yaml_configs,
 )
 
 __all__ = [
     "preprocess_basic",
-    "preprocess_from_yaml_configs",
+    "process_nuplan_yaml_configs",
     "load_yaml_configs",
+    "PrepareDataConfig",
     "main",
 ]
