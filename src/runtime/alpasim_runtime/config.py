@@ -8,7 +8,7 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Type, TypeVar, cast
+from typing import Any, Dict, Optional, Type, TypeVar, cast
 
 from alpasim_utils.scenario import VehicleConfig
 from alpasim_utils.yaml_utils import load_yaml_dict
@@ -18,73 +18,58 @@ C = TypeVar("C")
 
 
 @dataclass
-class USDZSourceConfig:
-    """Configuration for USDZ data source.
+class GenericSourceConfig:
+    """Generic configuration for any trajdata-supported dataset.
+
+    This unified config supports all trajdata datasets (USDZ, NuPlan, Waymo,
+    nuScenes, Lyft, Argoverse, etc.) with a flexible extra_params field for
+    dataset-specific options.
 
     Attributes:
         enabled: Whether this data source is enabled
-        data_dir: Path to directory containing USDZ files
+        data_dir: Path to dataset directory
         desired_dt: Desired time delta between trajectory frames in seconds
         incl_vector_map: Whether to load vector maps (roads, lanes, etc.)
-        asset_base_path: Base path for rendering assets (e.g., MTGS assets)
+        extra_params: Dataset-specific parameters (e.g., NuPlan's config_dir,
+                      USDZ's asset_base_path, etc.)
+
+    Example extra_params:
+        - NuPlan: {"config_dir": "/path", "num_timesteps_before": 30, "num_timesteps_after": 80}
+        - USDZ: {"asset_base_path": "/assets"}
+        - Waymo: {} (no extra params needed)
     """
 
     enabled: bool = True
     data_dir: str = MISSING
-    desired_dt: float = 0.1  # 10 Hz sampling
-    incl_vector_map: bool = True
-    asset_base_path: Optional[str] = None
-
-
-@dataclass
-class NuPlanSourceConfig:
-    """Configuration for NuPlan data source.
-
-    Attributes:
-        enabled: Whether this data source is enabled
-        data_dir: Path to NuPlan dataset directory
-        config_dir: Directory containing YAML scene config files for batch mode
-        num_timesteps_before: Number of timesteps before central token (batch mode)
-        num_timesteps_after: Number of timesteps after central token (batch mode)
-        desired_dt: Desired time delta between frames in seconds
-        incl_vector_map: Whether to load vector maps
-    """
-
-    enabled: bool = False
-    data_dir: Optional[str] = None
-    config_dir: Optional[str] = None
-    num_timesteps_before: int = 30
-    num_timesteps_after: int = 80
-    desired_dt: float = 0.1
-    incl_vector_map: bool = True
+    extra_params: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class DataSourceConfig:
     """Configuration for unified data loading through trajdata.
 
-    This provides a hierarchical structure where common configuration is separated
-    from data source-specific settings, making it easier to understand which
-    parameters affect which data sources.
+    Supports dynamic registration of any trajdata dataset (USDZ, NuPlan, Waymo,
+    nuScenes, Lyft, Argoverse, etc.) through the 'sources' dictionary.
 
     Attributes:
         cache_location: Path to shared trajdata cache directory
         rebuild_cache: Whether to force rebuild the cache for all sources
         rebuild_maps: Whether to force rebuild maps for all sources
         num_workers: Number of parallel workers for cache creation
-        usdz: USDZ-specific configuration
-        nuplan: NuPlan-specific configuration
+        sources: Dictionary mapping dataset names to their configurations
+                 (e.g., {"usdz": GenericSourceConfig(...), "waymo": ...})
     """
 
     # Common configuration (applies to all data sources)
     cache_location: str = MISSING
+    desired_dt: float = 0.1  # 10 Hz sampling
+    incl_vector_map: bool = True
     rebuild_cache: bool = False
     rebuild_maps: bool = False
-    num_workers: int = 4
+    num_workers: int = 1  # Conservative default for stability; increase for production
 
-    # Source-specific configurations
-    usdz: Optional[USDZSourceConfig] = None
-    nuplan: Optional[NuPlanSourceConfig] = None
+    # New extensible source configuration (preferred)
+    sources: Dict[str, GenericSourceConfig] = field(default_factory=dict)
 
     def to_trajdata_params(self) -> dict:
         """Convert hierarchical config to flat parameters for trajdata's UnifiedDataset.
@@ -97,39 +82,32 @@ class DataSourceConfig:
         """
         desired_data = []
         data_dirs = {}
+        dataset_kwargs = {}
 
-        # Collect enabled sources
-        if self.usdz is not None and self.usdz.enabled:
-            desired_data.append("usdz")
-            data_dirs["usdz"] = self.usdz.data_dir
-
-        if self.nuplan is not None and self.nuplan.enabled:
-            desired_data.append("nuplan")
-            data_dirs["nuplan"] = self.nuplan.data_dir
+        for dataset_name, source in self.sources.items():
+            if source.enabled:
+                desired_data.append(dataset_name)
+                data_dirs[dataset_name] = source.data_dir
+                if source.extra_params:
+                    dataset_kwargs[dataset_name] = source.extra_params
 
         if not desired_data:
             raise ValueError("No data sources enabled in configuration")
-
-        # Use first enabled source for common parameters
-        # (desired_dt, incl_vector_map are typically consistent across sources)
-        primary_source = self.usdz if (self.usdz and self.usdz.enabled) else self.nuplan
 
         params = {
             "desired_data": desired_data,
             "data_dirs": data_dirs,
             "cache_location": self.cache_location,
+            "incl_vector_map": self.incl_vector_map,
             "rebuild_cache": self.rebuild_cache,
             "rebuild_maps": self.rebuild_maps,
             "num_workers": self.num_workers,
-            "desired_dt": primary_source.desired_dt,
-            "incl_vector_map": primary_source.incl_vector_map,
+            "desired_dt": self.desired_dt,
         }
 
-        # Add source-specific parameters
-        if self.nuplan and self.nuplan.enabled and self.nuplan.config_dir:
-            params["config_dir"] = self.nuplan.config_dir
-            params["num_timesteps_before"] = self.nuplan.num_timesteps_before
-            params["num_timesteps_after"] = self.nuplan.num_timesteps_after
+        # Add dataset-specific kwargs if any source has extra_params
+        if dataset_kwargs:
+            params["dataset_kwargs"] = dataset_kwargs
 
         return params
 

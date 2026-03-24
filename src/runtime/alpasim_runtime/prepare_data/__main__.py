@@ -4,26 +4,30 @@
 """
 Data preprocessing CLI for building trajdata cache.
 
-This module provides a command-line interface for preparing scene data before
-running simulations. It supports:
+This module provides two clear paths for data preprocessing:
 
-1. Basic preprocessing - Build trajdata cache for all scenes in a dataset
-2. YAML config preprocessing - Batch process specific scenes based on YAML configs
-3. Central token mode - Process scenes around specific central tokens (NuPlan)
+1. **User Config Path** (--user-config): For complex scenarios
+   - Load full configuration from YAML file
+   - Supports multiple data sources, hierarchical config
+   - Supports YAML batch mode (NuPlan central_tokens)
+   - CLI overrides limited to: --rebuild-cache, --rebuild-maps, --verbose
+
+2. **CLI Path**: For simple, quick preprocessing
+   - Specify all parameters via command line
+   - Single dataset preprocessing only
+   - Basic preprocessing mode only (no YAML batch mode)
+   - Good for testing or simple caching tasks
 
 Usage Examples:
 
-    # Basic preprocessing using user-config
-    python -m alpasim_runtime.prepare_data --user-config user.yaml
+    # Complex: Use user config with optional overrides
+    python -m alpasim_runtime.prepare_data --user-config user.yaml --rebuild-cache
 
-    # Basic preprocessing with explicit parameters
+    # Simple: Direct CLI parameters for basic preprocessing
     python -m alpasim_runtime.prepare_data \\
         --desired-data nuplan_test \\
         --data-dir /path/to/nuplan \\
         --cache-location /path/to/cache
-
-    # Rebuild cache even if it exists
-    python -m alpasim_runtime.prepare_data --user-config user.yaml --rebuild-cache
 """
 
 from __future__ import annotations
@@ -33,13 +37,56 @@ import logging
 import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from alpasim_runtime.config import UserSimulatorConfig, typed_parse_config
+from omegaconf import OmegaConf
 from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PrepareDataConfig:
+    """Configuration for CLI-based data preprocessing.
+
+    This is used ONLY for CLI mode. User config mode uses DataSourceConfig directly.
+
+    Note: CLI mode only supports basic preprocessing. For YAML batch mode (NuPlan),
+    use user-config files with config_dir in extra_params.
+    """
+
+    # Data source parameters (required)
+    desired_data: List[str]
+    data_dirs: Dict[str, str]
+    cache_location: str
+
+    # Optional preprocessing parameters
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    incl_vector_map: bool = True
+    desired_dt: float = 0.1
+    num_workers: int = 1
+
+    def to_trajdata_params(self) -> dict:
+        """Convert to flat parameters for trajdata's UnifiedDataset.
+
+        Returns:
+            Dictionary with keys expected by UnifiedDataset constructor
+        """
+        return {
+            "desired_data": self.desired_data,
+            "data_dirs": self.data_dirs,
+            "cache_location": self.cache_location,
+            "rebuild_cache": self.rebuild_cache,
+            "rebuild_maps": self.rebuild_maps,
+            "num_workers": self.num_workers,
+            "desired_dt": self.desired_dt,
+            "incl_vector_map": self.incl_vector_map,
+        }
 
 
 def load_yaml_configs(config_dir: Path) -> Dict[str, List[Dict[str, str]]]:
@@ -114,21 +161,14 @@ def load_yaml_configs(config_dir: Path) -> Dict[str, List[Dict[str, str]]]:
                 )
                 continue
 
-            # Extract first central_token
-            configs_by_log[central_log].append(
-                {
-                    "central_token": central_tokens[0],
-                    "logfile": central_log,
-                    "yaml_file": str(yaml_file),
-                }
-            )
-            # Extract every central_token
-            # for token in central_tokens:
-            #     configs_by_log[central_log].append({
-            #         'central_token': token,
-            #         'logfile': central_log,
-            #         'yaml_file': str(yaml_file),
-            #     })
+            for token in central_tokens:
+                configs_by_log[central_log].append(
+                    {
+                        "central_token": token,
+                        "logfile": central_log,
+                        "yaml_file": str(yaml_file),
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Failed to load {yaml_file.name}: {e}")
@@ -143,50 +183,29 @@ def load_yaml_configs(config_dir: Path) -> Dict[str, List[Dict[str, str]]]:
     return dict(configs_by_log)
 
 
-def preprocess_from_yaml_configs(
-    config_dir: Path,
-    cache_location: str,
-    data_dirs: Dict[str, str],
-    env_name: str = "nuplan_test",
-    rebuild_cache: bool = True,
-    rebuild_maps: bool = False,
-    num_workers: int = 1,
-    desired_dt: float = 0.5,
-    num_timesteps_before: int = 30,
-    num_timesteps_after: int = 80,
-    verbose: bool = True,
-) -> bool:
-    """
-    Batch preprocess data based on YAML configuration files.
-
-    This function reads YAML config files containing central_log and central_tokens,
-    and processes only those specific scenes. This is useful for processing
-    specific scenarios without loading the entire dataset.
+def process_nuplan_yaml_configs(
+    dataset_name: str, extra_params: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Process NuPlan YAML configuration files into central_tokens_config format.
 
     Args:
-        config_dir: Directory containing YAML configuration files.
-        cache_location: Path to cache directory.
-        data_dirs: Dictionary of dataset name to data directory paths.
-        env_name: Environment name (e.g., "nuplan_test").
-        rebuild_cache: Whether to rebuild cache.
-        rebuild_maps: Whether to rebuild maps.
-        num_workers: Number of worker processes.
-        desired_dt: Desired timestep duration in seconds.
-        num_timesteps_before: Number of timesteps before the central token.
-        num_timesteps_after: Number of timesteps after the central token.
-        verbose: Whether to show verbose logs.
+        dataset_name: Name of the NuPlan dataset (e.g., 'nuplan_mini', 'nuplan_test')
+        extra_params: Dictionary containing 'config_dir' and optional timestep parameters
 
     Returns:
-        True if successful, False otherwise.
+        Processed dataset kwargs with central_tokens_config, or None if no configs found
     """
-    # Load all YAML configs
+    logger.info(f"Processing NuPlan YAML configs for {dataset_name}")
+    config_dir = Path(extra_params["config_dir"])
+
+    # Load YAML configs
     configs_by_log = load_yaml_configs(config_dir)
 
     if not configs_by_log:
-        logger.error("No valid YAML configuration files found.")
-        return False
+        logger.warning(f"No valid YAML configs found in {config_dir}")
+        return None
 
-    # Merge all configs into a single central_tokens_config list
+    # Build central_tokens_config list
     all_central_tokens_config: List[Dict[str, Any]] = []
     for _, configs in configs_by_log.items():
         for cfg in configs:
@@ -194,122 +213,72 @@ def preprocess_from_yaml_configs(
                 {
                     "central_token": cfg["central_token"],
                     "logfile": cfg["logfile"],
-                    "num_timesteps_before": num_timesteps_before,
-                    "num_timesteps_after": num_timesteps_after,
                 }
             )
 
-    logger.info(f"Total {len(all_central_tokens_config)} central tokens to process")
+    logger.info(f"  Found {len(all_central_tokens_config)} central tokens")
 
-    try:
-        # Create cache directory
-        Path(cache_location).mkdir(parents=True, exist_ok=True)
-
-        # Create UnifiedDataset (this triggers cache building)
-        logger.info("Creating UnifiedDataset with YAML configs...")
-        start_time = time.perf_counter()
-
-        dataset = UnifiedDataset(
-            dataset_kwargs={
-                "central_tokens_config": all_central_tokens_config,
-                "num_timesteps_before": num_timesteps_before,
-                "num_timesteps_after": num_timesteps_after,
-            },
-            desired_data=[env_name],
-            cache_location=cache_location,
-            rebuild_cache=rebuild_cache,
-            rebuild_maps=rebuild_maps,
-            require_map_cache=False,
-            num_workers=num_workers,
-            desired_dt=desired_dt,
-            verbose=verbose,
-            data_dirs=data_dirs,
-        )
-
-        elapsed = time.perf_counter() - start_time
-
-        # Get both scene index count and total dataset length
-        num_scenes = dataset.num_scenes()
-        logger.info("=" * 80)
-        logger.info("Preprocessing completed!")
-        logger.info(f"  Num Scenes: {num_scenes}")
-        logger.info(f"  Time elapsed: {elapsed:.2f} seconds")
-        logger.info("=" * 80)
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Error during preprocessing: {e}")
-        if verbose:
-            import traceback
-
-            traceback.print_exc()
-        return False
+    # Return processed config
+    return {
+        "central_tokens_config": all_central_tokens_config,
+        "num_timesteps_before": extra_params.get("num_timesteps_before", 30),
+        "num_timesteps_after": extra_params.get("num_timesteps_after", 80),
+    }
 
 
-def preprocess_basic(
-    desired_data: List[str],
-    data_dirs: Dict[str, str],
-    cache_location: str,
-    rebuild_cache: bool = False,
-    rebuild_maps: bool = False,
-    incl_vector_map: bool = True,
-    desired_dt: float = 0.1,
-    num_workers: int = 1,
-    verbose: bool = True,
-    list_scenes: bool = False,
-    smooth_trajectories: bool = True,
-) -> bool:
-    """
-    Basic preprocessing - build trajdata cache for all scenes.
+def preprocess_basic(config: Any, verbose: bool = True) -> bool:
+    """Basic preprocessing - build trajdata cache for all scenes.
 
     Args:
-        desired_data: List of dataset names to load.
-        data_dirs: Dict mapping dataset names to their data directories.
-        cache_location: Path to trajdata cache directory.
-        rebuild_cache: Whether to force rebuild cache.
-        rebuild_maps: Whether to rebuild map cache.
-        incl_vector_map: Whether to include vector maps.
-        desired_dt: Desired time delta between frames in seconds.
-        num_workers: Number of workers for data loading.
-        verbose: Whether to show verbose output.
-        list_scenes: Whether to list all available scenes after preparation.
+        config: Configuration (supports both PrepareDataConfig from CLI and
+                DataSourceConfig from user config).
+        verbose: Whether to show verbose output from trajdata.
 
     Returns:
         True if successful, False otherwise.
     """
-    # Convert config to flat params for UnifiedDataset
+    params = config.to_trajdata_params()
 
     logger.info("Data source configuration:")
-    logger.info(f"  desired_data: {desired_data}")
-    logger.info(f"  data_dirs: {data_dirs}")
-    logger.info(f"  cache_location: {cache_location}")
-    logger.info(f"  rebuild_cache: {rebuild_cache}")
-    logger.info(f"  desired_dt: {desired_dt}")
-    logger.info(f"  smooth_trajectories: {smooth_trajectories}")
+    logger.info(f"  cache_location: {params['cache_location']}")
+    logger.info(f"  desired_dt: {params['desired_dt']}")
+    logger.info(f"  rebuild_cache: {params['rebuild_cache']}")
+    logger.info(f"  rebuild_maps: {params['rebuild_maps']}")
+    logger.info(f"  desired_data: {params['desired_data']}")
+    logger.info(f"  data_dirs: {params['data_dirs']}")
+
+    # Process NuPlan-specific YAML configs if present
+    dataset_kwargs = params.get("dataset_kwargs", {})
+    if dataset_kwargs:
+        for dataset_name, extra_params in dataset_kwargs.items():
+            # Check if this is a NuPlan dataset (nuplan, nuplan_mini, nuplan_test, etc.)
+            if "nuplan" in dataset_name.lower() and "config_dir" in extra_params:
+                processed_config = process_nuplan_yaml_configs(
+                    dataset_name, extra_params
+                )
+                if processed_config:
+                    dataset_kwargs[dataset_name] = processed_config
 
     # Create cache directory
-    cache_path = Path(cache_location)
+    cache_path = Path(params["cache_location"])
     cache_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Cache directory: {cache_path}")
 
     # Build UnifiedDataset (this triggers cache building)
-    logger.info("Creating UnifiedDataset (this may take a while)...")
+    logger.info("Creating UnifiedDataset...")
     start_time = time.perf_counter()
 
     try:
         dataset = UnifiedDataset(
-            desired_data=desired_data,
-            data_dirs=data_dirs,
-            cache_location=cache_location,
-            incl_vector_map=incl_vector_map,
-            rebuild_cache=rebuild_cache,
-            rebuild_maps=rebuild_maps,
-            # require_map_cache=False,
-            desired_dt=desired_dt,
-            num_workers=num_workers,
+            desired_data=params["desired_data"],
+            data_dirs=params["data_dirs"],
+            cache_location=params["cache_location"],
+            incl_vector_map=params["incl_vector_map"],
+            rebuild_cache=params["rebuild_cache"],
+            rebuild_maps=params["rebuild_maps"],
+            desired_dt=params["desired_dt"],
+            num_workers=params["num_workers"],
+            dataset_kwargs=dataset_kwargs,
             verbose=verbose,
-            dataset_kwargs={"smooth_trajectories": smooth_trajectories},
         )
     except Exception as e:
         logger.error(f"Failed to create UnifiedDataset: {e}")
@@ -321,23 +290,9 @@ def preprocess_basic(
     elapsed = time.perf_counter() - start_time
     logger.info(f"UnifiedDataset created in {elapsed:.2f} seconds")
 
-    # Get both scene index count and total dataset length
+    # Get scene count
     num_scenes = dataset.num_scenes()
     logger.info(f"Scene files (logs): {num_scenes}")
-
-    # List scenes if requested
-    if list_scenes and num_scenes > 0:
-        logger.info("Available scenes:")
-        max_display = min(num_scenes, 100)
-        for i in range(max_display):
-            try:
-                scene = dataset.get_scene(i)
-                logger.info(f"  [{i}] {scene.name}")
-            except Exception as e:
-                logger.warning(f"  [{i}] (failed to load: {e})")
-
-        if num_scenes > 100:
-            logger.info(f"  ... and {num_scenes - 100} more scenes")
 
     logger.info("Data preparation complete!")
     return True
@@ -346,7 +301,12 @@ def preprocess_basic(
 def create_arg_parser() -> argparse.ArgumentParser:
     """Create argument parser for prepare_data CLI."""
     parser = argparse.ArgumentParser(
-        description="Prepare scene data and build trajdata cache for alpasim simulations.",
+        description=(
+            "Prepare scene data and build trajdata cache for alpasim simulations.\n\n"
+            "Two modes:\n"
+            "  1. User config (--user-config): Complex scenarios with full YAML config\n"
+            "  2. CLI mode (--desired-data + --data-dir): Simple, direct preprocessing"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -409,41 +369,9 @@ def create_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exclude vector maps (default: include)",
     )
-    preprocess_group.add_argument(
-        "--smooth-trajectories",
-        type=str,
-        choices=["true", "false", "True", "False"],
-        default=None,
-        help="Enable/disable cubic spline smoothing for trajectories (default: True)",
-    )
-
-    # YAML config mode options (NuPlan specific)
-    yaml_group = parser.add_argument_group("YAML Config Mode (NuPlan)")
-    yaml_group.add_argument(
-        "--num-timesteps-before",
-        type=int,
-        default=30,
-        help="Number of timesteps before central token (default: 30)",
-    )
-    yaml_group.add_argument(
-        "--num-timesteps-after",
-        type=int,
-        default=80,
-        help="Number of timesteps after central token (default: 80)",
-    )
 
     # Output options
     output_group = parser.add_argument_group("Output Options")
-    output_group.add_argument(
-        "--validate-only",
-        action="store_true",
-        help="Only validate configuration without building cache",
-    )
-    output_group.add_argument(
-        "--list-scenes",
-        action="store_true",
-        help="List all available scenes after preparation",
-    )
     output_group.add_argument(
         "--log-level",
         type=str,
@@ -453,57 +381,29 @@ def create_arg_parser() -> argparse.ArgumentParser:
     )
     output_group.add_argument(
         "--verbose",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Show verbose output (default: True)",
-    )
-    output_group.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress verbose output",
+        help="Show verbose output (default: enabled)",
     )
 
     return parser
 
 
-def load_config_from_file(config_path: str) -> Dict[str, Any]:
-    """Load data source configuration from user config file."""
-    from alpasim_runtime.config import UserSimulatorConfig, typed_parse_config
-
-    user_config = typed_parse_config(config_path, UserSimulatorConfig)
-
-    if user_config.data_source is None:
-        raise ValueError(
-            f"No data_source configuration found in {config_path}. "
-            "Please add a 'data_source' section to your user config."
-        )
-
-    ds = user_config.data_source
-    return {
-        "desired_data": ds.desired_data,
-        "data_dirs": ds.data_dirs,
-        "cache_location": ds.cache_location,
-        "config_dir": ds.config_dir,
-        "incl_vector_map": ds.incl_vector_map,
-        "rebuild_cache": ds.rebuild_cache,
-        "rebuild_maps": ds.rebuild_maps,
-        "desired_dt": ds.desired_dt,
-        "num_workers": ds.num_workers,
-        "num_timesteps_before": ds.num_timesteps_before,
-        "num_timesteps_after": ds.num_timesteps_after,
-        "smooth_trajectories": user_config.smooth_trajectories,
-    }
-
-
 def parse_data_dirs(
     data_dirs_args: Optional[List[str]], desired_data: List[str]
 ) -> Dict[str, str]:
-    """
-    Parse data directory arguments into a dict.
+    """Parse data directory arguments into a dict.
 
     Supports two formats:
     - "dataset_name=/path/to/data" - explicit mapping
     - "/path/to/data" - auto-map to desired_data entries in order
+
+    Args:
+        data_dirs_args: List of data directory arguments
+        desired_data: List of dataset names
+
+    Returns:
+        Dictionary mapping dataset names to data directories
     """
     if not data_dirs_args:
         return {}
@@ -520,66 +420,94 @@ def parse_data_dirs(
             if i < len(desired_data):
                 result[desired_data[i]] = arg
             else:
-                # Use as default for remaining datasets
+                # Use as default for remaining datasets (with warning)
                 for ds in desired_data[len(result) :]:
                     if ds not in result:
+                        logger.warning(
+                            f"Dataset '{ds}' has no explicit data_dir, using last provided: '{arg}'"
+                        )
                         result[ds] = arg
 
     return result
 
 
-def run_yaml_batch_preprocessing(
-    config_dir: str,
-    desired_data: List[str],
-    data_dirs: Dict[str, str],
-    cache_location: str,
-    rebuild_cache: bool = False,
-    rebuild_maps: bool = False,
-    num_workers: int = 1,
-    desired_dt: float = 0.5,
-    num_timesteps_before: int = 30,
-    num_timesteps_after: int = 80,
-    verbose: bool = True,
-) -> int:
-    """
-    Execute YAML batch preprocessing mode.
-
-    This is a unified entry point for YAML-based batch preprocessing,
-    whether triggered from user config file or CLI arguments.
+def run_from_user_config(config_path: str, args: argparse.Namespace) -> bool:
+    """Run preprocessing from user config file with minimal CLI overrides.
 
     Args:
-        config_dir: Directory containing YAML scene config files.
-        desired_data: List of dataset names (first one will be used as env_name).
-        data_dirs: Dictionary mapping dataset names to data directories.
-        cache_location: Path to cache directory.
-        rebuild_cache: Whether to rebuild cache.
-        rebuild_maps: Whether to rebuild maps.
-        num_workers: Number of worker processes.
-        desired_dt: Desired timestep duration in seconds.
-        num_timesteps_before: Number of timesteps before central token.
-        num_timesteps_after: Number of timesteps after central token.
-        verbose: Whether to show verbose output.
+        config_path: Path to user config YAML file
+        args: Parsed command line arguments (used only for overrides)
 
     Returns:
-        Exit code (0 for success, 1 for failure).
+        True if successful, False otherwise
     """
-    logger.info("Using YAML config batch preprocessing mode")
+    logger.info(f"Loading configuration from: {config_path}")
+    user_config = typed_parse_config(config_path, UserSimulatorConfig)
+    user_config = OmegaConf.to_object(user_config)
 
-    success = preprocess_from_yaml_configs(
-        config_dir=Path(config_dir),
-        cache_location=cache_location,
+    config = user_config.data_source
+
+    # Apply minimal CLI overrides (only top-level flags)
+    if args.rebuild_cache:
+        config.rebuild_cache = True
+        logger.info("CLI override: rebuild_cache=True")
+    if args.rebuild_maps:
+        config.rebuild_maps = True
+        logger.info("CLI override: rebuild_maps=True")
+
+    # Use unified preprocessing (handles both basic and YAML batch mode)
+    return preprocess_basic(config, verbose=args.verbose)
+
+
+def run_from_cli(args: argparse.Namespace) -> bool:
+    """Run preprocessing from CLI arguments directly.
+
+    CLI mode only supports basic preprocessing with uniform parameters applied
+    to all datasets. For dataset-specific parameters (e.g., different
+    smooth_trajectories per dataset) or YAML batch mode, use --user-config.
+
+    Args:
+        args: Parsed command line arguments
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Validate required arguments
+    if not args.desired_data:
+        logger.error("--desired-data is required when not using --user-config")
+        return False
+    if not args.data_dirs:
+        logger.error("--data-dir is required when not using --user-config")
+        return False
+    if not args.cache_location:
+        logger.error("--cache-location is required when not using --user-config")
+        return False
+
+    # Build simple configuration
+    data_dirs = parse_data_dirs(args.data_dirs, args.desired_data)
+
+    # Validate that all datasets have data directories
+    missing = set(args.desired_data) - set(data_dirs.keys())
+    if missing:
+        logger.error(f"Missing data directories for datasets: {missing}")
+        logger.error("Provide --data-dir for each dataset: dataset=/path or in order")
+        return False
+
+    incl_vector_map = not args.no_vector_map
+
+    config = PrepareDataConfig(
+        desired_data=args.desired_data,
         data_dirs=data_dirs,
-        env_name=desired_data[0],  # Use first dataset as environment name
-        rebuild_cache=rebuild_cache,
-        rebuild_maps=rebuild_maps,
-        num_workers=num_workers,
-        desired_dt=desired_dt,
-        num_timesteps_before=num_timesteps_before,
-        num_timesteps_after=num_timesteps_after,
-        verbose=verbose,
+        cache_location=args.cache_location,
+        incl_vector_map=incl_vector_map,
+        rebuild_cache=args.rebuild_cache,
+        rebuild_maps=args.rebuild_maps,
+        desired_dt=args.desired_dt,
+        num_workers=args.num_workers,
     )
 
-    return 0 if success else 1
+    logger.info("Mode: CLI-based basic preprocessing")
+    return preprocess_basic(config, verbose=args.verbose)
 
 
 def main(arg_list: Optional[List[str]] = None) -> int:
@@ -595,102 +523,22 @@ def main(arg_list: Optional[List[str]] = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    verbose = args.verbose and not args.quiet
-
     logger.info("=" * 60)
     logger.info("Alpasim Data Preparation Tool")
     logger.info("=" * 60)
 
-    # Determine mode and load configuration
+    # Route to appropriate mode
     try:
         if args.user_config:
-            logger.info(f"Loading configuration from: {args.user_config}")
-            config = load_config_from_file(args.user_config)
-
-            # Override with command line args if provided
-            if args.rebuild_cache:
-                config["rebuild_cache"] = True
-            if args.rebuild_maps:
-                config["rebuild_maps"] = True
-            if args.smooth_trajectories is not None:
-                smooth_value = args.smooth_trajectories.lower() in ["true", "1", "yes"]
-                config["smooth_trajectories"] = smooth_value
-                logger.info(
-                    f"Command line overrides config: smooth_trajectories={smooth_value}"
-                )
-
-            # Check if user config contains config_dir -> automatically use Mode 2
-            if config.get("config_dir") is not None:
-                logger.info("Detected 'config_dir' in user config")
-                return run_yaml_batch_preprocessing(
-                    config_dir=config["config_dir"],
-                    desired_data=config["desired_data"],
-                    data_dirs=config["data_dirs"],
-                    cache_location=config["cache_location"],
-                    rebuild_cache=config.get("rebuild_cache", False),
-                    rebuild_maps=config.get("rebuild_maps", False),
-                    num_workers=config.get("num_workers", 8),
-                    desired_dt=config.get("desired_dt", 0.5),
-                    num_timesteps_before=config.get("num_timesteps_before", 30),
-                    num_timesteps_after=config.get("num_timesteps_after", 80),
-                    verbose=verbose,
-                )
-            # Otherwise continue with Mode 1 (basic mode)
-
+            success = run_from_user_config(args.user_config, args)
         else:
-            if not args.desired_data:
-                logger.error("Either --user-config, or --desired-data must be provided")
-                return 1
-            if not args.data_dirs:
-                logger.error("--data-dir is required when not using --user-config")
-                return 1
-            if not args.cache_location:
-                logger.error(
-                    "--cache-location is required when not using --user-config"
-                )
-                return 1
-
-            data_dirs = parse_data_dirs(args.data_dirs, args.desired_data)
-            incl_vector_map = not args.no_vector_map
-
-            if args.smooth_trajectories is not None:
-                smooth_value = args.smooth_trajectories.lower() in ["true", "1", "yes"]
-            else:
-                smooth_value = True
-
-            config = {
-                "desired_data": args.desired_data,
-                "data_dirs": data_dirs,
-                "cache_location": args.cache_location,
-                "incl_vector_map": incl_vector_map,
-                "rebuild_cache": args.rebuild_cache,
-                "rebuild_maps": args.rebuild_maps,
-                "desired_dt": args.desired_dt,
-                "num_workers": args.num_workers,
-                "smooth_trajectories": smooth_value,
-            }
-
+            success = run_from_cli(args)
     except Exception as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error(f"Error during preprocessing: {e}")
         import traceback
 
         traceback.print_exc()
         return 1
-
-    # Run basic preprocessing
-    success = preprocess_basic(
-        desired_data=config["desired_data"],
-        data_dirs=config["data_dirs"],
-        cache_location=config["cache_location"],
-        rebuild_cache=config.get("rebuild_cache", False),
-        rebuild_maps=config.get("rebuild_maps", False),
-        incl_vector_map=config.get("incl_vector_map", True),
-        desired_dt=config.get("desired_dt", 0.1),
-        num_workers=config.get("num_workers", 8),
-        verbose=verbose,
-        list_scenes=args.list_scenes,
-        smooth_trajectories=config.get("smooth_trajectories", True),
-    )
 
     return 0 if success else 1
 
