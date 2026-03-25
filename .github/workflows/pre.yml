@@ -259,6 +259,23 @@ jobs:
           fi
           chmod -R u+rwX "${GITHUB_WORKSPACE}" || true
 
+      - name: Ensure git-lfs is available for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v git-lfs >/dev/null 2>&1; then
+            git-lfs version
+            exit 0
+          fi
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git-lfs
+          else
+            apt-get update
+            apt-get install -y git-lfs
+          fi
+          git-lfs version
+
       - name: Checkout
         uses: actions/checkout@v4
 
