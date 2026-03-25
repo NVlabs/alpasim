@@ -1,0 +1,536 @@
+name: Test Stage
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      enable_infra_tests:
+        description: "Enable infra-coupled tests (docker/gpu/fake_lustre)"
+        required: false
+        default: "false"
+      enable_slurm_tests:
+        description: "Enable SLURM smoke tests"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  test-services-native:
+    name: test-native-${{ matrix.service }}
+    runs-on: [self-hosted, type/docker]
+    container:
+      image: ubuntu:22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [grpc, runtime, wizard, tools, eval, utils]
+    steps:
+      - name: Install git for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y git git-lfs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark checkout as safe for git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Install test dependencies in job container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python3-pip git-lfs
+          python3 -m pip install --upgrade pip setuptools wheel uv
+          git lfs pull --include="src/${{ matrix.service }}/tests/**/*" || true
+
+      - name: Compile gRPC protos
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src/grpc
+          uv sync
+          uv run compile-protos
+
+      - name: Run ${{ matrix.service }} tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "src/${{ matrix.service }}"
+          uv sync --all-extras
+
+          set +e
+          uv run --all-extras pytest -vvs --tb=short
+          status=$?
+          set -e
+
+          if [[ $status -eq 5 ]]; then
+            echo "No tests collected for ${{ matrix.service }}; treating as success."
+            exit 0
+          fi
+
+          exit $status
+
+  # Equivalent to GitLab test-services-in-docker.
+  # Runs automatically on PR/push. On manual runs, can be disabled via input.
+  test-services-in-docker:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
+    name: test-docker-${{ matrix.service }}
+    runs-on: [self-hosted, type/docker, type/gpu]
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --gpus all
+        -v /var/run/docker.sock:/var/run/docker.sock
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [physics, controller, driver]
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Install git for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y git git-lfs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark checkout as safe for git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+
+      - name: Install dependencies in job container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Compute source/image
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          CHANGED_FILES="$(bash ./.github/scripts/changed-files.sh "${{ github.event_name }}" "${BASE_SHA}" "${HEAD_SHA}")"
+
+          SOURCE="stable"
+          if echo "${CHANGED_FILES}" | grep -Eq "^src/${SERVICE}/"; then
+            SOURCE="build"
+          fi
+
+          SHORT_SHA="$(echo "${{ github.sha }}" | cut -c1-8)"
+          TAG="pr-${SHORT_SHA}"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "${DEFAULT_BRANCH}" ]]; then
+            TAG="release-${SHORT_SHA}"
+          fi
+          IMAGE="alpasim-${SERVICE}:${TAG}"
+
+          echo "source=${SOURCE}" >> "${GITHUB_OUTPUT}"
+          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip non-build sources
+        if: steps.plan.outputs.source != 'build'
+        run: |
+          echo "Skipping ${{ matrix.service }} (source=${{ steps.plan.outputs.source }})"
+
+      - name: Build service image
+        if: steps.plan.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          IMAGE="${{ steps.plan.outputs.image }}"
+          LOG_DIR="${GITHUB_WORKSPACE}/wizard_logs"
+
+          git lfs pull --include="src/**/*" || true
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
+
+          cd "${GITHUB_WORKSPACE}"
+          docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
+
+      - name: Run tests in docker container
+        if: steps.plan.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          IMAGE="${{ steps.plan.outputs.image }}"
+          PYTEST_OPTS="-vvs --tb=short"
+
+          set +e
+          docker run --rm --gpus all --entrypoint bash "${IMAGE}" -c \
+            "cd /repo/src/${SERVICE} && uv sync --all-extras && uv run pytest ${PYTEST_OPTS}"
+          status=$?
+          set -e
+
+          if [[ $status -eq 5 ]]; then
+            echo "No tests collected for ${SERVICE}; treating as success."
+            exit 0
+          fi
+          exit $status
+
+  # Equivalent to GitLab test-docker-compose (requires storage/fake_lustre).
+  # This must run only on runners that provide the fake lustre mount.
+  test-docker-compose:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
+    name: test-docker-compose-${{ matrix.variant }}
+    runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
+    timeout-minutes: 120
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --gpus all
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /raid/fake_lustre:/lustre
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [docker_oss]
+    env:
+      OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
+      LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Install git for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y git git-lfs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies in job container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Verify Hugging Face token is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is not available in this workflow context."
+            echo "If this is a trusted branch in the main repo, verify repo/org secret configuration."
+            echo "If this is an untrusted context (e.g. fork), GitHub will not expose secrets."
+            exit 1
+          fi
+
+      - name: Validate fake_lustre mount
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /lustre
+          docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
+
+      - name: Generate and validate docker compose config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "${LOCAL_OUTPUT_PATH}" \
+            "${LOCAL_OUTPUT_PATH}/data" \
+            "${LOCAL_OUTPUT_PATH}/data/drivers" \
+            "${LOCAL_OUTPUT_PATH}/data/alpackages" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
+            "${LOCAL_OUTPUT_PATH}/data/trafficsim/unified_data_cache" \
+            "${LOCAL_OUTPUT_PATH}/data/huggingface" \
+            "${LOCAL_OUTPUT_PATH}/src" \
+            "${LOCAL_OUTPUT_PATH}/plugins"
+
+          # Match local smoke setup: ensure VaVAM assets exist for OSS driver.
+          bash "${GITHUB_WORKSPACE}/data/download_vavam_assets.sh" --model VaVAM-B
+
+          if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/src" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/src/." "${LOCAL_OUTPUT_PATH}/src/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
+          fi
+
+          # Compose mounts the copied src tree; generate grpc python files there.
+          cd "${LOCAL_OUTPUT_PATH}/src/grpc"
+          uv sync
+          uv run compile-protos
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
+          HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
+            +deploy=local \
+            wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
+            wizard.run_method=NONE \
+            defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            services.driver.workdir=/repo/src/driver \
+            services.physics.workdir=/repo/src/physics \
+            services.runtime.workdir=/repo/src/runtime \
+            services.controller.workdir=/repo/src/controller \
+            services.sensorsim.gpus=[0] \
+            services.physics.gpus=[0] \
+            services.driver.gpus=[0]
+
+          test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+
+          # In Docker-socket mode, compose mounts must use host-visible paths.
+          REPO_ROOT_SRC="$(realpath "${GITHUB_WORKSPACE}/src")"
+          sed -i "s|${LOCAL_OUTPUT_PATH}|${OUTPUT_PATH}|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          sed -i "s|${REPO_ROOT_SRC}|${OUTPUT_PATH}/src|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            REPO_ROOT_PLUGINS="$(realpath "${GITHUB_WORKSPACE}/plugins")"
+            sed -i "s|${REPO_ROOT_PLUGINS}|${OUTPUT_PATH}/plugins|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          fi
+
+          docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+          echo "docker compose configuration validated for ${{ matrix.variant }}"
+
+      - name: Run docker compose integration stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
+          echo "Using compose project: ${PROJECT}"
+          cd "${LOCAL_OUTPUT_PATH}"
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --build --abort-on-container-failure --remove-orphans
+
+      - name: Collect compose logs and tear down
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
+          LOG_DIR="${LOCAL_OUTPUT_PATH}/txt-logs"
+          mkdir -p "${LOG_DIR}"
+          cd "${LOCAL_OUTPUT_PATH}" || exit 0
+
+          services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          for service in ${services}; do
+            docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+          done
+
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
+
+  # Tutorial smoke test (OSS only): generate tutorial-style compose and run core sim services.
+  test-tutorial-smoke:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
+    name: test-tutorial-smoke
+    runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
+    timeout-minutes: 120
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --gpus all
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /raid/fake_lustre:/lustre
+    env:
+      OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}-tutorial
+      LOCAL_OUTPUT_PATH: /lustre/output/${{ github.run_id }}-${{ github.run_attempt }}-tutorial
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Install git for checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y git git-lfs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies in job container
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y python3 python3-pip git-lfs ca-certificates curl gnupg
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          chmod a+r /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+          docker compose version
+          python3 -m pip install --upgrade pip setuptools wheel uv
+
+      - name: Verify Hugging Face token is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "HF_TOKEN is not available in this workflow context."
+            exit 1
+          fi
+
+      - name: Validate fake_lustre mount
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d /lustre
+          docker run --rm -v /lustre:/lustre alpine sh -c 'test -d /lustre && echo fake_lustre_mount_ok'
+
+      - name: Generate tutorial compose config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "${LOCAL_OUTPUT_PATH}" \
+            "${LOCAL_OUTPUT_PATH}/data/drivers" \
+            "${LOCAL_OUTPUT_PATH}/data/alpackages" \
+            "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
+            "${LOCAL_OUTPUT_PATH}/data/trafficsim/unified_data_cache" \
+            "${LOCAL_OUTPUT_PATH}/data/huggingface" \
+            "${LOCAL_OUTPUT_PATH}/src" \
+            "${LOCAL_OUTPUT_PATH}/plugins"
+
+          # Match local smoke setup: ensure VaVAM assets exist for OSS driver.
+          bash "${GITHUB_WORKSPACE}/data/download_vavam_assets.sh" --model VaVAM-B
+
+          if [[ -d "${GITHUB_WORKSPACE}/data/drivers" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/drivers/." "${LOCAL_OUTPUT_PATH}/data/drivers/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/data/nre-artifacts/ego-hoods" "${LOCAL_OUTPUT_PATH}/data/nre-artifacts/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/src" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/src/." "${LOCAL_OUTPUT_PATH}/src/" || true
+          fi
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            cp -r "${GITHUB_WORKSPACE}/plugins/." "${LOCAL_OUTPUT_PATH}/plugins/" || true
+          fi
+
+          # Compose mounts the copied src tree; generate grpc python files there.
+          cd "${LOCAL_OUTPUT_PATH}/src/grpc"
+          uv sync
+          uv run compile-protos
+
+          cd "${GITHUB_WORKSPACE}/src/wizard"
+          uv sync
+          HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
+            +deploy=local \
+            wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
+            wizard.run_method=NONE \
+            defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            services.driver.workdir=/repo/src/driver \
+            services.physics.workdir=/repo/src/physics \
+            services.runtime.workdir=/repo/src/runtime \
+            services.controller.workdir=/repo/src/controller \
+            runtime.simulation_config.n_rollouts=1 \
+            runtime.simulation_config.n_sim_steps=60
+
+          test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          test -f "${LOCAL_OUTPUT_PATH}/generated-user-config-0.yaml"
+
+          REPO_ROOT_SRC="$(realpath "${GITHUB_WORKSPACE}/src")"
+          sed -i "s|${LOCAL_OUTPUT_PATH}|${OUTPUT_PATH}|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          sed -i "s|${REPO_ROOT_SRC}|${OUTPUT_PATH}/src|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          if [[ -d "${GITHUB_WORKSPACE}/plugins" ]]; then
+            REPO_ROOT_PLUGINS="$(realpath "${GITHUB_WORKSPACE}/plugins")"
+            sed -i "s|${REPO_ROOT_PLUGINS}|${OUTPUT_PATH}/plugins|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
+          fi
+
+          docker compose -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml" config >/dev/null
+
+      - name: Run tutorial compose stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cd "${LOCAL_OUTPUT_PATH}"
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
+
+      - name: Collect tutorial logs and tear down
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          LOG_DIR="${LOCAL_OUTPUT_PATH}/txt-logs"
+          mkdir -p "${LOG_DIR}"
+          cd "${LOCAL_OUTPUT_PATH}" || exit 0
+          services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
+          for service in ${services}; do
+            docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
+          done
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
+
+  # Equivalent to GitLab test-slurm.
+  # Explicitly disabled for now due SLURM infra dependency.
+  test-slurm:
+    if: ${{ false }}
+    name: test-slurm-${{ matrix.variant }}
+    runs-on: [self-hosted, slurm]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [slurm_internal, slurm_oss]
+    steps:
+      - run: echo "SLURM tests are not yet migrated. Add run-test-slurm equivalent next."
