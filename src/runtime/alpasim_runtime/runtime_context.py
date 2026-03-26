@@ -20,6 +20,7 @@ from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
+from omegaconf import OmegaConf
 from trajdata.dataset import UnifiedDataset
 
 from eval.schema import EvalConfig
@@ -190,8 +191,7 @@ async def build_runtime_context(
 
     # Create UnifiedDataset and build scene_id to data source mapping
     logger.info("Creating UnifiedDataset from config")
-
-    data_source_config = config.user.data_source
+    data_source_config = OmegaConf.to_object(config.user.data_source)
     trajdata_params = data_source_config.to_trajdata_params()
     dataset = UnifiedDataset(**trajdata_params)
     logger.info(

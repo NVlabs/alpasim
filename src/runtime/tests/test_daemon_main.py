@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from alpasim_grpc.v0 import common_pb2, runtime_pb2
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
-from alpasim_runtime.daemon.engine import UnknownSceneError
+from alpasim_runtime.daemon.exceptions import UnknownSceneError
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
 from alpasim_runtime.simulate.__main__ import _serve, create_arg_parser, run_simulation
 

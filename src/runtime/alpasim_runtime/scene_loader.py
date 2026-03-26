@@ -8,9 +8,10 @@ from __future__ import annotations
 import logging
 
 from alpasim_runtime.config import SimulatorConfig
-from alpasim_runtime.daemon.scheduler import UnknownSceneError
+from alpasim_runtime.daemon.exceptions import UnknownSceneError
 from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.trajdata_data_source import TrajdataDataSource
+from omegaconf import OmegaConf
 from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class SceneLoader:
         _scene_id_to_idx: Mapping from scene IDs to dataset indices
         _config: Simulator configuration for scene parameters
         _cache: Cache of loaded SceneDataSource objects
+        _asset_base_path_map: Mapping from dataset name to asset_base_path
     """
 
     def __init__(
@@ -47,6 +49,19 @@ class SceneLoader:
         self._scene_id_to_idx = scene_id_to_idx
         self._config = config
         self._cache: dict[str, SceneDataSource] = {}
+
+        # Build dataset_name -> asset_base_path mapping
+        self._asset_base_path_map: dict[str, str] = {}
+        data_source_config = OmegaConf.to_object(config.user.data_source)
+        for dataset_name, source in data_source_config.sources.items():
+            if "asset_base_path" in source.extra_params:
+                self._asset_base_path_map[dataset_name] = source.extra_params[
+                    "asset_base_path"
+                ]
+                logger.info(
+                    f"Registered asset_base_path for {dataset_name}: "
+                    f"{source.extra_params['asset_base_path']}"
+                )
 
     def get_data_source(self, scene_id: str) -> SceneDataSource:
         """Get or create a data source for the given scene_id.
@@ -80,10 +95,12 @@ class SceneLoader:
             if scene is None:
                 raise UnknownSceneError(scene_id)
 
-            # Get asset_base_path from USDZ config if available
-            asset_base_path = None
-            if self._config.user.data_source.usdz is not None:
-                asset_base_path = self._config.user.data_source.usdz.asset_base_path
+            # Get asset_base_path for this scene's dataset
+            # Use scene.env_name to lookup the correct asset_base_path
+            asset_base_path = self._asset_base_path_map.get(scene.env_name)
+
+            # Get map_api for lazy loading (lightweight, can be passed to workers)
+            map_api = getattr(self._dataset, "_map_api", None)
 
             # Create scene_cache (pre-create to avoid pickle errors)
             scene_cache = self._dataset.cache_class(
@@ -95,6 +112,7 @@ class SceneLoader:
             data_source = TrajdataDataSource.from_trajdata_scene(
                 scene=scene,
                 dataset=None,  # Don't pass dataset to avoid pickle errors
+                map_api=map_api,  # Pass map_api
                 scene_cache=scene_cache,
                 smooth_trajectories=self._config.user.smooth_trajectories,
                 asset_base_path=asset_base_path,
