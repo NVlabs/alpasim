@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
+from alpasim_runtime.daemon.exceptions import InvalidRequestError
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
 from alpasim_runtime.runtime_context import (
     build_runtime_context,
@@ -98,20 +99,6 @@ def build_simulation_return(
         traffic_version=version_ids.traffic_version,
         rollout_returns=rollout_returns,
     )
-
-
-class InvalidRequestError(ValueError):
-    """Raised when a simulation request contains invalid parameters."""
-
-    pass
-
-
-class UnknownSceneError(InvalidRequestError):
-    """Raised when a simulation request references a scene_id with no known data source."""
-
-    def __init__(self, scene_id: str):
-        super().__init__(f"No data source found for scene_id: {scene_id}")
-        self.scene_id = scene_id
 
 
 def build_pending_jobs_from_request(

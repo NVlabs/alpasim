@@ -7,10 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0 import runtime_pb2
-from alpasim_runtime.daemon.engine import (
-    UnknownSceneError,
-    build_pending_jobs_from_request,
-)
+from alpasim_runtime.daemon.engine import build_pending_jobs_from_request
+from alpasim_runtime.daemon.exceptions import UnknownSceneError
 
 
 def test_adapter_expands_nr_rollouts() -> None:

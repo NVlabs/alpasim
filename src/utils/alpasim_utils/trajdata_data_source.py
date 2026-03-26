@@ -32,29 +32,14 @@ Usage example:
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
 
+import csaps
 import numpy as np
-from scipy.spatial.transform import Rotation as R
-
-try:
-    from trajdata import AgentBatch
-    from trajdata.caching import EnvCache
-    from trajdata.data_structures.agent import AgentMetadata
-    from trajdata.data_structures.scene_metadata import Scene
-    from trajdata.dataset import UnifiedDataset
-    from trajdata.maps import VectorMap
-except ImportError:
-    AgentBatch = None
-    Scene = None
-    UnifiedDataset = None
-    EnvCache = None
-    AgentMetadata = None
-    VectorMap = None
-
 from alpasim_utils.artifact import Metadata
 from alpasim_utils.geometry import Trajectory
 from alpasim_utils.scenario import (
@@ -66,6 +51,12 @@ from alpasim_utils.scenario import (
     VehicleConfig,
 )
 from alpasim_utils.scene_data_source import SceneDataSource
+from scipy.spatial.transform import Rotation as R
+from trajdata.caching import EnvCache
+from trajdata.data_structures.agent import AgentMetadata
+from trajdata.data_structures.scene_metadata import Scene
+from trajdata.dataset import UnifiedDataset
+from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +68,22 @@ class TrajdataDataSource(SceneDataSource):
 
     This class implements the SceneDataSource protocol, allowing direct loading
     from trajdata Scene or AgentBatch objects without requiring USDZ format.
+
+    Property loading order dependencies:
+    - rig: No dependencies (loads first, sets world_to_nre transformation)
+    - traffic_objects: Requires rig (uses world_to_nre for coordinate conversion)
+    - map: Requires rig (uses world_to_nre for coordinate conversion)
+    - metadata: Requires rig (uses trajectory time range)
+
+    All properties use lazy loading and caching for efficiency.
     """
 
     _scene: Scene | None = None
     _scene_cache: EnvCache | None = None
     _dataset: UnifiedDataset | None = None
+    _map_api: Optional[object] = (
+        None  # MapAPI for loading maps (lightweight, can be passed separately)
+    )
     _rig: Rig | None = None
     _traffic_objects: TrafficObjects | None = None
     _map: VectorMap | None = None
@@ -95,6 +97,7 @@ class TrajdataDataSource(SceneDataSource):
         cls,
         scene: Scene,
         dataset: Optional[UnifiedDataset] = None,
+        map_api=None,
         scene_cache: Optional[EnvCache] = None,
         scene_id: Optional[str] = None,
         smooth_trajectories: bool = True,
@@ -107,6 +110,7 @@ class TrajdataDataSource(SceneDataSource):
         Args:
             scene: trajdata Scene object
             dataset: UnifiedDataset instance (for getting scene_cache and map)
+            map_api: MapAPI instance for loading maps (lightweight alternative to dataset)
             scene_cache: Optional EnvCache instance (if not provided, will be created from dataset)
             scene_id: Optional scene ID (if not provided, uses scene.name)
             smooth_trajectories: Whether to smooth trajectories
@@ -116,14 +120,10 @@ class TrajdataDataSource(SceneDataSource):
         Returns:
             TrajdataDataSource instance
         """
-        if Scene is None:
-            raise ImportError(
-                "trajdata is not installed. Please install it to use TrajdataDataSource."
-            )
-
         data_source = cls(
             _scene=scene,
             _dataset=dataset,
+            _map_api=map_api,
             _scene_cache=scene_cache,
             _scene_id=scene_id or scene.name,
             _smooth_trajectories=smooth_trajectories,
@@ -132,59 +132,10 @@ class TrajdataDataSource(SceneDataSource):
         data_source._base_timestamp_us = base_timestamp_us
         return data_source
 
-    @classmethod
-    def from_agent_batch(
-        cls,
-        batch: AgentBatch,
-        scene_id: str,
-        smooth_trajectories: bool = True,
-    ) -> TrajdataDataSource:
-        """
-        Create TrajdataDataSource from trajdata AgentBatch object.
-
-        Note: This method requires the batch to contain complete scene information.
-        It is generally recommended to use from_trajdata_scene instead.
-
-        Args:
-            batch: trajdata AgentBatch object
-            scene_id: Scene ID
-            smooth_trajectories: Whether to smooth trajectories
-
-        Returns:
-            TrajdataDataSource instance
-        """
-        if AgentBatch is None:
-            raise ImportError(
-                "trajdata is not installed. Please install it to use TrajdataDataSource."
-            )
-
-        data_source = cls(scene_id=scene_id)
-        data_source._smooth_trajectories = smooth_trajectories
-        # Extract data from batch
-        data_source._load_from_batch(batch)
-        return data_source
-
-    def _load_from_batch(self, batch: AgentBatch) -> None:
-        """Load data from AgentBatch (internal method)"""
-        # Need to extract data based on batch structure
-        # Specific implementation depends on your trajdata data format
-        raise NotImplementedError(
-            "from_agent_batch needs to be implemented based on your trajdata data format. "
-            "It is recommended to use from_trajdata_scene method instead."
-        )
-
     @property
     def scene_id(self) -> str:
-        """Scene ID"""
-        if self._scene_id:
-            return self._scene_id
-        if self._scene is not None:
-            return self._scene.name
-        raise ValueError("scene_id is not set and cannot be obtained from scene")
-
-    @scene_id.setter
-    def scene_id(self, value: str) -> None:
-        self._scene_id = value
+        """Scene ID (immutable identifier)."""
+        return self._scene_id
 
     @property
     def asset_path(self) -> str | None:
@@ -223,8 +174,8 @@ class TrajdataDataSource(SceneDataSource):
             Asset folder name (defaults to scene_id if no specific name found)
         """
         # Try to get from scene data_access_info
-        if self._scene is not None and hasattr(self._scene, "data_access_info"):
-            data_access_info = self._scene.data_access_info or {}
+        if self._scene is not None and self._scene.data_access_info is not None:
+            data_access_info = self._scene.data_access_info
 
             # USDZ: Use usdz_stem (filename without .usdz extension)
             if "usdz_stem" in data_access_info:
@@ -279,6 +230,47 @@ class TrajdataDataSource(SceneDataSource):
             "or TrajdataDataSource.from_trajdata_scene(scene, scene_cache=your_cache)"
         )
 
+    @staticmethod
+    def _get_state_value(state, attr_name: str, default=None):
+        """Extract scalar value from state attribute using StateArray.get_attr().
+
+        Args:
+            state: StateArray object from trajdata cache (from get_raw_state)
+            attr_name: Name of attribute to extract (e.g., "x", "y", "h")
+            default: Default value if attribute doesn't exist
+
+        Returns:
+            Scalar float value
+
+        Raises:
+            AttributeError: If attribute doesn't exist and no default provided
+        """
+        try:
+            value = state.get_attr(attr_name)
+
+            if value is None:
+                if default is not None:
+                    return default
+                raise AttributeError(f"Attribute {attr_name} is None")
+
+            # Convert to scalar if needed
+            if isinstance(value, np.ndarray):
+                return float(value.flat[0])
+            return float(value)
+        except (KeyError, AttributeError, TypeError, IndexError) as e:
+            if default is not None:
+                return default
+            raise AttributeError(f"Failed to get {attr_name} from state: {e}")
+
+    def _ensure_rig_loaded(self) -> None:
+        """Ensure rig is loaded before accessing world_to_nre.
+
+        This method is called by properties that depend on world_to_nre
+        transformation (traffic_objects, map helper methods).
+        """
+        if self._rig is None:
+            _ = self.rig
+
     def _extract_agent_trajectory(
         self,
         agent: AgentMetadata,
@@ -301,33 +293,11 @@ class TrajdataDataSource(SceneDataSource):
                 try:
                     state = scene_cache.get_raw_state(agent.name, ts)
 
-                    # Get position and orientation
-                    x = state.get_attr("x") if hasattr(state, "get_attr") else state.x
-                    y = state.get_attr("y") if hasattr(state, "get_attr") else state.y
-                    z = (
-                        state.get_attr("z")
-                        if hasattr(state, "get_attr")
-                        else (state.z if hasattr(state, "z") else 0.0)
-                    )
-                    heading = (
-                        state.get_attr("h") if hasattr(state, "get_attr") else state.h
-                    )
-
-                    # Convert to numpy array (handle scalar case)
-                    if isinstance(x, (int, float)):
-                        x = np.array([x])
-                    if isinstance(y, (int, float)):
-                        y = np.array([y])
-                    if isinstance(z, (int, float)):
-                        z = np.array([z])
-                    if isinstance(heading, (int, float)):
-                        heading = np.array([heading])
-
-                    # Take first element (if array)
-                    x_val = float(x[0] if x.ndim > 0 else x)
-                    y_val = float(y[0] if y.ndim > 0 else y)
-                    z_val = float(z[0] if z.ndim > 0 else z)
-                    heading_val = float(heading[0] if heading.ndim > 0 else heading)
+                    # Get position and orientation using helper
+                    x_val = self._get_state_value(state, "x")
+                    y_val = self._get_state_value(state, "y")
+                    z_val = self._get_state_value(state, "z", default=0.0)
+                    heading_val = self._get_state_value(state, "h")
 
                     # Calculate timestamp
                     if base_timestamp_us is None:
@@ -359,16 +329,14 @@ class TrajdataDataSource(SceneDataSource):
             )
 
             # Create VehicleConfig (extract from extent)
-            vehicle_config = None
-            if hasattr(agent.extent, "length"):
-                vehicle_config = VehicleConfig(
-                    aabb_x_m=agent.extent.length,
-                    aabb_y_m=agent.extent.width,
-                    aabb_z_m=agent.extent.height,
-                    aabb_x_offset_m=-agent.extent.length / 2,
-                    aabb_y_offset_m=0.0,
-                    aabb_z_offset_m=-agent.extent.height / 2,
-                )
+            vehicle_config = VehicleConfig(
+                aabb_x_m=agent.extent.length,
+                aabb_y_m=agent.extent.width,
+                aabb_z_m=agent.extent.height,
+                aabb_x_offset_m=-agent.extent.length / 2,
+                aabb_y_offset_m=0.0,
+                aabb_z_offset_m=-agent.extent.height / 2,
+            )
 
             return trajectory, vehicle_config
 
@@ -468,12 +436,9 @@ class TrajdataDataSource(SceneDataSource):
             return camera_ids, camera_calibrations
 
         # Check if sensor_calibration information exists
-        if (
-            not hasattr(self._scene, "data_access_info")
-            or not self._scene.data_access_info
-        ):
+        if not self._scene.data_access_info:
             logger.warning(
-                "scene.data_access_info does not exist, skipping camera information extraction"
+                "scene.data_access_info is empty, skipping camera information extraction"
             )
             return camera_ids, camera_calibrations
 
@@ -569,6 +534,41 @@ class TrajdataDataSource(SceneDataSource):
         avg_velocity = np.mean(velocities)
         return avg_velocity < velocity_threshold
 
+    def _transform_map_points(
+        self,
+        points: np.ndarray,
+        translation_xy: np.ndarray,
+        first_traj_z: float,
+    ) -> np.ndarray:
+        """Transform map points to local coordinates (translation only).
+
+        Args:
+            points: Nx3 array of map points
+            translation_xy: 2-element XY translation
+            first_traj_z: Z coordinate of first trajectory point
+
+        Returns:
+            Transformed points
+        """
+        if (
+            points is None
+            or len(points) == 0
+            or points.ndim != 2
+            or points.shape[1] < 3
+        ):
+            return points
+
+        points_copy = points.copy()
+
+        # Apply XY translation
+        points_copy[:, 0] = points_copy[:, 0] + translation_xy[0]
+        points_copy[:, 1] = points_copy[:, 1] + translation_xy[1]
+
+        # Align Z coordinate to trajectory baseline
+        points_copy[:, 2] = points_copy[:, 2] + first_traj_z
+
+        return points_copy
+
     @property
     def traffic_objects(self) -> TrafficObjects:
         """Load and return traffic objects"""
@@ -600,9 +600,8 @@ class TrajdataDataSource(SceneDataSource):
                 continue
 
             # Convert trajectory to local coordinates (NRE) - use rig's world_to_nre
-            if self._rig is None:
-                # If rig is not loaded yet, load it first
-                _ = self.rig
+            # Explicit dependency: need world_to_nre from rig
+            self._ensure_rig_loaded()
 
             world_to_nre = self._rig.world_to_nre
             translation = world_to_nre[:3, 3]
@@ -617,8 +616,6 @@ class TrajdataDataSource(SceneDataSource):
             # Smooth if needed
             if self._smooth_trajectories:
                 try:
-                    import csaps
-
                     css = csaps.CubicSmoothingSpline(
                         trajectory.timestamps_us / 1e6,
                         trajectory.positions.T,
@@ -638,23 +635,19 @@ class TrajdataDataSource(SceneDataSource):
                         positions=filtered_positions.astype(np.float32),
                         quaternions=trajectory.quaternions.copy(),
                     )
-                except ImportError:
-                    logger.warning("csaps not installed, skipping trajectory smoothing")
+                except Exception as e:
+                    logger.warning(f"Failed to smooth trajectory: {e}")
 
             # Get AABB
-            if hasattr(agent.extent, "length"):
-                aabb = AABB(
-                    x=agent.extent.length, y=agent.extent.width, z=agent.extent.height
-                )
-            else:
-                # Default AABB
-                aabb = AABB(x=4.5, y=1.8, z=1.5)
+            aabb = AABB(
+                x=agent.extent.length, y=agent.extent.width, z=agent.extent.height
+            )
 
             # Determine if static object
             is_static = self._is_static_object(trajectory)
 
             # Get category label
-            label_class = agent.type.name if hasattr(agent.type, "name") else "UNKNOWN"
+            label_class = getattr(agent.type, "name", "UNKNOWN")
 
             traffic_dict[agent.name] = TrafficObject(
                 track_id=agent.name,
@@ -667,336 +660,209 @@ class TrajdataDataSource(SceneDataSource):
         self._traffic_objects = TrafficObjects(**traffic_dict)
         return self._traffic_objects
 
+    def _apply_coordinate_transform_to_map(self, vec_map: VectorMap) -> None:
+        """Apply world_to_nre coordinate transformation to map in-place.
+
+        Note: world_to_nre only contains translation (no rotation), as the local
+        coordinate frame maintains the same orientation as the world frame (ENU).
+
+        Args:
+            vec_map: VectorMap to transform
+        """
+        world_to_nre = self._rig.world_to_nre
+        translation = world_to_nre[:3, 3]
+        translation_xy = translation[:2]
+        first_traj_z = (
+            self.rig.trajectory.positions[0][2] if len(self.rig.trajectory) > 0 else 0.0
+        )
+
+        logger.info(
+            f"Map coordinate transformation: "
+            f"translation_xy={translation_xy}, "
+            f"first_traj_z={first_traj_z:.2f}m"
+        )
+
+        # Transform all lane points
+        if vec_map.lanes is None:
+            return
+
+        for lane in vec_map.lanes:
+            # Transform center (always exists)
+            lane.center.points = self._transform_map_points(
+                lane.center.points,
+                translation_xy,
+                first_traj_z,
+            )
+
+            # Transform left_edge (optional)
+            if lane.left_edge is not None and lane.left_edge.points is not None:
+                lane.left_edge.points = self._transform_map_points(
+                    lane.left_edge.points,
+                    translation_xy,
+                    first_traj_z,
+                )
+
+            # Transform right_edge (optional)
+            if lane.right_edge is not None and lane.right_edge.points is not None:
+                lane.right_edge.points = self._transform_map_points(
+                    lane.right_edge.points,
+                    translation_xy,
+                    first_traj_z,
+                )
+
+    def _fix_map_datatypes(self, vec_map: VectorMap) -> None:
+        """Fix lane connectivity data types (convert lists to sets).
+
+        This is needed because some trajdata loaders may incorrectly create
+        these as lists instead of sets.
+
+        Args:
+            vec_map: VectorMap to fix
+        """
+        if vec_map.lanes is None:
+            return
+
+        for lane in vec_map.lanes:
+            # Convert to set if they are lists (defensive, but based on observed issues)
+            if isinstance(lane.next_lanes, list):
+                lane.next_lanes = set(lane.next_lanes)
+            if isinstance(lane.prev_lanes, list):
+                lane.prev_lanes = set(lane.prev_lanes)
+            if isinstance(lane.adj_lanes_right, list):
+                lane.adj_lanes_right = set(lane.adj_lanes_right)
+            if isinstance(lane.adj_lanes_left, list):
+                lane.adj_lanes_left = set(lane.adj_lanes_left)
+
+    def _verify_map_transformation(self, vec_map: VectorMap) -> None:
+        """Verify map coordinate transformation is correct.
+
+        Args:
+            vec_map: Transformed VectorMap
+        """
+        if vec_map.lanes is None or len(vec_map.lanes) == 0:
+            return
+
+        # Get first lane and points (center always exists in RoadLane)
+        first_lane = vec_map.lanes[0]
+        first_map_point = first_lane.center.points[0, :3]
+        first_traj_point = self.rig.trajectory.positions[0]
+
+        distance_xy = np.linalg.norm(first_map_point[:2])
+        z_diff = abs(first_map_point[2] - first_traj_point[2])
+
+        logger.info(
+            f"Map transformation verification: "
+            f"first lane center: {first_map_point}, "
+            f"first trajectory: {first_traj_point}, "
+            f"XY distance: {distance_xy:.2f}m, "
+            f"Z difference: {z_diff:.2f}m"
+        )
+
+        if z_diff > 10.0:
+            logger.warning(
+                f"Map Z coordinate may not be correctly aligned. "
+                f"Map Z={first_map_point[2]:.2f}m, Traj Z={first_traj_point[2]:.2f}m"
+            )
+
+    def _load_map_from_scene_data(self) -> Optional[VectorMap]:
+        """Load map from scene.map_data (USDZ).
+
+        Returns:
+            VectorMap if available, None otherwise
+        """
+        if not hasattr(self._scene, "map_data") or self._scene.map_data is None:
+            return None
+
+        logger.info(f"Loading map from scene.map_data for {self.scene_id}")
+        vec_map = copy.deepcopy(self._scene.map_data)
+
+        # Ensure rig is loaded (need world_to_nre for transformation)
+        self._ensure_rig_loaded()
+
+        # Apply coordinate transformation
+        self._apply_coordinate_transform_to_map(vec_map)
+
+        # Fix datatypes and verify
+        self._fix_map_datatypes(vec_map)
+        self._verify_map_transformation(vec_map)
+
+        logger.info("Successfully loaded map from scene.map_data")
+        return vec_map
+
+    def _load_map_from_dataset_api(self) -> Optional[VectorMap]:
+        """Load map from dataset._map_api (datasets with map API).
+
+        Returns:
+            VectorMap if available, None otherwise
+        """
+        # Try to get map_api from either self._map_api or self._dataset
+        map_api = self._map_api
+        if map_api is None and self._dataset is not None:
+            map_api = getattr(self._dataset, "_map_api", None)
+
+        if map_api is None:
+            logger.warning("Cannot load map: map_api not available")
+            return None
+
+        # Get vector_map_params from dataset if available
+        vector_map_params = {}
+        if self._dataset is not None:
+            vector_map_params = getattr(self._dataset, "vector_map_params", {})
+
+        # Build map name
+        if not self._scene.location:
+            logger.warning(f"Scene {self.scene_id} has no location, cannot load map")
+            return None
+
+        map_name = f"{self._scene.env_name}:{self._scene.location}"
+
+        try:
+            vec_map = map_api.get_map(map_name, **vector_map_params)
+            if vec_map is None:
+                logger.debug(f"Scene {self.scene_id} (map: {map_name}) has no map data")
+                return None
+
+            # Deep copy to avoid modifying shared cache
+            vec_map = copy.deepcopy(vec_map)
+
+            # Ensure rig is loaded (need world_to_nre for transformation)
+            self._ensure_rig_loaded()
+
+            # Apply coordinate transformation
+            self._apply_coordinate_transform_to_map(vec_map)
+
+            # Finalize map
+            vec_map.__post_init__()
+            vec_map.compute_search_indices()
+
+            # Fix datatypes and verify
+            self._fix_map_datatypes(vec_map)
+            self._verify_map_transformation(vec_map)
+
+            logger.info(f"Successfully loaded map: {map_name}")
+            return vec_map
+        except Exception as e:
+            logger.error(f"Error loading map from dataset API: {e}", exc_info=True)
+            return None
+
     @property
     def map(self) -> Optional[VectorMap]:
-        """Load and return VectorMap (obtained from dataset._map_api or scene.map_data)"""
+        """Load and return VectorMap."""
         if self._map is not None:
             return self._map
-
-        if VectorMap is None:
-            logger.warning("trajdata is not installed, cannot load map")
-            return None
 
         if self._scene is None:
             logger.warning("Cannot load map: scene is not set")
             return None
 
-        # First, try to get map from scene.map_data (for USDZ and other datasets that attach map directly)
-        if hasattr(self._scene, "map_data") and self._scene.map_data is not None:
-            logger.info(f"Loading map from scene.map_data for {self.scene_id}")
-            # Make a deep copy to avoid modifying shared map object
-            self._map = copy.deepcopy(self._scene.map_data)
-
-            # Apply coordinate transformation if needed
-            if self._rig is None:
-                # If rig is not loaded yet, load it first (this will set world_to_nre)
-                _ = self.rig
-
-            world_to_nre = self._rig.world_to_nre
-
-            # Check if transformation is needed (if world_to_nre is not identity)
-            if world_to_nre is not None and not np.allclose(world_to_nre, np.eye(4)):
-                translation = world_to_nre[:3, 3]
-                logger.info(
-                    f"Transforming map to local coordinates with translation: {translation}"
-                )
-
-                # Transform map coordinates
-                self._map.translate(translation[0], translation[1], translation[2])
-
-            logger.info(
-                f"Successfully loaded map from scene.map_data for {self.scene_id}"
-            )
+        # Try scene.map_data first (simpler path)
+        self._map = self._load_map_from_scene_data()
+        if self._map is not None:
             return self._map
 
-        # Otherwise, try to get map from dataset._map_api (for datasets with map_api)
-        if self._dataset is None:
-            logger.warning(
-                "Cannot load map: dataset is not set and scene.map_data is not available"
-            )
-            return None
-
-        # Get map from dataset._map_api (refer to trajdata_artifact_converter.py)
-        try:
-            # Check if dataset includes map support
-            if (
-                not hasattr(self._dataset, "incl_vector_map")
-                or not self._dataset.incl_vector_map
-                or not hasattr(self._dataset, "_map_api")
-                or self._dataset._map_api is None
-            ):
-                logger.warning(
-                    "Dataset does not have map support enabled or map_api is unavailable"
-                )
-                return None
-
-            # Build map name: "{env_name}:{location}"
-            if not hasattr(self._scene, "location") or not self._scene.location:
-                logger.warning(
-                    f"Scene {self.scene_id} has no location information, cannot load map"
-                )
-                return None
-
-            map_name = f"{self._scene.env_name}:{self._scene.location}"
-
-            # Get vector_map_params (if exists)
-            vector_map_params = {}
-            if hasattr(self._dataset, "vector_map_params"):
-                vector_map_params = self._dataset.vector_map_params
-
-            # Get map from map_api
-            vec_map = self._dataset._map_api.get_map(map_name, **vector_map_params)
-
-            if vec_map is None:
-                logger.debug(
-                    f"Scene {self.scene_id} (map_name: {map_name}) has no map data"
-                )
-                return None
-
-            # Create an independent copy of VectorMap for current scene to avoid modifying
-            # map objects in shared cache. This allows continued use of MapAPI's disk cache
-            # and index loading capabilities while preventing coordinate system pollution
-            # between multiple scenes through shared VectorMap instances.
-            self._map = copy.deepcopy(vec_map)
-
-            # Important: Transform map to local coordinate system (NRE)
-            # Since trajectories are already converted to local coordinates, map also needs
-            # to be converted to match. This is consistent with USDZ format handling:
-            # both map and trajectories need to be converted to the same coordinate system
-            if self._rig is None:
-                # If rig is not loaded yet, load it first (this will set world_to_nre)
-                _ = self.rig
-
-            world_to_nre = self._rig.world_to_nre
-
-            # Check if world_to_nre contains rotation
-            rotation_matrix = world_to_nre[:3, :3]
-            translation = world_to_nre[:3, 3]
-            has_rotation = not np.allclose(rotation_matrix, np.eye(3))
-
-            if has_rotation:
-                logger.warning(
-                    "world_to_nre contains rotation. Map transformation may need rotation handling. "
-                    "Currently only applying translation."
-                )
-
-            # Transform all points in map (center.points, left_boundary.points, right_boundary.points, etc.)
-            # Note: Must transform before finalize, as finalize may rebuild certain data structures
-            # Important: Only transform X, Y coordinates, align Z coordinate to trajectory Z baseline
-            # Because map Z usually represents height relative to ground (usually 0), while trajectory Z
-            # represents altitude. After transformation, map Z should align with trajectory Z
-            # (both relative to first trajectory point's Z, usually 0 after transformation)
-            translation_xy = translation[:2]  # Only use X, Y translation
-
-            # Get Z coordinate of first trajectory point (transformed baseline, usually 0)
-            first_traj_z = (
-                self.rig.trajectory.positions[0][2]
-                if len(self.rig.trajectory) > 0
-                else 0.0
-            )
-
-            logger.info(
-                f"Map coordinate transformation: "
-                f"translation_xy={translation_xy}, "
-                f"first_traj_z={first_traj_z:.2f}m, "
-                f"map Z will be aligned to trajectory Z baseline"
-            )
-
-            def transform_map_points(points: np.ndarray) -> np.ndarray:
-                """Transform map points: only transform X, Y, align Z to trajectory Z baseline"""
-                if (
-                    points is None
-                    or len(points) == 0
-                    or points.ndim != 2
-                    or points.shape[1] < 3
-                ):
-                    return points
-
-                points_copy = points.copy()
-
-                # Transform X, Y coordinates
-                if has_rotation:
-                    # If rotation exists, need to rotate X, Y
-                    xy_rotated = (
-                        points_copy[:, :2] @ rotation_matrix[:2, :2].T
-                    ) + translation_xy
-                    points_copy[:, 0] = xy_rotated[:, 0]
-                    points_copy[:, 1] = xy_rotated[:, 1]
-                else:
-                    # Only translate X, Y
-                    points_copy[:, 0] = points_copy[:, 0] + translation_xy[0]
-                    points_copy[:, 1] = points_copy[:, 1] + translation_xy[1]
-
-                # Z coordinate alignment: align map Z to trajectory Z baseline
-                # Map Z is usually height relative to ground (usually 0),
-                # after transformation should align with trajectory Z (both relative to first
-                # trajectory point's Z, usually 0 after transformation)
-                # So: new_z = original_z + first_traj_z
-                # If map Z=0 (ground), after transformation it becomes first_traj_z (usually 0)
-                points_copy[:, 2] = points_copy[:, 2] + first_traj_z
-
-                return points_copy
-
-            if hasattr(self._map, "lanes"):
-                for lane_idx, lane in enumerate(self._map.lanes):
-                    # Transform center.points
-                    if hasattr(lane, "center") and hasattr(lane.center, "points"):
-                        points = lane.center.points
-                        if points is not None and len(points) > 0:
-                            try:
-                                transformed_points = transform_map_points(points)
-                                lane.center.points = transformed_points
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to transform lane {lane_idx} center.points: {e}"
-                                )
-
-                    # Transform left_boundary.points
-                    if hasattr(lane, "left_boundary") and hasattr(
-                        lane.left_boundary, "points"
-                    ):
-                        points = lane.left_boundary.points
-                        if points is not None and len(points) > 0:
-                            try:
-                                transformed_points = transform_map_points(points)
-                                lane.left_boundary.points = transformed_points
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to transform lane {lane_idx} left_boundary.points: {e}"
-                                )
-
-                    # Transform right_boundary.points
-                    if hasattr(lane, "right_boundary") and hasattr(
-                        lane.right_boundary, "points"
-                    ):
-                        points = lane.right_boundary.points
-                        if points is not None and len(points) > 0:
-                            try:
-                                transformed_points = transform_map_points(points)
-                                lane.right_boundary.points = transformed_points
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to transform lane {lane_idx} right_boundary.points: {e}"
-                                )
-
-                    # Transform other possible point attributes (if any)
-                    for attr_name in ["intersections", "crosswalks", "stop_lines"]:
-                        if hasattr(lane, attr_name):
-                            attr_value = getattr(lane, attr_name)
-                            if isinstance(attr_value, list):
-                                for item in attr_value:
-                                    if hasattr(item, "points"):
-                                        points = item.points
-                                        if points is not None and len(points) > 0:
-                                            try:
-                                                transformed_points = (
-                                                    transform_map_points(points)
-                                                )
-                                                item.points = transformed_points
-                                            except Exception as e:
-                                                logger.debug(
-                                                    f"Failed to transform {attr_name} points: {e}"
-                                                )
-
-            # If map needs finalize, call it (after transformation)
-            # Note: finalize may rebuild certain indices but won't change point coordinates
-            # But for safety, we verify transformation again after finalize
-            if hasattr(self._map, "__post_init__"):
-                self._map.__post_init__()
-            if hasattr(self._map, "compute_search_indices"):
-                self._map.compute_search_indices()
-
-            # Verify again: check if first point's coordinates are still correct after finalize
-            if hasattr(self._map, "lanes") and len(self._map.lanes) > 0:
-                first_lane = self._map.lanes[0]
-                if hasattr(first_lane, "center") and hasattr(
-                    first_lane.center, "points"
-                ):
-                    first_map_point_after_finalize = (
-                        first_lane.center.points[0, :3]
-                        if len(first_lane.center.points) > 0
-                        else None
-                    )
-                    if first_map_point_after_finalize is not None:
-                        # Check if Z coordinate aligns with trajectory (should both be first_traj_z, usually 0)
-                        actual_z = first_map_point_after_finalize[2]
-                        if abs(actual_z - first_traj_z) > 1.0:  # Allow 1 meter error
-                            logger.warning(
-                                f"Map Z coordinate may have been reset after finalize. "
-                                f"Expected Z≈{first_traj_z:.2f}m (aligned to trajectory Z baseline), "
-                                f"got Z={actual_z:.2f}m. "
-                                f"This may cause coordinate misalignment."
-                            )
-                        # If alignment is correct, no need to log (reduce noise)
-
-            # Fix data types (if needed)
-            if hasattr(self._map, "lanes"):
-                for lane in self._map.lanes:
-                    if hasattr(lane, "next_lanes") and isinstance(
-                        lane.next_lanes, list
-                    ):
-                        lane.next_lanes = set(lane.next_lanes)
-                    if hasattr(lane, "prev_lanes") and isinstance(
-                        lane.prev_lanes, list
-                    ):
-                        lane.prev_lanes = set(lane.prev_lanes)
-                    if hasattr(lane, "adj_lanes_right") and isinstance(
-                        lane.adj_lanes_right, list
-                    ):
-                        lane.adj_lanes_right = set(lane.adj_lanes_right)
-                    if hasattr(lane, "adj_lanes_left") and isinstance(
-                        lane.adj_lanes_left, list
-                    ):
-                        lane.adj_lanes_left = set(lane.adj_lanes_left)
-
-            # Verify map transformation: check if first lane's first point is within reasonable range
-            if hasattr(self._map, "lanes") and len(self._map.lanes) > 0:
-                first_lane = self._map.lanes[0]
-                if hasattr(first_lane, "center") and hasattr(
-                    first_lane.center, "points"
-                ):
-                    first_map_point = (
-                        first_lane.center.points[0, :3]
-                        if len(first_lane.center.points) > 0
-                        else None
-                    )
-                    if first_map_point is not None:
-                        # Map point should be near trajectory (within hundreds of meters)
-                        distance_from_origin_xy = np.linalg.norm(
-                            first_map_point[:2]
-                        )  # Only check X, Y
-                        distance_from_origin_xyz = np.linalg.norm(
-                            first_map_point
-                        )  # Check X, Y, Z
-
-                        # Get first trajectory point for comparison
-                        first_traj_point = self.rig.trajectory.positions[0]
-
-                        logger.info(
-                            f"Map transformation verification: "
-                            f"first lane center point: {first_map_point}, "
-                            f"first trajectory point: {first_traj_point}, "
-                            f"distance (X,Y): {distance_from_origin_xy:.2f}m, "
-                            f"distance (X,Y,Z): {distance_from_origin_xyz:.2f}m, "
-                            f"Z difference: {abs(first_map_point[2] - first_traj_point[2]):.2f}m"
-                        )
-
-                        # Warn if Z coordinate is too far from trajectory Z
-                        z_diff = abs(first_map_point[2] - first_traj_point[2])
-                        if z_diff > 10.0:  # Z coordinate difference exceeds 10 meters
-                            logger.warning(
-                                f"Map Z coordinate may not be correctly aligned with trajectory. "
-                                f"Map Z={first_map_point[2]:.2f}m, Trajectory Z={first_traj_point[2]:.2f}m, "
-                                f"difference={z_diff:.2f}m. This may cause route generation to fail."
-                            )
-
-            logger.info(
-                f"Successfully loaded map: {map_name} (transformed to local coordinate system)"
-            )
-            return self._map
-        except Exception as e:
-            logger.error(f"Error loading map: {e}", exc_info=True)
-            return None
+        # Fallback to dataset._map_api
+        self._map = self._load_map_from_dataset_api()
+        return self._map
 
     @property
     def metadata(self) -> Metadata:
@@ -1028,16 +894,22 @@ class TrajdataDataSource(SceneDataSource):
             time_range_start = float(rig.trajectory.time_range_us.start) / 1e6
             time_range_end = float(rig.trajectory.time_range_us.stop) / 1e6
 
-        # Create metadata
-        import uuid
-        from datetime import datetime
+        # Generate deterministic IDs based on scene identifiers
+        # Create hash from scene_id and time range for reproducibility
+        hash_input = f"{scene_id}_{time_range_start}_{time_range_end}"
+        dataset_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+        uuid_str = hashlib.sha256(f"{hash_input}_uuid".encode()).hexdigest()[:32]
 
+        # Use fixed training date instead of datetime.now() for determinism
+        training_date = "trajdata-generated"
+
+        # Create metadata
         self._metadata = Metadata(
             scene_id=scene_id,
             version_string="trajdata_direct",
-            training_date=datetime.now().strftime("%Y-%m-%d"),
-            dataset_hash=str(uuid.uuid4()),
-            uuid=str(uuid.uuid4()),
+            training_date=training_date,
+            dataset_hash=dataset_hash,
+            uuid=uuid_str,
             is_resumable=False,
             sensors=Metadata.Sensors(
                 camera_ids=camera_id_names,

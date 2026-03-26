@@ -9,11 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0 import runtime_pb2
-from alpasim_runtime.daemon.engine import (
-    DaemonEngine,
-    UnknownSceneError,
-    build_pending_jobs_from_request,
-)
+from alpasim_runtime.daemon.engine import DaemonEngine, build_pending_jobs_from_request
+from alpasim_runtime.daemon.exceptions import UnknownSceneError
 
 
 @pytest.fixture
