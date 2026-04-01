@@ -16,7 +16,8 @@ The `artifact_repository` column in `sim_scenes.csv` indicates where scene files
 
 | Suite ID | Scenes | Description |
 |----------|--------|-------------|
-| `public_2602` | 916 | All public NRE scenes from the 26.02 release. |
+| `public_2507` | 910 | All public NRE scenes (date 10. Dec 2025) excluding those with map issues. |
+| `public_2602` | 916 | All public NRE scenes from the 26.02 release. Requires sensorsim NRE-GA 26.02 or later. |
 
 ## Managing Scenes
 

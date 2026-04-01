@@ -3,10 +3,14 @@
 defaults:
   - config_schema
   - _self_
-  - driver: [vavam, vavam_runtime_configs] # Driver and runtime configs
-  - trafficsim: null
-  - stable_manifest: oss
+  - deploy: null # Must be overridden (e.g., deploy=local)
+  - driver: null # Must be overridden (e.g., driver=vavam, driver=alpamayo1)
+  - topology: null # Must be overridden (e.g., topology=1gpu)
+  - trafficsim: null # Optional override
+  - controller: null # Optional override
+  - sensorsim: null # Optional override
   - optional scenes_catalog: internal # auto-override when internal plugin installed
+  - optional image_defaults: internal # auto-override when internal plugin installed
 
 # \/ hydra-specific configuration of legacy behavior (off)
 hydra:
@@ -18,6 +22,9 @@ defines:
   filesystem: ???
   driver_model: ???
   mpc_implementation: linear # "linear" (OSQP, faster) or "nonlinear" (CasADi)
+  image_registry: ""
+  base_image: "${defines.image_registry}alpasim-base:${repo-version:}"
+  hf_cache: "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}"
 
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
@@ -25,9 +32,9 @@ defines:
   alpackages: "${defines.filesystem}/alpackages"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
+  sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
   helper: scripts
   vscode: sources/remote-vscode-server
-  nre_cache_size: 4
   physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
 
 # \/ the wizard.* section defines properties global to all alpasim modules
@@ -35,7 +42,9 @@ wizard:
   # Name of the run, used to identify the run in the databases. If null, will
   # use the SLURM job name if set.
   run_name: null
-  # change to `SLURM` for ORD deployments, `DOCKER_COMPOSE` for local runs via docker-compose and `DOCKER` for local runs via "raw" docker
+  # change to `SLURM` for ORD deployments, `DOCKER_COMPOSE` for local runs via
+  # docker-compose and `DOCKER` for local runs via "raw" docker or `NONE` for
+  # only generating the configs.
   run_method: "DOCKER_COMPOSE"
 
   # directory path to log the results of this run. ??? indicates it is mandatory to override this via cmdline args
@@ -88,7 +97,8 @@ wizard:
 
 scenes:
   # Selection method (set one of these two)
-  scene_ids: null # List of scene IDs to use
+  scene_ids:
+    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554 # default OSS scene from huggingface (26.02 dataset)
   test_suite_id: null # Test suite ID to use (from suites_csv)
 
   # Limit the number of scenes to run (0 or negative means no limit)
@@ -107,7 +117,8 @@ scenes:
 services:
   # \/ sensor simulator for now is just NRE. We'll use it as an example on the structure of a container definition
   sensorsim:
-    image: ???
+    image: nvcr.io/nvidia/nre/nre-ga:26.02
+    external_image: true
     # \/ volumes lets us mount host (ORD/local) containers to the running container
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
@@ -119,7 +130,8 @@ services:
       - OMP_NUM_THREADS=1
     # \/ command is like docker entrypoint + command combined
     command:
-      - "/app/pycena_run.runfiles/nre_repo/scripts/pycena/runtime/entrypoint_3_11.sh"
+      - "${defines.sensorsim_entrypoint}"
+      - "serve-grpc"
       - "--port={port}" # {port} is a wizard-generated unique variable which enumerates {baseport}, {baseport+1}, ...
       - "--host=0.0.0.0" # the default container IP
       - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
@@ -127,21 +139,19 @@ services:
       - "--no-enable-nrend"
       - "--download-cache-dir /tmp/nre-cache-dir" # unused
       - "--cache-size=${defines.nre_cache_size}" # as a rule of thumb n_concurrent_rollouts + 1 allows to avoid premature evictions
+      - "--max-workers=4"
+      - "--enable-editing-actors"
       # - "--enable-timing" # uncomment to enable timing information on the sensor simulator side
-    # \/ gpus is a list of GPUs to use for all service replicas, each replica using one (possibly shared GPU). See below
-    gpus: [2, 3, 4, 5, 6, 7]
-    # \/ replicas_per_container indicates we want 6 identical containers started (for load balancing). With the `gpus` definition above we'll
-    # have 1 replicas on each of the 6 GPUs but it's possible to e.g. have 12 replicas on 6 GPUs (to better utilize them) by setting replicas_per_container
-    replicas_per_container: 1
 
   # \/ services.drive is the driving policy (Alpamayo/HydraMDP, etc)
   driver:
-    image: ???
+    image: ${defines.base_image}
     volumes:
       - "${defines.drivers}:/mnt/drivers"
       - "${wizard.log_dir}:/mnt/output" # optional output like the debug images
       - "${repo-relative:'src'}:/repo/src"
-      - "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}:/root/.cache/huggingface"
+      - "${repo-relative:'plugins'}:/repo/plugins"
+      - "${defines.hf_cache}:/root/.cache/huggingface"
     command:
       - "uv run -m alpasim_driver.main"
       - "--config-path=/mnt/output"
@@ -149,11 +159,8 @@ services:
       - "host=0.0.0.0"
       - "port={port}"
 
-    replicas_per_container: 1
-    gpus: [0]
-
   physics:
-    image: ???
+    image: ${defines.base_image}
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
       - "${repo-relative:'src'}:/repo/src"
@@ -168,18 +175,14 @@ services:
       - "--use-ground-mesh=true"
       - "--cache-size=${defines.physics_cache_size}" # should match or exceed concurrent scenes to avoid cache thrashing
       - "--log-level=${wizard.log_level}"
-    replicas_per_container: 1
-    gpus: [1]
 
   trafficsim:
-    image: ???
+    image: ${defines.base_image}
     command:
       - "echo 'not yet included'"
-    replicas_per_container: 1
-    gpus: null
 
   controller:
-    image: ???
+    image: ${defines.base_image}
     volumes:
       - "${wizard.log_dir}/controller:/mnt/output"
       - "${repo-relative:'src'}:/repo/src"
@@ -189,12 +192,11 @@ services:
       - "--port={port}"
       - "--log_dir=/mnt/output"
       - "--log-level=${wizard.log_level}"
-    replicas_per_container: 1
-    gpus: null
+      - "--mpc-implementation=${defines.mpc_implementation}"
 
   # \/ the orchestrating container - only 1 needed irrespectively of however many other there are
   runtime:
-    image: ???
+    image: ${defines.base_image}
     # \/ only starts if all the dependencies started correctly
     depends_on:
       - driver
@@ -221,31 +223,9 @@ services:
     replicas_per_container: 1 # should only be one runtime orchestrator
 
 runtime:
-  # Number of worker processes for parallel rollout execution.
-  # 1 = inline mode, all in one process, good for debugging
-  # >1 = multi-worker mode with subprocess-based parallelism
-  nr_workers: 1
+  # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
   endpoints:
-    sensorsim:
-      # how many rollouts can run on a single worker at once
-      n_concurrent_rollouts: 2
-
-    driver:
-      n_concurrent_rollouts: 14
-
-    physics:
-      n_concurrent_rollouts: 14
-      skip: false # physics supports skipping
-
-    controller:
-      n_concurrent_rollouts: 14
-      skip: false # controller supports skipping
-
-    trafficsim:
-      n_concurrent_rollouts: 14
-      skip: true # trafficsim is not included yet
-
     # shut down the system after simulation is finished. without this flag the microservice servers
     # will remain on forever requring a manual interrupt (useful for debugging)
     do_shutdown: true
@@ -268,7 +248,7 @@ runtime:
     time_start_offset_us: 300_000
 
     ego_mask_rig_config_id: "hyperion_8_1" # which rig/directory in ego-hoods to use for ego masking
-    planner_delay_us: ??? # Overwritten in `oss.yaml` or `internal.yaml`
+    planner_delay_us: 0
 
     # Actors present shorter than this (in micro-seconds) are ignored. Set to 0 to disable.
     min_traffic_duration_us: 3_000_000
@@ -371,5 +351,4 @@ eval:
         - DRIVER_RESPONSES
         - ROUTE
         - AGENTS
-
-driver: ???
+# driver config is loaded from the driver group (e.g., driver=vavam)

@@ -14,7 +14,7 @@ Alpasim is a lightweight, data-driven research simulator for autonomous vehicle 
 
 - **Environment**: `source setup_local_env.sh` (or `./setup_local_env.sh`). The project uses **uv** for dependencies and scripts; use `uv run` for commands (e.g. `uv run pytest`, `uv run alpasim_wizard ...`).
 - **After changing `.proto` files**: `cd src/grpc && uv run compile-protos`
-- **Run simulation locally** (from repo root or `src/wizard`): `uv run alpasim_wizard +deploy=local wizard.log_dir=./my_run` (deploy configs live in `src/wizard/configs/deploy/`.)
+- **Run simulation locally** (from repo root or `src/wizard`): `uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=./my_run` (deploy configs live in `src/wizard/configs/deploy/`.)
 - **Tests**: `uv run pytest` (e.g. `uv run pytest src/runtime/tests`)
 - **Static checks**: `pre-commit run --all-files`
 

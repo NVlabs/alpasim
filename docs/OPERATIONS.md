@@ -102,7 +102,7 @@ By default, the VaVam driver and model are used. The model weights are downloade
 To use a custom model, mount a custom vavam-driver directory:
 
 ```bash
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     defines.vavam_driver=/path/to/custom/vavam-driver
 ```
@@ -116,7 +116,7 @@ that path.
 To use a custom driver container image:
 
 ```bash
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     services.driver.image=<your-registry>/<your-driver-image>:<tag>
 ```
@@ -179,7 +179,7 @@ To change to 5Hz inference (200ms between decisions):
 **Full command**:
 
 ```bash
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.simulation_config.control_timestep_us=200000 \
     runtime.simulation_config.time_start_offset_us=600000 \
@@ -199,10 +199,10 @@ To use 30Hz cameras (33.3ms) but 10Hz inference (100ms):
 1. **Pose reporting**: `pose_reporting_interval_us` defaults to 0 (falls back to `control_timestep_us`)
 1. **Time offset aligns**: `time_start_offset_us=300006` (3 × 100002)
 
-**Full command** (based on `sim/20s_at_30Hz.yaml`):
+**Full command** (based on `exp/sim/20s_at_30Hz.yaml`):
 
 ```bash
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.simulation_config.control_timestep_us=100002 \
     runtime.simulation_config.time_start_offset_us=300006 \
@@ -258,7 +258,7 @@ scene start.
 
 - [src/runtime/README.md - Zero delay mode](/src/runtime/README.md#zero-delay-mode) for
   synchronization requirements
-- `src/wizard/configs/driver/vavam_runtime_configs.yaml` for a 2Hz example
+- `src/wizard/configs/driver/vavam_configs.yaml` for a 2Hz example
 
 ## Viewing Results and Metrics
 
@@ -384,12 +384,12 @@ Use `runtime.endpoints.<service>.skip` to disable services:
 
 ```bash
 # Disable traffic simulation
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.endpoints.trafficsim.skip=true
 
 # Disable physics (log replay mode)
-uv run alpasim_wizard +deploy=local \
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.endpoints.physics.skip=true \
     runtime.simulation_config.physics_update_mode=NONE \

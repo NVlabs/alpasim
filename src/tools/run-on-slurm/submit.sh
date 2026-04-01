@@ -3,14 +3,15 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 # Unified SLURM submit script. All arguments are forwarded to the wizard as
-# Hydra overrides. Default deploy target is ord_oss.
+# Hydra overrides.
 #
 # Usage:
-#   sbatch [sbatch_opts] submit.sh [hydra_overrides...]
+#   sbatch [sbatch_opts] submit.sh deploy=<target> topology=<layout> driver=<model> [hydra_overrides...]
 #
 # Examples:
-#   sbatch submit.sh                                    # defaults to +deploy=ord_oss
-#   sbatch --account=wlew --partition=gtc_demo --gpus=4 submit.sh +deploy=ipp5
+#   sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam
+#   sbatch submit.sh deploy=ord topology=8gpu_12rollouts driver=alpamayo1 controller=ndas trafficsim=internal
+#   sbatch --account=wlew --partition=gtc_demo --gpus=4 submit.sh deploy=ipp5 topology=1gpu driver=alpamayo1
 
 #SBATCH --account av_alpamayo_sim
 #SBATCH --partition polar,polar3,polar4,grizzly
@@ -23,7 +24,7 @@
 
 # Detect if running on slurm node
 if [ -z "$SLURM_JOB_ID" ]; then
-    echo "This script should run on SLURM. Example: sbatch submit.sh +deploy=ord_oss"
+    echo "This script should run on SLURM. Example: sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam"
     exit 1
 fi
 
@@ -33,6 +34,20 @@ fi
 
 if [[ -z "$DESCRIPTION" ]]; then
     DESCRIPTION="unspecified"
+fi
+
+# Verify required config groups are present in arguments
+ALL_ARGS="$*"
+MISSING=()
+[[ "$ALL_ARGS" =~ deploy=[^\ ]+ ]]   || MISSING+=("deploy=<target>    (e.g., ord)")
+[[ "$ALL_ARGS" =~ topology=[^\ ]+ ]] || MISSING+=("topology=<layout>  (e.g., 8gpu_64rollouts, 8gpu_12rollouts)")
+[[ "$ALL_ARGS" =~ driver=[^\ ]+ ]]   || MISSING+=("driver=<model>     (e.g., vavam, alpamayo1, alpamayo1_5)")
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo "Error: missing required config groups:"
+    for m in "${MISSING[@]}"; do echo "  $m"; done
+    echo ""
+    echo "Example: sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam"
+    exit 1
 fi
 
 # All script arguments are forwarded as Hydra overrides
@@ -114,7 +129,6 @@ fi
 
 uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
     alpasim_wizard \
-    +deploy=ord_oss \
     wizard.log_dir=$LOGDIR \
     wizard.array_job_dir=$ARRAY_JOB_DIR \
     wizard.latest_symlink=true \

@@ -3,7 +3,7 @@
 # Type validation happens at driver runtime via OmegaConf.structured merge
 
 defaults:
-  - transfuser_runtime_configs  # Camera and simulation configs
+  - transfuser_configs  # Camera and simulation configs
   - _self_                      # YAML values override schema defaults
 
 # Transfuser Driver Configuration for Alpasim

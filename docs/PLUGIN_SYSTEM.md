@@ -16,7 +16,7 @@ At runtime, the `PluginRegistry` (in `src/plugins/`) scans all installed package
 ```python
 from alpasim_plugins import models
 
-models.get_names()                  # → ['ar1', 'manual', 'transfuser', 'vam']
+models.get_names()                  # → ['alpamayo1', 'alpamayo1_5', 'manual', 'transfuser', 'vam']
 models.get("transfuser")            # → <class TransfuserModel>
 ```
 
@@ -27,7 +27,7 @@ Hydra config directories work the same way. The transfuser plugin registers its 
 transfuser = "alpasim_transfuser.configs"
 ```
 
-At startup the wizard's `AlpasimConfigDiscoveryPlugin` discovers all `alpasim.configs` entry points and adds `pkg://alpasim_transfuser.configs` to Hydra's search path. YAML files inside that package are then available by config group — for example `driver=[transfuser,transfuser_runtime_configs]` resolves to `alpasim_transfuser/configs/driver/transfuser.yaml` without any manual search-path overrides.
+At startup the wizard's `AlpasimConfigDiscoveryPlugin` discovers all `alpasim.configs` entry points and adds `pkg://alpasim_transfuser.configs` to Hydra's search path. YAML files inside that package are then available by config group — for example `driver=transfuser` resolves to `alpasim_transfuser/configs/driver/transfuser.yaml` without any manual search-path overrides.
 
 Run `uv run alpasim-info` to see all currently registered plugins.
 
@@ -101,10 +101,10 @@ plugins/transfuser_driver/
       __init__.py
       driver/
         transfuser.yaml
-        transfuser_runtime_configs.yaml
+        transfuser_configs.yaml
 ```
 
-The wizard discovers all `alpasim.configs` entry points at startup and adds `pkg://<value>` to Hydra's search path automatically. When the transfuser plugin is installed, `driver=[transfuser,transfuser_runtime_configs]` resolves from the plugin's config directory without any manual search-path overrides.
+The wizard discovers all `alpasim.configs` entry points at startup and adds `pkg://<value>` to Hydra's search path automatically. When the transfuser plugin is installed, `driver=transfuser` resolves from the plugin's config directory without any manual search-path overrides.
 
 ---
 

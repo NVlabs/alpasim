@@ -45,7 +45,9 @@ def _load_and_merge_csvs(
     frames = []
     for path in csv_paths:
         logger.info("Loading scene catalog: %s", path)
-        frames.append(pl.read_csv(path))
+        # Force all columns to String to avoid type-inference mismatches
+        # (e.g. hf_revision "25.07" inferred as Float64 in one file, String in another)
+        frames.append(pl.read_csv(path, infer_schema_length=0))
 
     if len(frames) == 1:
         return frames[0]

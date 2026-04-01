@@ -16,22 +16,26 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Check for Rust toolchain (required for utils_rs maturin build)
 if ! command -v cargo &> /dev/null; then
     echo "⚠️  Rust toolchain (cargo) not found. It is required for building utils_rs."
-    read -p "Would you like to install it via rustup? [y/N] " -r
-    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        echo "Installing Rust toolchain..."
-        curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 10 --max-time 300 https://sh.rustup.rs | sh -s -- -y
-        if [[ $? -ne 0 ]]; then
-            echo "❌ Failed to install Rust toolchain. Exiting."
+    if [[ -t 0 ]]; then
+        read -p "Would you like to install it via rustup? [y/N] " -r
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            curl --proto '=https' --tlsv1.2 -sSf --connect-timeout 10 --max-time 300 https://sh.rustup.rs | sh -s -- -y
+            if [[ $? -ne 0 ]]; then
+                echo "❌ Failed to install Rust toolchain. Exiting."
+                return 1
+            fi
+            source "$HOME/.cargo/env"
+            if ! command -v cargo &> /dev/null; then
+                echo "❌ cargo not found in PATH after sourcing ~/.cargo/env. Exiting."
+                return 1
+            fi
+            echo "✅ Rust toolchain installed successfully."
+        else
+            echo "❌ Rust toolchain is required. Exiting."
             return 1
         fi
-        source "$HOME/.cargo/env"
-        if ! command -v cargo &> /dev/null; then
-            echo "❌ cargo not found in PATH after sourcing ~/.cargo/env. Exiting."
-            return 1
-        fi
-        echo "✅ Rust toolchain installed successfully."
     else
-        echo "❌ Rust toolchain is required. Exiting."
+        echo "❌ Rust toolchain is required. Install via: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
         return 1
     fi
 fi

@@ -52,7 +52,7 @@ Recommended workflow:
 1. First run the wizard normally (after installing it with `uv tool install -e
    src/wizard`) and generating ASL files.
 ```bash
-uv run alpasim_wizard wizard.log_dir=<log_dir> +deploy=local
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<log_dir>
 ```
 2. Execute this from `src/eval`:
 ```bash

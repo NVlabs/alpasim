@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
-import re
+import socket
 import time
 from pathlib import Path
-from textwrap import dedent
 from typing import Any, List, Optional
 
 from ..context import WizardContext
@@ -43,19 +42,14 @@ class SlurmDeployment:
         self.deploy(
             containers=self.container_set.sim,
             containers_to_start_last=containers_to_start_last,
-            requires_sbatch=False,
         )
 
     def deploy(
         self,
         containers: List[Any],
         containers_to_start_last: Optional[List[Any]] = None,
-        requires_sbatch: bool = False,
-        dependencies: Optional[List[int]] = None,
-    ) -> List[int]:
+    ) -> None:
         """Deploy containers using SLURM."""
-        job_ids = []
-
         if containers_to_start_last:
             assert (
                 self.context.cfg.wizard.timeout is not None
@@ -88,27 +82,15 @@ class SlurmDeployment:
                 break
 
             for c in missing_containers:
-                slurm_output = dispatch_command(
+                dispatch_command(
                     self._get_slurm_dispatch_command(
                         c,
                         self.context.cfg.wizard.run_mode.name,
-                        requires_sbatch=requires_sbatch,
-                        dependencies=dependencies or [],
                     ),
                     log_dir=Path(self.context.cfg.wizard.log_dir),
                     dry_run=self.context.cfg.wizard.dry_run,
-                    blocking=requires_sbatch,
+                    blocking=False,
                 )
-
-                # Extract job IDs from sbatch output
-                if (
-                    requires_sbatch
-                    and not self.context.cfg.wizard.dry_run
-                    and slurm_output
-                ):
-                    match = re.search(r"Submitted batch job (\d+)", slurm_output)
-                    if match:
-                        job_ids.append(int(match.group(1)))
 
             # Wait for containers if needed
             if _wait_for_containers_running():
@@ -121,24 +103,15 @@ class SlurmDeployment:
         # Deploy containers that should start last
         if containers_to_start_last:
             for c in containers_to_start_last:
-                slurm_output = dispatch_command(
+                dispatch_command(
                     self._get_slurm_dispatch_command(
                         c,
                         self.context.cfg.wizard.run_mode.name,
-                        requires_sbatch=requires_sbatch,
-                        dependencies=dependencies or [],
                     ),
                     log_dir=Path(self.context.cfg.wizard.log_dir),
                     dry_run=self.context.cfg.wizard.dry_run,
                     blocking=True,
                 )
-
-                if requires_sbatch and slurm_output:
-                    match = re.search(r"Submitted batch job (\d+)", slurm_output)
-                    if match:
-                        job_ids.append(int(match.group(1)))
-
-        return job_ids
 
     def _to_slurm_run(
         self,
@@ -199,7 +172,15 @@ class SlurmDeployment:
 
         s_mnt = ",".join([v.to_str() for v in container.volumes])
 
+        # Pin child srun steps to the wizard's node so services are co-located
+        # and reachable via localhost.  Without --nodelist, SLURM may schedule
+        # them on other nodes in a multi-node allocation.
+        # Prefer SLURMD_NODENAME which is guaranteed to match SLURM's node
+        # naming; fall back to socket.gethostname() for local testing.
+        current_node = os.environ.get("SLURMD_NODENAME") or socket.gethostname()
+
         cmd = r"srun --verbose --overlap "
+        cmd += f"--nodes=1 --ntasks=1 --nodelist={current_node} "
         cmd += f" --container-image={sqsh} "
         cmd += " --container-writable "
         cmd += f" --container-mounts={s_mnt} "
@@ -223,95 +204,16 @@ class SlurmDeployment:
             raise ValueError(f"Unknown run mode: {mode}")
         return cmd
 
-    def _wrap_in_sbatch_script(
-        self,
-        container: ContainerDefinition,
-        srun_command_str: str,
-        dependencies: list[int] | None = None,
-    ) -> str:
-        """Wrap srun command in sbatch script.
-
-        Args:
-            container: ContainerDefinition instance
-            srun_command_str: The srun command to wrap
-            dependencies: List of job IDs to depend on
-
-        Returns:
-            sbatch command string
-        """
-        if dependencies is None:
-            dependencies = []
-
-        if srun_command_str.endswith(" &"):
-            srun_command_str = srun_command_str[:-2]
-
-        if (
-            container.context.cfg.wizard.slurm_gpu_partition is None
-            and os.environ.get("SLURM_JOB_PARTITION") is None
-        ):
-            raise ValueError(
-                "SLURM GPU partition must be set in wizard config (wizard.slurm_gpu_partition) "
-                "or available via SLURM_JOB_PARTITION environment variable for sbatch submission."
-            )
-
-        if container.gpu is not None:
-            if container.gpu != 0:
-                raise ValueError(
-                    "Jobs dispatched via wrap_in_sbatch_script should request gpu 0 or none at all."
-                )
-            gpu_partition = container.context.cfg.wizard.slurm_gpu_partition
-            if gpu_partition is None:
-                gpu_partition = os.environ.get("SLURM_JOB_PARTITION", "")
-            bash_script_template = build_sbatch(
-                srun_command_str,
-                partition=gpu_partition,
-                gpus=1,
-            )
-        else:
-            bash_script_template = build_sbatch(
-                srun_command_str,
-                partition=container.context.cfg.wizard.slurm_cpu_partition,
-                gpus=0,
-            )
-
-        i = 0
-        while True:
-            script_name = f"generated_submit_{container.name}_{i}.sh"
-            script_path = os.path.join(
-                container.context.cfg.wizard.log_dir, script_name
-            )
-            if not os.path.exists(script_path):
-                break
-            i += 1
-
-        script_path = os.path.join(container.context.cfg.wizard.log_dir, script_name)
-        with open(script_path, "w") as script_file:
-            script_file.write(bash_script_template)
-
-        cmd = (
-            f"unset SLURM_CPU_BIND; sbatch "
-            f"--output={container.context.cfg.wizard.log_dir}/txt-logs/slurm_{container.uuid}.log "
-            f"--job-name='{container.context.cfg.wizard.slurm_job_id}-{container.uuid}'"
-        )
-        if dependencies:
-            cmd += f" --dependency=afterany:{':'.join(map(str, dependencies))}"
-
-        return f"({cmd} {script_path})"
-
     def _get_slurm_dispatch_command(
         self,
         container: ContainerDefinition,
         mode: str,
-        requires_sbatch: bool = False,
-        dependencies: list[int] | None = None,
     ) -> str:
         """Get the full SLURM dispatch command.
 
         Args:
             container: ContainerDefinition instance
             mode: Run mode string
-            requires_sbatch: Whether to wrap in sbatch
-            dependencies: List of job IDs to depend on
 
         Returns:
             Complete SLURM command string
@@ -320,13 +222,7 @@ class SlurmDeployment:
         run_mode = RunMode[mode.upper()] if isinstance(mode, str) else mode
 
         logger.info(f"Launch {container.uuid} in {run_mode.name}")
-        srun_command_str = self._to_slurm_run(container, mode=run_mode)
-        if requires_sbatch:
-            return self._wrap_in_sbatch_script(
-                container, srun_command_str=srun_command_str, dependencies=dependencies
-            )
-        else:
-            return srun_command_str
+        return self._to_slurm_run(container, mode=run_mode)
 
     def wait_for_containers(
         self,
@@ -383,32 +279,3 @@ class SlurmDeployment:
                     missing.append(container)
                     break
         return missing
-
-
-def build_sbatch(
-    srun_command_str: str,
-    partition: str,
-    gpus: int = 0,
-    args: Optional[str] = "",
-) -> str:
-    # reflect the correct slurm account name in the submit job
-    slurm_account_name = os.environ["SLURM_JOB_ACCOUNT"]
-
-    bash_script_template = f"""
-    #!/bin/bash
-    #SBATCH --account {slurm_account_name}
-    #SBATCH --partition {partition}
-    #SBATCH --time 03:59:00
-    #SBATCH --gpus {gpus}
-    #SBATCH --nodes=1
-    #SBATCH --cpus-per-task 8
-    #SBATCH --mem 32gb
-
-    {args}
-
-    """
-
-    bash_script_template = dedent(bash_script_template).strip()
-    bash_script_template += "\n\n" + srun_command_str
-
-    return bash_script_template

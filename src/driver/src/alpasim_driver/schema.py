@@ -14,8 +14,8 @@ class ModelConfig:
     """Unified model configuration for all model types.
 
     ``model_type`` is the entry-point name registered under the
-    ``alpasim.models`` group (e.g. ``"ar1"``, ``"vam"``, ``"transfuser"``,
-    ``"manual"``).  The driver resolves it at runtime via the plugin
+    ``alpasim.models`` group (e.g. ``"alpamayo1"``, ``"alpamayo1_5"``, ``"vam"``,
+    ``"transfuser"``, ``"manual"``).  The driver resolves it at runtime via the plugin
     registry, so new models can be added without changing driver code.
 
     Note: dtype is not exposed in config - each model hardcodes its expected dtype.
@@ -26,6 +26,7 @@ class ModelConfig:
     checkpoint_path: str = MISSING  # Path to model checkpoint (.pt/.pth)
     device: str = MISSING  # Device to run inference on (cuda/cpu)
     tokenizer_path: Optional[str] = None  # Only required for VAM
+    use_classifier_free_guidance_nav: bool = False  # A1.5 only
 
 
 @dataclass

@@ -68,7 +68,7 @@ simulation_config:
   n_rollouts: 1
   n_sim_steps: 50
   physics_update_mode: NONE
-  planner_delay_us: 500000
+  planner_delay_us: 0
   ego_mask_rig_config_id: "hyperion_8_1"
   route_generator_type: MAP
   time_start_offset_us: 300000

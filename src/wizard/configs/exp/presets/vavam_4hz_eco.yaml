@@ -1,0 +1,10 @@
+# @package _global_
+# VaVam at 4Hz with trajectory optimization (Eco mode)
+
+defaults:
+  - vavam_4hz
+  - _self_
+
+driver:
+  trajectory_optimizer:
+    enabled: true

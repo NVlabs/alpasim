@@ -2,6 +2,105 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Rename driver configs: ar1 → alpamayo1, a15 → alpamayo1_5 (31.03.26)
+
+Driver config names, entry points, and `model_type` values now use explicit names instead of abbreviations:
+
+| Before | After |
+|--------|-------|
+| `driver=ar1` | `driver=alpamayo1` |
+| `driver=a15` | `driver=alpamayo1_5` |
+
+**Migration**: Replace `driver=ar1` with `driver=alpamayo1` and `driver=a15` with `driver=alpamayo1_5` in CLI invocations, SLURM scripts, and any custom configs that reference these drivers.
+
+## Upgrade OSS sensorsim to NRE-GA 26.02 and unify entrypoint (30.03.26)
+The OSS sensorsim image has been upgraded from `docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0` to `nvcr.io/nvidia/nre/nre-ga:26.02`. The internal NRE image has been bumped to `nre_run:26.3.79-7869d378` (fixes a first-render crash in 26.2).
+
+* The sensorsim entrypoint (`/app/run serve-grpc`) and all shared flags are now defined once in `base_config.yaml`; both OSS and internal manifests inherit it instead of duplicating the command block.
+* New flag `--enable-editing-actors` added to the base sensorsim command, required by NRE 26.3 for render requests that include dynamic object updates.
+
+**Migration**: If you override `services.sensorsim.command` in a custom manifest, add `--enable-editing-actors` to the argument list.
+
+## Config refactoring: three-axis composition, per-service images, unified exp/ group (30.03.26)
+
+### Three-axis config model
+
+The wizard config is now composed from three required, independent axes instead of monolithic deploy configs:
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=./out
+```
+
+| Group | Purpose | Examples |
+|-------|---------|----------|
+| `deploy=` | Where to run (filesystem, run method) | `local`, `local_external_driver` |
+| `topology=` | GPU layout, replicas, concurrency | `1gpu`, `2gpu`, `8gpu_64rollouts` |
+| `driver=` | Which driving model | `vavam`, `ar1`, `a15`, `manual` |
+
+All three are required. Omitting any prints a helpful error listing available options.
+
+### Driver configs simplified
+
+Each driver config now includes its own runtime settings via the Hydra defaults list. Specify a single config instead of a list:
+
+| Before | After |
+|--------|-------|
+| `driver=[vavam,vavam_runtime_configs]` | `driver=vavam` |
+| `driver=[ar1,alpamayo_runtime_configs]` | `driver=ar1` |
+| `driver=[a15,alpamayo_runtime_configs]` | `driver=a15` |
+
+### stable_manifest removed, images derived from pyproject.toml
+
+The `stable_manifest` config group (`oss.yaml`, `oss_gitlab.yaml`, `internal.yaml`) has been removed. Its content has been merged into `base_config.yaml`:
+
+* Services built from the repo (driver, physics, controller, trafficsim, runtime) use `${defines.base_image}`, which reads the version from `pyproject.toml` at runtime via a `repo-version:` OmegaConf resolver.
+* The external sensorsim image (`nvcr.io/nvidia/nre/nre-ga:26.02`) is set directly in `base_config.yaml`.
+* Internal CI overrides images via the `image_defaults/internal` config (auto-loaded when the internal plugin is installed).
+* A default OSS scene ID is now in `base_config.yaml`, so new users can run without specifying scenes.
+
+### Runtime endpoint config moved to topology
+
+`runtime.nr_workers` and all `runtime.endpoints.*.n_concurrent_rollouts` values are now set by topology configs instead of `base_config.yaml`. Each topology preset defines capacity to match its GPU layout. `base_config.yaml` retains only behavioral settings (`do_shutdown`, `enable_autoresume`, etc.).
+
+### Unified exp/ config group
+
+The scattered `model/`, `experiment/`, `sim/`, and `exp/` config directories have been consolidated under a single `exp/` group. Presets (e.g., `vavam_4hz`) moved to `exp/presets/`.
+
+### New optional config groups
+
+New optional groups in `base_config.yaml` defaults allow overriding service-specific settings:
+* `controller=` — override controller config (e.g., `controller=ndas` from internal plugin)
+* `sensorsim=` — override NRE image (e.g., `sensorsim=internal_nre` from internal plugin)
+* `trafficsim=` — override trafficsim config (e.g., `trafficsim=internal` from internal plugin)
+
+### Internal plugin: controller_ndas renamed to controller
+
+The `controller_ndas` config group has been renamed to `controller`. Individual configs have been renamed to include the `ndas` prefix (e.g., `noisefree` → `ndas_noisefree`).
+
+### SLURM submit.sh changes
+
+* `submit.sh` no longer defaults to any deploy target. All three axes (`deploy=`, `topology=`, `driver=`) must be specified.
+* Early sanity check rejects submissions with missing required config groups before allocating SLURM resources.
+* Example: `sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam`
+
+### Breaking changes summary
+
+* `+deploy=` syntax is now `deploy=` (no `+` prefix). Same for `topology` and `driver`.
+* `driver=[<model>,<runtime_configs>]` list syntax is now just `driver=<model>`.
+* `driver/alpamayo.yaml` replaced by `driver=dino` (moved to internal plugin).
+* `cameras/wide_only_cam.yaml` removed (use `cameras/1cam.yaml`).
+* `stable_manifest` config group removed entirely.
+* Deleted monolithic deploy configs: `iad_oss`, `ord_oss`, `ord_oss_single`, `local_2gpus`, `iad` (OSS). Use `deploy=<target> topology=<layout>` instead.
+* `runtime.nr_workers` and `runtime.endpoints.*` defaults removed from `base_config.yaml` (set by topology).
+* `defines.nre_cache_size` removed from `base_config.yaml` (set by topology).
+
+## Alpamayo 1.5 driver support (24.03.26)
+[Alpamayo 1.5](https://github.com/NVlabs/alpamayo1.5) is now available as a driver (`model_type: a15`). Use `driver=a15` to run with the 10B model.
+
+* New `A15Model` driver with camera-index-aware inference and optional classifier-free guidance navigation (`use_classifier_free_guidance_nav: true`, ~60 GB VRAM).
+* AR1 and A1.5 now share a common `AlpamayoBaseModel` base class, reducing code duplication.
+* `planner_delay_us` now defaults to `0` everywhere; the legacy `alpamayo_runtime_configs` file (which set 200ms delay) has been removed.
+
 ## Make ~/.netrc optional for public users (17.03.26)
 References to `~/.netrc` in the Dockerfile and wizard's Docker Compose generation were unconditional, requiring all users to have the file. The Dockerfile now conditionally sets `NETRC` only when the secret is provided, and the wizard only includes the `netrc` secret in the compose config when `~/.netrc` exists on the host.
 
@@ -15,15 +114,13 @@ The root `pyproject.toml` now exposes every workspace member as a named optional
 
 Internal-only content (CI/CD, configs, tools, docs) has been moved to an optional package at `plugins/internal/`.
 
-The default stable manifest (`src/wizard/configs/stable_manifest/oss.yaml`) now references public / locally-built Docker images. A new `plugins/internal/configs/stable_manifest/oss_gitlab.yaml` provides the internal-CI equivalent with `nvcr.io`-hosted images; the CI auto-bump scripts update versions there.
-
 See [Onboarding — Dependency management](docs/ONBOARDING.md#dependency-management) for details.
 
 ## Overridable Hydra config groups (12.03.26)
 Wizard config groups (e.g. `driver`, `deploy`) can now be extended by any installed package. Packages register an `alpasim.configs` entry point pointing to a Python package that contains YAML files, and the wizard automatically adds it to Hydra's search path at startup via `SearchPathPlugin`.
 
 * `model_type` in driver config is now a plain string (e.g. `"ar1"`, `"manual"`) instead of an enum.
-* The transfuser driver configs have been moved out of the wizard into the transfuser plugin — when installed, `driver=[transfuser,transfuser_runtime_configs]` resolves automatically.
+* The transfuser driver configs have been moved out of the wizard into the transfuser plugin — when installed, `driver=transfuser` resolves automatically.
 
 ## Plugin system (12.03.26)
 Alpasim is now extensible via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). Any installed package can register models, controllers, configs, or tools without modifying the core codebase.
@@ -62,12 +159,12 @@ Additionally, changed the way that the `HF_HOME` environment variable is handled
 ## ARM64 support and unified SLURM submit script (17.02.26)
 * **ARM64 support**: AlpaSim can now run on aarch64 (DGX Spark, DGX Station, IPP5 GB300).
   Build with `docker build --secret id=netrc,src=$HOME/.netrc -t alpasim-base:arm64 .`
-  and deploy with `+deploy=local_arm` (Docker Compose) or `+deploy=ipp5` (SLURM).
+  and deploy with `deploy=local_arm` (Docker Compose) or `deploy=ipp5` (SLURM).
 * **Unified SLURM script**: `src/tools/run-on-slurm/` is the single entry point; previous per-site directories have been consolidated into `src/tools/run-on-slurm/submit.sh`.
 
 **Migration**: Update SLURM submit commands:
-- `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> submit.sh +deploy=ord_oss`
-- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh +deploy=ipp5`
+- `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam`
+- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh deploy=ipp5 topology=1gpu driver=ar1`
 
 ## Output directory structure changes (03.02.26)
 The wizard output directory structure has been reorganized for clarity:
@@ -112,9 +209,10 @@ restored with a slightly different interface. Now, for users to run Alpasim with
 they can use the `scenes.local_usdz_dir` configuration parameter. For example:
 ``` bash
 # to run all scenes in the local_usdz_dir directory:
-alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.test_suite_id=local
+alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.test_suite_id=local
+
 # to run a subset  of the scenes:
-alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.scene_ids=[<your scene ids>]
+alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.scene_ids=[<your scene ids>]
 ```
 
 ## Autoresume Support for SLURM array jobs (14.04.25)

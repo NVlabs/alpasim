@@ -4,7 +4,7 @@
 
 defaults:
   - _self_                  # YAML values override schema defaults
-  - manual_runtime_configs  # Load runtime config overrides
+  - manual_configs  # Load runtime config overrides
 
 # Manual Driver Configuration for Alpasim
 # This driver returns a constant forward trajectory and is designed for

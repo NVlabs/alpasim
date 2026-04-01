@@ -13,7 +13,7 @@ This directory contains all subdirectories which we will need to mount to the va
 4. `rollouts`
     * The output directory for logs produced by the runtime in `.asl` format (size-delimited protobuf files)
 5. `drivers`
-    * Local driver assets (e.g. AR1 checkpoints). The wizard creates this dir if missing when using `+deploy=local`.
+    * Local driver assets (e.g. AR1 checkpoints). The wizard creates this dir if missing when using `deploy=local`.
 
 **HuggingFace models (e.g. AR1):** Set the `HF_HOME` environment variable to control where models are cached (defaults to `~/.cache/huggingface`). Download models with `huggingface-cli download nvidia/Alpamayo-R1-10B` (you may need `huggingface-cli login` first). The wizard mounts the HF cache into the driver container.
 

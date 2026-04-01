@@ -119,13 +119,6 @@ class WizardConfig:
     run_sim_services: Optional[list[str]] = MISSING
     debug_flags: DebugFlags = field(default_factory=DebugFlags)
 
-    # Set GPU & CPU partition preferences for slurm runs.
-    # Usually, one will not need to set these, but CI jobs do not
-    # want to use interactive partitions.
-    # For GPU partition, use SLURM_JOB_ACCOUNT if `None`
-    slurm_gpu_partition: Optional[str] = None
-    slurm_cpu_partition: str = "cpu_short"
-
     # External service addresses for services running outside the deployment.
     # Maps service name to list of addresses (e.g., {"driver": ["localhost:6789"]}).
     # These addresses are added to generated-network-config.yaml so the runtime

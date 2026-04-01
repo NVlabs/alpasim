@@ -1,22 +1,23 @@
 # Should be used in defaults list, e.g.
-# - /driver: ar1
+# - /driver: alpamayo1
 # Type validation happens at driver runtime via OmegaConf.structured merge
 
 defaults:
-  - _self_                  # YAML values override schema defaults
+  - alpamayo_configs    # Camera and simulation configs for 4-cam 10Hz
+  - _self_                      # YAML values override schema defaults
 
-# Alpamayo-R1 Driver Configuration for Alpasim
+# Alpamayo 1 Driver Configuration for Alpasim
 
 # Logging level (uses wizard's global setting)
 log_level: ${wizard.log_level}
 
 # Model configuration
 model:
-  model_type: ar1  # Entry-point name in alpasim.models registry
+  model_type: alpamayo1  # Entry-point name in alpasim.models registry
   # HuggingFace model ID (requires cached download or hf authentication in the driver container)
   checkpoint_path: "nvidia/Alpamayo-R1-10B"
   # # Alternative local path to a pre-downloaded model
-  # checkpoint_path: "/mnt/drivers/ar1/Alpamayo-R1-10B"
+  # checkpoint_path: "/mnt/drivers/alpamayo1/Alpamayo-R1-10B"
   device: "cuda"
 
 # Server configuration
@@ -30,9 +31,9 @@ inference:
      - camera_front_wide_120fov
      - camera_cross_right_120fov
      - camera_front_tele_30fov
-  max_batch_size: 1  # AR1 is memory intensive, start with batch size 1
+  max_batch_size: 1  # Alpamayo 1 is memory intensive, start with batch size 1
   subsample_factor: 1
-  context_length: 4  # AR1 uses 4 temporal frames per camera
+  context_length: 4  # Alpamayo 1 uses 4 temporal frames per camera
 
 # Route configuration
 route:
@@ -44,7 +45,7 @@ route:
 # Output configuration
 output_dir: "/mnt/output/driver"
 
-# Trajectory optimization (disabled by default for AR1)
+# Trajectory optimization (disabled by default for Alpamayo 1)
 trajectory_optimizer:
   enabled: false
 

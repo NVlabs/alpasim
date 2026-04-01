@@ -3,7 +3,8 @@
 # Type validation happens at driver runtime via OmegaConf.structured merge
 
 defaults:
-  - _self_                  # YAML values override schema defaults
+  - vavam_configs       # Camera and simulation configs for 1-cam 2Hz
+  - _self_                      # YAML values override schema defaults
 
 # VAM Driver Configuration for Alpasim
 

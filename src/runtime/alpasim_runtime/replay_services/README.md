@@ -20,9 +20,9 @@ To generate the needed files to be replayed, run, from src/wizard:
 RUN_DIR=/home/migl/workspace/alpasim/.wizard \
 uv run python -m alpasim_wizard \
     wizard.log_dir=${RUN_DIR} \
-    +deploy=local \
+    deploy=local topology=1gpu driver=vavam \
     runtime.endpoints.trafficsim.skip=False \
-    +controller=noisefree_no_latency \
+    controller=ndas_noisefree_no_latency \
     scenes.scene_ids="[clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e]" \
     runtime.simulation_config.n_sim_steps=60
 ```

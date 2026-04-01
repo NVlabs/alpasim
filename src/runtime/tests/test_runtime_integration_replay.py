@@ -24,9 +24,9 @@ behavior intentionally changes and this test needs a new baseline:
 RUN_DIR=/path/to/output/.wizard
 uv run python -m alpasim_wizard \
     wizard.log_dir=${RUN_DIR} \
-    +deploy=local \
+    deploy=local \
     runtime.endpoints.trafficsim.skip=False \
-    +controller_ndas=noisefree_no_latency \
+    controller=ndas_noisefree_no_latency \
     scenes.scene_ids="[clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e]" \
     runtime.simulation_config.n_sim_steps=60
 ```

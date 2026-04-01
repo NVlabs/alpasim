@@ -15,8 +15,9 @@ from typing import Callable
 import hydra
 from alpasim_utils.paths import find_repo_root
 from hydra.core.config_store import ConfigStore
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, MissingMandatoryValue, OmegaConf
 
 from .schema import AlpasimConfig, RunMode
 
@@ -29,12 +30,91 @@ cs.store(name="config_schema", node=AlpasimConfig)
 REPO_ROOT = find_repo_root(__file__)
 
 
+def _list_config_group_options(group: str) -> list[str]:
+    """List available options for a Hydra config group by scanning the search path.
+
+    Returns sorted list of config names (without extension) found under
+    ``group/`` across all Hydra search paths.
+    """
+
+    gh = GlobalHydra.instance()
+    if not gh.is_initialized():
+        return []
+
+    config_loader = gh.config_loader()
+    try:
+        options = config_loader.get_group_options(group)
+    except (
+        hydra.errors.HydraException,
+        KeyError,
+    ):  # Hydra may raise various internal errors for missing/invalid groups
+        options = []
+    # Filter out companion configs (e.g., vavam_configs, dino_configs used by driver defaults)
+    options = [o for o in options if not o.endswith("_configs")]
+    return sorted(set(options))
+
+
+def _is_missing_or_empty(cfg: AlpasimConfig, path: str) -> bool:
+    """Check if a config value is MISSING or an empty DictConfig.
+
+    Some config groups (e.g., driver) default to an empty DictConfig in the
+    schema, so MISSING never survives the merge.  An empty dict means the
+    user didn't select a config for that group.
+    """
+    try:
+        val = OmegaConf.select(cfg, path, throw_on_missing=True)  # type: ignore[arg-type]
+    except MissingMandatoryValue:
+        return True
+    if isinstance(val, DictConfig) and len(val) == 0:
+        return True
+    return False
+
+
+def _check_required_config_groups(cfg: AlpasimConfig) -> None:
+    """Check that all required Hydra config groups were specified.
+
+    Detects MISSING sentinel values left behind when a required config
+    group (deploy, topology, driver) was not provided on the command line,
+    and raises a single helpful error listing everything that's missing.
+    Available options are discovered dynamically from the Hydra search path.
+    """
+    # Each entry: (dotted config path to probe, Hydra group name, CLI syntax)
+    required_checks = [
+        ("defines.filesystem", "deploy", "deploy=<target>"),
+        ("services.sensorsim.replicas_per_container", "topology", "topology=<layout>"),
+        ("driver", "driver", "driver=<model>"),
+    ]
+
+    missing = []
+    for path, group, arg in required_checks:
+        if _is_missing_or_empty(cfg, path):
+            options = _list_config_group_options(group)
+            hint = f"  {arg:30s}"
+            if options:
+                hint += f"  (available: {', '.join(options)})"
+            missing.append(hint)
+
+    if missing:
+        lines = ["", "Missing required configuration:"]
+        lines.extend(missing)
+        lines.append("")
+        lines.append("Example:")
+        lines.append(
+            "  uv run alpasim_wizard deploy=local topology=1gpu"
+            " driver=vavam wizard.log_dir=./out"
+        )
+        lines.append("")
+        raise SystemExit("\n".join(lines))
+
+
 def validate_config(cfg: AlpasimConfig) -> None:
     """Validate the configuration for consistency and completeness.
 
     This function performs all validation checks that should happen
     after the configuration is loaded but before it's used.
     """
+    _check_required_config_groups(cfg)
+
     # Validate NRE version configuration
     if cfg.scenes.nre_version_string is None and not cfg.services.sensorsim:
         raise RuntimeError(
@@ -68,8 +148,8 @@ def update_scene_config(cfg: AlpasimConfig) -> None:
     add all available artifacts if source is set to local and scene_ids is None.
 
     Only one of scene_ids or test_suite_id should be specified in the config.
-    However, we specify a default scene_ids in the stable_manifest/oss.yaml,
-    requiring users to explicitly set scene_ids to None if they want to use a
+    However, we specify a default scene_ids in base_config.yaml, requiring
+    users to explicitly set scene_ids to None if they want to use a
     test_suite_id.
 
     This function removes this requirement by removing scene_ids from the config
@@ -122,10 +202,19 @@ def cmd_line_args(cfg: DictConfig) -> str:
     return " ".join(_convert_to_cmd_line_args_list(cfg)).replace("$", r"\$")
 
 
-OmegaConf.register_new_resolver("repo-relative", lambda path: str(REPO_ROOT / path))
+def _read_repo_version() -> str:
+    """Read the project version from the root pyproject.toml."""
+    import tomllib
 
+    with open(REPO_ROOT / "pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+    return data["project"]["version"]
+
+
+OmegaConf.register_new_resolver("repo-relative", lambda path: str(REPO_ROOT / path))
 OmegaConf.register_new_resolver("cmd-line-args", lambda cfg: cmd_line_args(cfg))
 OmegaConf.register_new_resolver("or", lambda a, b: a or b)
+OmegaConf.register_new_resolver("repo-version", _read_repo_version)
 
 
 def main_wrapper(main: Callable) -> None:

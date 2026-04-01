@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.42.0"
+version = "0.52.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -37,6 +37,7 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+internal = ["alpasim-internal"]
 
 [tool.uv.workspace]
 members = [
@@ -66,13 +67,16 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
+alpasim-internal = { workspace = true }
 
 [tool.uv]
+python-preference = "only-managed"
+exclude-newer = "3 days"
 override-dependencies = [
-  # flash-attention is an AR1 dependency, but it doesn't work with uv
-  # because it's own pyproject.toml does not declare its own dependencies
+  # flash-attention is an AR1/A1.5 dependency, but it doesn't work with uv
+  # because its own pyproject.toml does not declare its own dependencies
   # properly, leading to uv install errors.
-  # TODO: make flash attention optional in alpamayo-r1 repo.
+  # TODO: make flash attention optional in alpamayo-r1 and alpamayo1.5 repos.
   "flash-attn; python_version < '0'",
   # av is an optional dependency of pyAV (from torchvision), and it is in conflict
   # with maglev.av both of which can be important as `import av`. Since torchvision
