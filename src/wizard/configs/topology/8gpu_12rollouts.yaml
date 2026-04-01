@@ -1,5 +1,5 @@
 # @package _global_
-# 8-GPU topology: 12 concurrent rollouts. For SLURM cluster runs with internal driver.
+# 8-GPU topology: 12 concurrent rollouts. For SLURM cluster runs.
 
 defines:
   nre_cache_size: 4  # sensorsim.n_concurrent_rollouts + 1

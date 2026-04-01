@@ -19,7 +19,7 @@ services:
   eval:
     image: alpasim-base:arm64
   sensorsim:
-    image: nvcr.io/nvidian/alpamayo/nre:25.7.9-dc9a8043
+    image: nvcr.io/nvidia/nre/nre-ga:26.02
     external_image: true
     environments:
       - OMP_NUM_THREADS=1

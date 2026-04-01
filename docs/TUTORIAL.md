@@ -190,8 +190,7 @@ The wizard requires three config groups:
 | `driver=` | Which driving model to use | `vavam`, `alpamayo1`, `alpamayo1_5`, `manual` |
 
 Additionally, service-specific config groups can override the default images and launch behavior,
-for example `physics=disabled`, or `trafficsim=internal` and `sensorsim=internal_nre` when the
-internal plugin is installed.
+for example `physics=disabled`.
 
 # Level 2
 

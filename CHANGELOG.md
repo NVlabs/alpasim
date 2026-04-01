@@ -14,7 +14,7 @@ Driver config names, entry points, and `model_type` values now use explicit name
 **Migration**: Replace `driver=ar1` with `driver=alpamayo1` and `driver=a15` with `driver=alpamayo1_5` in CLI invocations, SLURM scripts, and any custom configs that reference these drivers.
 
 ## Upgrade OSS sensorsim to NRE-GA 26.02 and unify entrypoint (30.03.26)
-The OSS sensorsim image has been upgraded from `docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0` to `nvcr.io/nvidia/nre/nre-ga:26.02`. The internal NRE image has been bumped to `nre_run:26.3.79-7869d378` (fixes a first-render crash in 26.2).
+The OSS sensorsim image has been upgraded from `docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0` to `nvcr.io/nvidia/nre/nre-ga:26.02`.
 
 * The sensorsim entrypoint (`/app/run serve-grpc`) and all shared flags are now defined once in `base_config.yaml`; both OSS and internal manifests inherit it instead of duplicating the command block.
 * New flag `--enable-editing-actors` added to the base sensorsim command, required by NRE 26.3 for render requests that include dynamic object updates.
@@ -51,12 +51,11 @@ Each driver config now includes its own runtime settings via the Hydra defaults 
 
 ### stable_manifest removed, images derived from pyproject.toml
 
-The `stable_manifest` config group (`oss.yaml`, `oss_gitlab.yaml`, `internal.yaml`) has been removed. Its content has been merged into `base_config.yaml`:
+The `stable_manifest` config group has been removed. Its content has been merged into `base_config.yaml`:
 
 * Services built from the repo (driver, physics, controller, trafficsim, runtime) use `${defines.base_image}`, which reads the version from `pyproject.toml` at runtime via a `repo-version:` OmegaConf resolver.
 * The external sensorsim image (`nvcr.io/nvidia/nre/nre-ga:26.02`) is set directly in `base_config.yaml`.
-* Internal CI overrides images via the `image_defaults/internal` config (auto-loaded when the internal plugin is installed).
-* A default OSS scene ID is now in `base_config.yaml`, so new users can run without specifying scenes.
+* A default scene ID is now in `base_config.yaml`, so new users can run without specifying scenes.
 
 ### Runtime endpoint config moved to topology
 
@@ -69,13 +68,9 @@ The scattered `model/`, `experiment/`, `sim/`, and `exp/` config directories hav
 ### New optional config groups
 
 New optional groups in `base_config.yaml` defaults allow overriding service-specific settings:
-* `controller=` — override controller config (e.g., `controller=ndas` from internal plugin)
-* `sensorsim=` — override NRE image (e.g., `sensorsim=internal_nre` from internal plugin)
-* `trafficsim=` — override trafficsim config (e.g., `trafficsim=internal` from internal plugin)
-
-### Internal plugin: controller_ndas renamed to controller
-
-The `controller_ndas` config group has been renamed to `controller`. Individual configs have been renamed to include the `ndas` prefix (e.g., `noisefree` → `ndas_noisefree`).
+* `controller=` — override controller config
+* `sensorsim=` — override NRE image
+* `trafficsim=` — override trafficsim config
 
 ### SLURM submit.sh changes
 
@@ -87,10 +82,9 @@ The `controller_ndas` config group has been renamed to `controller`. Individual 
 
 * `+deploy=` syntax is now `deploy=` (no `+` prefix). Same for `topology` and `driver`.
 * `driver=[<model>,<runtime_configs>]` list syntax is now just `driver=<model>`.
-* `driver/alpamayo.yaml` replaced by `driver=dino` (moved to internal plugin).
 * `cameras/wide_only_cam.yaml` removed (use `cameras/1cam.yaml`).
 * `stable_manifest` config group removed entirely.
-* Deleted monolithic deploy configs: `iad_oss`, `ord_oss`, `ord_oss_single`, `local_2gpus`, `iad` (OSS). Use `deploy=<target> topology=<layout>` instead.
+* Deleted monolithic deploy configs: `local_2gpus`. Use `deploy=<target> topology=<layout>` instead.
 * `runtime.nr_workers` and `runtime.endpoints.*` defaults removed from `base_config.yaml` (set by topology).
 * `defines.nre_cache_size` removed from `base_config.yaml` (set by topology).
 
