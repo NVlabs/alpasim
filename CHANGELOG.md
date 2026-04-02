@@ -108,13 +108,15 @@ The root `pyproject.toml` now exposes every workspace member as a named optional
 
 Internal-only content (CI/CD, configs, tools, docs) has been moved to an optional package at `plugins/internal/`.
 
+The default stable manifest (`src/wizard/configs/stable_manifest/oss.yaml`) now references public / locally-built Docker images. A new `plugins/internal/configs/stable_manifest/oss_gitlab.yaml` provides the internal-CI equivalent with `nvcr.io`-hosted images; the CI auto-bump scripts update versions there.
+
 See [Onboarding — Dependency management](docs/ONBOARDING.md#dependency-management) for details.
 
 ## Overridable Hydra config groups (12.03.26)
 Wizard config groups (e.g. `driver`, `deploy`) can now be extended by any installed package. Packages register an `alpasim.configs` entry point pointing to a Python package that contains YAML files, and the wizard automatically adds it to Hydra's search path at startup via `SearchPathPlugin`.
 
 * `model_type` in driver config is now a plain string (e.g. `"ar1"`, `"manual"`) instead of an enum.
-* The transfuser driver configs have been moved out of the wizard into the transfuser plugin — when installed, `driver=transfuser` resolves automatically.
+* The transfuser driver configs have been moved out of the wizard into the transfuser plugin — when installed, `driver=[transfuser,transfuser_runtime_configs]` resolves automatically.
 
 ## Plugin system (12.03.26)
 Alpasim is now extensible via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). Any installed package can register models, controllers, configs, or tools without modifying the core codebase.
@@ -153,12 +155,12 @@ Additionally, changed the way that the `HF_HOME` environment variable is handled
 ## ARM64 support and unified SLURM submit script (17.02.26)
 * **ARM64 support**: AlpaSim can now run on aarch64 (DGX Spark, DGX Station, IPP5 GB300).
   Build with `docker build --secret id=netrc,src=$HOME/.netrc -t alpasim-base:arm64 .`
-  and deploy with `deploy=local_arm` (Docker Compose) or `deploy=ipp5` (SLURM).
+  and deploy with `+deploy=local_arm` (Docker Compose) or `+deploy=ipp5` (SLURM).
 * **Unified SLURM script**: `src/tools/run-on-slurm/` is the single entry point; previous per-site directories have been consolidated into `src/tools/run-on-slurm/submit.sh`.
 
 **Migration**: Update SLURM submit commands:
-- `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam`
-- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh deploy=ipp5 topology=1gpu driver=ar1`
+- `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> submit.sh +deploy=ord_oss`
+- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh +deploy=ipp5`
 
 ## Output directory structure changes (03.02.26)
 The wizard output directory structure has been reorganized for clarity:
@@ -203,10 +205,9 @@ restored with a slightly different interface. Now, for users to run Alpasim with
 they can use the `scenes.local_usdz_dir` configuration parameter. For example:
 ``` bash
 # to run all scenes in the local_usdz_dir directory:
-alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.test_suite_id=local
-
+alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.test_suite_id=local
 # to run a subset  of the scenes:
-alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.scene_ids=[<your scene ids>]
+alpasim_wizard +deploy=local wizard.log_dir=<output_dir> scenes.local_usdz_dir=<abs or rel path to directory> scenes.scene_ids=[<your scene ids>]
 ```
 
 ## Autoresume Support for SLURM array jobs (14.04.25)
