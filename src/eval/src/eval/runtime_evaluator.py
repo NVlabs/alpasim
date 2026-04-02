@@ -13,8 +13,11 @@ Evaluation runs when `eval_config.enabled` is True; otherwise, calls are no-ops.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 import os
+from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
 import yaml
@@ -22,11 +25,47 @@ from alpasim_grpc.v0.logging_pb2 import LogEntry
 from trajdata.maps import VectorMap
 
 from eval.accumulator import EvalDataAccumulator
+from eval.data import ScenarioEvalInput
 from eval.scenario_evaluator import ScenarioEvalResult, ScenarioEvaluator
 from eval.schema import EvalConfig
 from eval.video import render_video_from_eval_result
 
 logger = logging.getLogger(__name__)
+
+
+def _evaluate_in_subprocess(
+    eval_config: EvalConfig,
+    scenario_input: ScenarioEvalInput,
+    metrics_path: str,
+    render_video: bool,
+    video_output_dir: str,
+    scene_id: str,
+    rollout_uuid: str,
+) -> ScenarioEvalResult:
+    """Run evaluation in a subprocess. Module-level for pickling.
+
+    Reconstructs a ScenarioEvaluator from config, runs scorer computation,
+    writes metrics to parquet, and optionally renders video.
+    """
+    evaluator = ScenarioEvaluator(eval_config)
+    eval_result = evaluator.evaluate(scenario_input)
+
+    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+    if eval_result.metrics_df is not None and len(eval_result.metrics_df) > 0:
+        eval_result.metrics_df.write_parquet(metrics_path)
+
+    if render_video:
+        render_video_from_eval_result(
+            scenario_input=scenario_input,
+            metrics_df=eval_result.metrics_df,
+            cfg=eval_config,
+            output_dir=video_output_dir,
+            clipgt_id=f"clipgt-{scene_id}",
+            batch_id="0",
+            rollout_id=rollout_uuid,
+        )
+
+    return eval_result
 
 
 class RuntimeEvaluator:
@@ -56,8 +95,8 @@ class RuntimeEvaluator:
         # - actor_poses: builds trajectories
         # - driver_camera_image, route_request, driver_request/return: accumulated
 
-        # At rollout end:
-        evaluator.run_evaluation()
+        # At rollout end, run evaluation in a ProcessPoolExecutor:
+        await evaluator.run_evaluation(executor)
     """
 
     def __init__(
@@ -85,12 +124,9 @@ class RuntimeEvaluator:
         self.save_path_root = save_path_root
         self.vector_map = vector_map
 
-        # Initialize accumulator and evaluator if enabled
+        # Initialize accumulator (accumulates info for eval) if evaluation is enabled
         self._accumulator: Optional[EvalDataAccumulator] = (
             EvalDataAccumulator(cfg=eval_config) if self._enabled else None
-        )
-        self._evaluator: Optional[ScenarioEvaluator] = (
-            ScenarioEvaluator(eval_config) if self._enabled else None
         )
 
     @property
@@ -164,60 +200,85 @@ class RuntimeEvaluator:
         """Path to per-rollout metrics parquet file."""
         return os.path.join(self._rollout_dir(), "metrics.parquet")
 
-    def run_evaluation(self) -> Optional[ScenarioEvalResult]:
-        """
-        Run in-runtime evaluation and save metrics to parquet file.
+    def build_eval_input(self) -> Optional[ScenarioEvalInput]:
+        """Build ScenarioEvalInput from accumulated message data.
 
-        This method is called after the simulation loop completes. It builds
-        ScenarioEvalInput from the accumulated message data and runs evaluation.
-
-        All trajectory and metadata information is extracted from messages
-        accumulated during simulation via on_message(), ensuring identical
-        behavior with post-hoc ASL file evaluation.
-
-        No-op if evaluation is disabled (`eval.enabled=False`).
+        This runs in the main process and extracts all accumulated data
+        into a picklable input object suitable for subprocess evaluation.
 
         Returns:
-            ScenarioEvalResult if evaluation was run, None otherwise.
-
-        Note:
-            This method is synchronous. For CPU-bound evaluation workloads,
-            consider wrapping scorer computation in ProcessPoolExecutor.
-            TODO: Investigate ProcessPoolExecutor for parallel metric computation
-            when evaluation becomes a bottleneck.
+            ScenarioEvalInput if accumulation succeeded, None otherwise.
         """
-        if not self._enabled:
+        if not self._enabled or self._accumulator is None:
             return None
 
-        if self._accumulator is None or self._evaluator is None:
-            logger.warning("RuntimeEvaluator enabled but accumulator/evaluator is None")
-            return None
-
-        logger.info(
-            "Running in-runtime evaluation for session %s",
-            self.rollout_uuid,
-        )
-
-        # Get run metadata for aggregation
         run_uuid, run_name = self._get_run_metadata()
-
-        # Build evaluation input from accumulated messages
-        scenario_input = self._accumulator.build_scenario_eval_input(
+        return self._accumulator.build_scenario_eval_input(
             run_uuid=run_uuid,
             run_name=run_name,
             batch_id="0",  # Single batch for in-runtime eval
             vec_map=self.vector_map,
         )
 
-        # Run evaluation using pre-initialized evaluator
-        eval_result = self._evaluator.evaluate(scenario_input)
+    async def run_evaluation(
+        self,
+        executor: ProcessPoolExecutor,
+    ) -> Optional[ScenarioEvalResult]:
+        """Run evaluation in a ProcessPoolExecutor.
 
-        # Save metrics to parquet file
+        Builds the eval input in the main process, then submits the
+        CPU-bound scorer computation, parquet writing, and optional video
+        rendering to the provided executor.
+
+        Eval failures are caught and logged; they do not fail the rollout.
+
+        Args:
+            executor: ProcessPoolExecutor to run evaluation in.
+
+        Returns:
+            ScenarioEvalResult if evaluation succeeded, None otherwise.
+        """
+        if not self._enabled:
+            return None
+
+        scenario_input = self.build_eval_input()
+        if scenario_input is None:
+            logger.warning(
+                "RuntimeEvaluator enabled but build_eval_input returned None"
+            )
+            return None
+
+        logger.info(
+            "Submitting evaluation to process pool for session %s",
+            self.rollout_uuid,
+        )
+
         metrics_path = self._metrics_path()
-        os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+        loop = asyncio.get_running_loop()
 
+        try:
+            eval_result = await loop.run_in_executor(
+                executor,
+                functools.partial(
+                    _evaluate_in_subprocess,
+                    eval_config=self.eval_config,
+                    scenario_input=scenario_input,
+                    metrics_path=metrics_path,
+                    render_video=self._should_render_video,
+                    video_output_dir=os.path.dirname(metrics_path),
+                    scene_id=self.scene_id,
+                    rollout_uuid=self.rollout_uuid,
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Evaluation failed in subprocess for session %s",
+                self.rollout_uuid,
+            )
+            return None
+
+        # Log results in the main process
         if eval_result.metrics_df is not None and len(eval_result.metrics_df) > 0:
-            eval_result.metrics_df.write_parquet(metrics_path)
             logger.info(
                 "Saved %d metric rows to %s",
                 len(eval_result.metrics_df),
@@ -229,26 +290,11 @@ class RuntimeEvaluator:
                 self.rollout_uuid,
             )
 
-        # Log aggregated metrics summary
         if eval_result.aggregated_metrics:
             logger.info(
                 "Aggregated metrics for %s: %s",
                 self.rollout_uuid,
                 {k: f"{v:.4f}" for k, v in eval_result.aggregated_metrics.items()},
             )
-
-        # Video rendering
-        if self._should_render_video:
-            render_video_from_eval_result(
-                scenario_input=scenario_input,
-                metrics_df=eval_result.metrics_df,
-                cfg=self.eval_config,
-                output_dir=os.path.dirname(metrics_path),
-                clipgt_id=f"clipgt-{self.scene_id}",
-                batch_id="0",  # Single batch for in-runtime eval
-                rollout_id=self.rollout_uuid,
-            )
-        else:
-            logger.info("Skipping video rendering as it is disabled in the config.")
 
         return eval_result

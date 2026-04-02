@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.52.0"
+version = "0.57.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -84,6 +84,9 @@ override-dependencies = [
   # hyperqueue is a vam dependency for HPC job scheduling, only available on Linux x86_64.
   # Not needed for local driver runs.
   "hyperqueue; python_version < '0'",
+  # vam pins torchmetrics==1.4.3, alpamayo-r1 pins torchmetrics==1.8.2.
+  # Override to the newer version; vam works fine with 1.8.2.
+  "torchmetrics>=1.8.2",
 ]
 constraint-dependencies = [
   # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.

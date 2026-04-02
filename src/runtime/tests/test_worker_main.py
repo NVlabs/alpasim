@@ -96,8 +96,16 @@ async def test_run_worker_loop_uses_parent_version_ids(
         version_ids,
         rollouts_dir,
         eval_config,
+        eval_executor=None,
     ) -> JobResult:
-        del user_config, artifacts, camera_catalog, rollouts_dir, eval_config
+        del (
+            user_config,
+            artifacts,
+            camera_catalog,
+            rollouts_dir,
+            eval_config,
+            eval_executor,
+        )
         nonlocal seen_version_ids
         seen_version_ids = version_ids
         return JobResult(
