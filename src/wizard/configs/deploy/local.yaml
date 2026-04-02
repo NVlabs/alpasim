@@ -1,31 +1,6 @@
 # @package _global_
-# Config for running on workstations with a single 40gb+ GPU, see TUTORIAL
-# for extra instructions. In short, use cmd line arg "+deploy=local" with wizard.
-
-defaults:
-  - _self_
+# Deploy target: local workstation. Use with a topology config, e.g.:
+#   uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=./out
 
 defines:
-  # The repo-relative resolver makes the path relative to the git repo root.
   filesystem: ${repo-relative:"data"}
-
-services:
-  driver:
-    replicas_per_container: 1
-    gpus: [0]
-
-  sensorsim:
-    replicas_per_container: 1
-    gpus: [0]
-
-  physics:
-    replicas_per_container: 1
-    gpus: [0]
-
-  trafficsim:
-    replicas_per_container: 1
-    gpus: [0]
-
-  controller:
-    replicas_per_container: 1
-    gpus: null

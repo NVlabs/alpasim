@@ -43,7 +43,7 @@ Run the wizard with the `local_external_driver` deploy config:
 
 ```bash
 uv run --project src/wizard alpasim_wizard \
-  +deploy=local_external_driver \
+  deploy=local_external_driver \
   wizard.log_dir=$PWD/manual_run \
   scenes.scene_ids='["your-scene-id"]'
 ```
@@ -56,7 +56,7 @@ If your driver runs on a different host or port, override the address with the d
 
 ```bash
 uv run --project src/wizard alpasim_wizard \
-  +deploy=local_external_driver \
+  deploy=local_external_driver \
   wizard.log_dir=$PWD/manual_run \
   scenes.scene_ids='["your-scene-id"]' \
   wizard.external_services.driver='["192.168.1.100:6789"]'

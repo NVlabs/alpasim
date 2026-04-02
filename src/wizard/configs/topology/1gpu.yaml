@@ -1,0 +1,48 @@
+# @package _global_
+# Minimal topology: all services share a single GPU. For local development.
+
+defines:
+  nre_cache_size: 5 # sensorsim.n_concurrent_rollouts + 1
+
+services:
+  sensorsim:
+    replicas_per_container: 1
+    gpus: [0]
+
+  driver:
+    replicas_per_container: 1
+    gpus: [0]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [0]
+
+  trafficsim:
+    replicas_per_container: 1
+    gpus: [0]
+
+  controller:
+    replicas_per_container: 1
+    gpus: null
+
+runtime:
+  nr_workers: 1
+  endpoints:
+    # Total capacity per service = nr_gpus x replicas_per_container x n_concurrent_rollouts
+    # SENS: 1 x 1 x 4 = 4
+    # DRIV: 1 x 1 x 4 = 4
+    # PHYS: 1 x 1 x 4 = 4
+    # CONT: 1 (CPU) x 1 x 4 = 4
+    sensorsim:
+      n_concurrent_rollouts: 4
+    driver:
+      n_concurrent_rollouts: 4
+    physics:
+      n_concurrent_rollouts: 4
+      skip: false
+    controller:
+      n_concurrent_rollouts: 4
+      skip: false
+    trafficsim:
+      n_concurrent_rollouts: 4
+      skip: true

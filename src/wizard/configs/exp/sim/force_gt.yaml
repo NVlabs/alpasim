@@ -2,7 +2,7 @@
 
 defaults:
   - /physics: disabled
-  - /controller: perfect_control
+  - override /controller: perfect_control
   - _self_
 
 runtime:

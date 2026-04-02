@@ -11,20 +11,25 @@ Alpasim depends on access to the following:
     for more information on the contents of artifacts used to define scenes
   - You will need to create a free Hugging Face account if you do not already have one and create an
     access token with read access. See [access tokens](https://huggingface.co/settings/tokens).
+  - **You must also request access** to the gated dataset at
+    [nvidia/PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec).
+    Without this, scene downloads will fail with a `GatedRepoError`.
   - Once you have the token, set it as an environment variable: `export HF_TOKEN=<token>`
 - A version of `uv` installed (see [here](https://docs.astral.sh/uv/getting-started/installation/))
   - Example installation command for Ubuntu: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 - Rust toolchain (`cargo`) for building `utils_rs`, a compiled extension that accelerates trajectory
   transformations and interpolations in the runtime. Install via
-  [rustup](https://rustup.rs/) or let `setup_local_env.sh` install it for you.
+  [rustup](https://rustup.rs/) or interactively let `setup_local_env.sh` install it for you.
 - Docker installed (see [setup instructions](https://docs.docker.com/engine/install/ubuntu/))
 - Docker compose installed (see
   [setup instructions](https://docs.docker.com/compose/install/linux/))
   - The wizard needs `docker`, `docker-compose-plugin`, and `docker-buildx-plugin`
   - Docker needs to be able to run without `sudo`. If you see a permission error when running
     `docker` commands, add yourself to the docker group: `sudo usermod -aG docker $USER`
-- CUDA 12.6 or greater installed (see [here](https://developer.nvidia.com/cuda-downloads) for
+- CUDA 12.8 or greater installed (see [here](https://developer.nvidia.com/cuda-downloads) for
   instructions)
+  - The NRE container uses CUDA 12.8, so your host NVIDIA driver must support it (driver version >=
+    570.x).
 - Install the NVIDIA Container Toolkit (see
   [here](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
 
@@ -51,11 +56,35 @@ Use `uv run` to execute commands in the workspace environment:
 
 ```bash
 uv run pytest                                # run tests
-uv run alpasim_wizard +deploy=local ...      # run the wizard
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam ...  # run the wizard
 uv run --project src/runtime python -c "..." # run in a sub-project context
 ```
 
 All members share one dependency resolution; there is no per-member version isolation. See [Plugin System](PLUGIN_SYSTEM.md) for how plugins integrate with the workspace.
+
+## Troubleshooting
+
+**`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` during NRE warmup**
+Your NVIDIA driver is too old for the CUDA version in the NRE container. Upgrade to driver >= 570.x
+(CUDA 12.8 support). Check your current version with `nvidia-smi`.
+
+**`GatedRepoError` when downloading scenes**
+You need to request access to the gated HuggingFace dataset. Visit
+[nvidia/PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
+and request access.
+
+**`HF_TOKEN` not set / authentication failures**
+Set your HuggingFace token: `export HF_TOKEN=<your-token>`. You can create a token at
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+**gRPC connectivity errors between services**
+Ensure Docker networking is working and all containers are on the same network. Check
+`docker compose logs` for port binding conflicts. If using `debug_flags.use_localhost: true`,
+ensure no other process is using the assigned ports.
+
+**`setup_local_env.sh` fails silently in non-interactive environments**
+The script only installs Rust when a TTY is detected. To install Rust manually,
+use: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`
 
 ## Next steps
 

@@ -5,25 +5,37 @@
 set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+REPO_ROOT="${SCRIPT_DIR}/.."
 
 # ---------------------------------------------------------------------------
 # Model downloads – toggle-based selection
 # ---------------------------------------------------------------------------
 
-# Each model: label, default state (1=on, 0=off), download function body
-model_labels=( "VaVAM-B"  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)" )
-model_states=( 1          0 )
+# Each model: label, default state (1=on, 0=off), download command
+model_labels=( "VaVAM-B"  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)"  "A1.5 (HuggingFace, nvidia/Alpamayo-1.5-10B)" )
+model_states=( 1          0                                             0 )
+model_commands=(
+  '"${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b'
+  'uv run huggingface-cli download nvidia/Alpamayo-R1-10B'
+  'uv run huggingface-cli download nvidia/Alpamayo-1.5-10B && uv run huggingface-cli download nvidia/Cosmos-Reason2-8B'
+)
 
-if [[ "${#model_labels[@]}" -ne "${#model_states[@]}" ]]; then
-  echo "ERROR: model_labels and model_states arrays have different lengths" >&2
+# ---------------------------------------------------------------------------
+# Plugin model registration – plugins can append to the arrays above
+# ---------------------------------------------------------------------------
+for _plugin_models in "${REPO_ROOT}"/plugins/*/data/auto-init-models.sh; do
+  [[ -f "$_plugin_models" ]] && source "$_plugin_models"
+done
+unset _plugin_models
+
+if [[ "${#model_labels[@]}" -ne "${#model_states[@]}" ]] || \
+   [[ "${#model_labels[@]}" -ne "${#model_commands[@]}" ]]; then
+  echo "ERROR: model_labels, model_states, and model_commands arrays have different lengths" >&2
   exit 1
 fi
 
 download_model() {
-  case "$1" in
-    0) "${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b ;;
-    1) huggingface-cli download nvidia/Alpamayo-R1-10B ;;
-  esac
+  eval "${model_commands[$1]}"
 }
 
 show_menu() {

@@ -32,7 +32,7 @@ def test_info_main_prints_to_stdout(capsys: pytest.CaptureFixture[str]) -> None:
 def test_info_main_includes_models_when_driver_installed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When driver is installed, 'Models:' line lists ar1, manual, vam."""
+    """When driver is installed, 'Models:' line lists alpamayo1, alpamayo1_5, manual, vam."""
     info_main()
     out = capsys.readouterr().out
     for line in out.splitlines():
@@ -41,7 +41,7 @@ def test_info_main_includes_models_when_driver_installed(
             break
     else:
         pytest.fail("No 'Models:' line in output")
-    for name in ("ar1", "manual", "vam"):
+    for name in ("alpamayo1", "alpamayo1_5", "manual", "vam"):
         assert name in models_line, f"Expected {name} in Models line: {models_line}"
 
 

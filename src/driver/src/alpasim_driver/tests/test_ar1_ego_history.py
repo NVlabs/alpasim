@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""Tests for AR1 ego history construction (build_ego_history logic)."""
+"""Tests for Alpamayo 1 ego history construction (build_ego_history logic)."""
 
 from __future__ import annotations
 
 import numpy as np
 import torch
-from alpasim_driver.models.ar1_model import build_ego_history
+from alpasim_driver.models.alpamayo1_model import build_ego_history
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ class FakePoseAtTime:
 
 
 # ---------------------------------------------------------------------------
-# Constants matching AR1Model
+# Constants matching Alpamayo1Model
 # ---------------------------------------------------------------------------
 NUM_HISTORY_STEPS = 16
 HISTORY_TIME_STEP = 0.1  # seconds

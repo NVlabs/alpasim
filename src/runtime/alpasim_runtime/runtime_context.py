@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import copy
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import AddressPool
@@ -176,8 +177,10 @@ async def build_runtime_context(
     )
     config_for_validation = config
     if not validate_config_scenes:
+        user_no_scenes = copy.deepcopy(config.user)
+        user_no_scenes.scenes = []
         config_for_validation = SimulatorConfig(
-            user=replace(config.user, scenes=[]),
+            user=user_no_scenes,
             network=config.network,
         )
     await validate_scenarios(config_for_validation)

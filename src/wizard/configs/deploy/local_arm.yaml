@@ -1,0 +1,36 @@
+# @package _global_
+# Deploy target: ARM64 workstation (Grace-Blackwell GB200/GB300/DGX Spark)
+
+defaults:
+  - local
+  - _self_
+
+services:
+  driver:
+    image: alpasim-base:arm64
+    environments:
+      - PYTORCH_NO_CUDA_MEMORY_CACHING=1
+  physics:
+    image: alpasim-base:arm64
+  runtime:
+    image: alpasim-base:arm64
+  controller:
+    image: alpasim-base:arm64
+  eval:
+    image: alpasim-base:arm64
+  sensorsim:
+    image: nvcr.io/nvidia/nre/nre-ga:26.02
+    external_image: true
+    environments:
+      - OMP_NUM_THREADS=1
+      # Blackwell GPUs (compute 10.3) not recognized by PyTorch in NRE image.
+      # Force 9.0+PTX for forward compatibility so slangtorch JIT doesn't crash.
+      - TORCH_CUDA_ARCH_LIST=9.0+PTX
+    command:
+      - "/app/run serve-grpc --port={port} --host=0.0.0.0 --artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz --egocar-hood-dir=/mnt/ego-hoods --no-enable-nrend --use-gsplat"
+
+# Skip services that don't have ARM builds
+runtime:
+  endpoints:
+    trafficsim:
+      skip: true

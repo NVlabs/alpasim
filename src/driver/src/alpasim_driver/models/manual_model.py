@@ -24,17 +24,25 @@ from __future__ import annotations
 import atexit
 import logging
 import math
+import os
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import pygame
 import torch
 
 from ..schema import ModelConfig
 from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
+
+# Suppress pygame welcome message and deprecation warnings
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    import pygame
+
 
 logger = logging.getLogger(__name__)
 

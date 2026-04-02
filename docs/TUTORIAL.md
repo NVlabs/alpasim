@@ -44,8 +44,8 @@ Let's start by executing a run with default settings.
    If you need to create a Hugging Face token, see the Hugging Face access section in
    [onboarding](ONBOARDING.md).
 1. Run the wizard to create the necessary config files, download the scene (if necessary), and run a
-   simulation _ `uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial` _ This will create a
-   `tutorial/` directory with all necessary config files and run the simulation
+   simulation: `uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial`. This will create a
+   `tutorial/` directory with all necessary config files and run the simulation.
 
 ## Results structure
 
@@ -179,6 +179,19 @@ it's best to consult that log to see where the first errors occurred. The micros
 additional logs that can be useful for debugging, but that is not covered here.
 
 
+### Configuration axes
+
+The wizard requires three config groups:
+
+| Group | Purpose | Examples |
+|-------|---------|----------|
+| `deploy=` | Where to run (filesystem paths, SLURM vs Docker) | `local`, `local_external_driver` |
+| `topology=` | How many GPUs, replicas, and workers | `1gpu`, `2gpu`, `8gpu_64rollouts` |
+| `driver=` | Which driving model to use | `vavam`, `alpamayo1`, `alpamayo1_5`, `manual` |
+
+Additionally, service-specific config groups can override the default images and launch behavior,
+for example `physics=disabled`.
+
 # Level 2
 
 In level 2 we learn to customize the simulation (i.e. change the driver policy, change simulated
@@ -208,13 +221,13 @@ For example, one might change the number of rollouts per scene generated in the 
 by running the wizard as follows:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=<dir> runtime.simulation_config.n_rollouts=8
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<dir> runtime.simulation_config.n_rollouts=8
 ```
 
 ### Evaluation video layouts
 You can choose which video layouts to render via `eval.video.video_layouts`. Available layouts are `DEFAULT` (BEV map, camera, metrics) and `REASONING_OVERLAY` (first-person camera with reasoning text overlay and trajectory chart). To generate reasoning-overlay videos only, override when invoking the wizard, for example:
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 You can also set `eval.video.video_layouts=[DEFAULT,REASONING_OVERLAY]` to render both layouts per rollout.
 
@@ -234,18 +247,28 @@ The wizard uses [VaVAM](https://github.com/valeoai/VideoActionModel) as the defa
 explicitly define the driver config, one can use:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[vavam,vavam_runtime_configs]
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_alpamayo
 ```
 
-### Alpamayo-R1
+### Alpamayo (1 and 1.5)
 
-To run with the [Alpamayo-R1](https://github.com/NVlabs/alpamayo) 10b model use
-`driver=[ar1,ar1_runtime_configs]`.
-
-First, one may download the model weights from HuggingFace:
+Both [Alpamayo 1](https://github.com/NVlabs/alpamayo) and
+[Alpamayo 1.5](https://github.com/NVlabs/alpamayo1.5) are 10B-parameter
+driving models that share the same runtime config
+(`alpamayo_configs`). Download the weights from HuggingFace before
+running:
 
 ```bash
+# Alpamayo 1
 huggingface-cli download nvidia/Alpamayo-R1-10B
+
+# Alpamayo 1.5 — both the model and its VLM backbone are gated;
+# accept the license agreements first, then authenticate:
+#   https://huggingface.co/nvidia/Alpamayo-1.5-10B
+#   https://huggingface.co/nvidia/Cosmos-Reason2-8B
+huggingface-cli login            # paste your HF token when prompted
+huggingface-cli download nvidia/Alpamayo-1.5-10B
+huggingface-cli download nvidia/Cosmos-Reason2-8B
 ```
 
 The wizard will use the `HF_HOME` environment variable to find the system HuggingFace cache
@@ -254,19 +277,31 @@ will automatiocally download them, but the download may timeout, requiring you t
 Alternatively, you can specify the path to the model directory by setting the
 `model.checkpoint_path` configuration field.
 
-Then run the wizard with the following command:
+Run with Alpamayo 1:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs]
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo
 ```
 
-> :warning: The Alpamayo R1 model is large (10b parameters)--please ensure that your GPU has the
-> capacity to run it.
-
-To visualize the predicted chain-of-causation reaoning you can change the generated video layout
+Run with Alpamayo 1.5:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_alpamayo driver=[ar1,ar1_runtime_configs] eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_dir=$PWD/tutorial_alpamayo
+```
+
+> :warning: Both models are large (10B parameters). Alpamayo 1 requires ~40 GB VRAM;
+> Alpamayo 1.5 standard inference also requires ~40 GB VRAM.
+
+To enable classifier-free guidance navigation for Alpamayo 1.5 (requires ~60 GB VRAM):
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_dir=$PWD/tutorial_alpamayo driver.model.use_classifier_free_guidance_nav=true
+```
+
+To visualize the predicted chain-of-causation reasoning you can change the generated video layout:
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 
 ### Transfuser (provisional)
@@ -278,7 +313,7 @@ policy, specifically the Latent TransFuser v6
 ([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) model developed for
 [NAVSIM](https://github.com/autonomousvision/navsim).
 
-To run with the Transfuser model use `driver=[transfuser,transfuser_runtime_configs]`.
+To run with the Transfuser model use `driver=transfuser`.
 
 First, one must download the Transfuser model weights/config from HuggingFace:
 
@@ -290,7 +325,7 @@ huggingface-cli download longpollehn/tfv6_navsim config.json --local-dir=data/dr
 Then, run the wizard with the following command:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_transfuser driver=[transfuser,transfuser_runtime_configs]
+uv run alpasim_wizard deploy=local topology=1gpu driver=transfuser wizard.log_dir=$PWD/tutorial_transfuser
 ```
 
 ### Log replay driver
@@ -317,7 +352,7 @@ exists in [scene suites](/data/scenes/sim_suites.csv).
 For custom scene selection, you can specify scenes manually using `scenes.scene_ids`:
 
 ```bash
-uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
 ```
 
 If necessary, the scene will automatically be downloaded from Hugging Face to your local
@@ -333,13 +368,13 @@ instructions.
 #### Using Scene Suites
 
 Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
-with 916 validated scenes (:warning: this will download all the scenes):
+with 910 validated scenes (:warning: this will download all the scenes):
 
 ```bash
-uv run alpasim_wizard +deploy=local scenes.test_suite_id=public_2602 wizard.log_dir=$PWD/tutorial_suite
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam scenes.test_suite_id=public_2507 wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across all 916 scenes in the `public_2602` suite from the 26.02 release dataset.
+This will run simulations across all 910 scenes in the `public_2507` suite from the 25.07 release dataset.
 
 ## Custom components
 
@@ -354,18 +389,19 @@ statements to the driver code in `src/driver/src/alpasim_driver/` and rerun the 
 
 The simulation is split into multiple microservices, each running in its own docker container. The
 primary requirement for a custom container image is that it exposes a gRPC endpoint compatible with
-the expected service interface. The default images used for each service are specified in
-[`stable_manifest`](/src/wizard/configs/stable_manifest/oss.yaml); however, these can be overridden
-by setting `services.<service>.image` to the desired image name and updating the relevant service
-command `services.<service>.command`. For more information about the service interfaces, please see
-the [protocol buffer definitions](/src/grpc/alpasim_grpc/v0/).
+the expected service interface. Default images are defined directly in
+[`base_config.yaml`](/src/wizard/configs/base_config.yaml), and plugin-provided config groups can
+override individual services. You can also override any service directly by setting
+`services.<service>.image` to the desired image name and updating the relevant service command
+`services.<service>.command`. For more information about the service interfaces, please see the
+[protocol buffer definitions](/src/grpc/alpasim_grpc/v0/).
 
 ## Asl log format
 
 `asl` contains most of messages exchanged in the course of a batch simulation as size-delimited
 protobuf messages. These files can be read to access detailed information about the course of the
 simulation. Aside from being used for evaluation, they can also be useful for debugging model or
-simulation behavior. [This notebook](/src/runtime/notebooks/replay_logs_alpamodel.ipynb) shows an
+simulation behavior. The script at `src/tools/log_replay/replay_logs_to_driver.py` shows an
 example of reading an `asl` log and "replaying the stimuli" on a driver instance, allowing for
 reproducing behavior with your favorite debugger attached.
 
@@ -394,7 +430,7 @@ the context of a full simulation.
 1. (Terminal 1) Run the wizard to generate config files without running the simulation:
 
    ```bash
-   uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
+   uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_dbg wizard.run_method=NONE  wizard.debug_flags.use_localhost=True
    ```
 
 1. (Terminal 1) `cd` to the generated directory (`tutorial_dbg`) and note the command/port of the
@@ -462,7 +498,7 @@ from shutting down the docker containers after each simulation by setting
 
 1. (Terminal 1) Run the wizard to generate config files without running the simulation:
    ```bash
-   uv run alpasim_wizard +deploy=local \
+   uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
    wizard.log_dir=$PWD/tutorial_dbg_runtime \
    wizard.run_method=NONE  \
    wizard.debug_flags.use_localhost=True \

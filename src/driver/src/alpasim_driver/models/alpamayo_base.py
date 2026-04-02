@@ -1,18 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""Alpamayo-R1 (AR1) wrapper implementing the common interface."""
+"""Shared base class for the Alpamayo model family (Alpamayo 1, 1.5, etc.)."""
 
 from __future__ import annotations
 
 import logging
+from abc import abstractmethod
 from typing import Any
 
 import numpy as np
 import torch
-from alpamayo_r1 import helper
-from alpamayo_r1.geometry.rotation import so3_to_yaw_torch
-from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
+from alpasim_grpc.v0.common_pb2 import PoseAtTime
 from alpasim_utils.geometry import Trajectory
 
 from ..schema import ModelConfig
@@ -26,8 +25,10 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Camera name to index mapping - must match the order expected by the model
-# This is the same mapping used in load_physical_aiavdataset.py
+# Camera name to index mapping — must match the order expected by the model.
+# Shared across all Alpamayo variants (same sensor rig).
+# Source: alpamayo1_5.load_physical_aiavdataset (camera_name_to_index local var).
+# Defined here because upstream has no importable constant for this mapping.
 CAMERA_NAME_TO_INDEX = {
     "camera_cross_left_120fov": 0,
     "camera_front_wide_120fov": 1,
@@ -40,7 +41,7 @@ CAMERA_NAME_TO_INDEX = {
 
 
 def _format_trajs(pred_xyz: torch.Tensor) -> np.ndarray:
-    """Extract and format trajectory from AR1 output.
+    """Extract and format trajectory from Alpamayo output.
 
     Args:
         pred_xyz: Predicted trajectory tensor with shape
@@ -57,29 +58,44 @@ def _format_trajs(pred_xyz: torch.Tensor) -> np.ndarray:
     return traj[:, :2]
 
 
+def so3_to_yaw_torch(rot: torch.Tensor) -> torch.Tensor:
+    """Extract yaw angle from SO(3) rotation matrices.
+
+    Uses the standard ZYX Euler decomposition: yaw = atan2(R[1,0], R[0,0]).
+
+    Args:
+        rot: Rotation matrices of shape (..., 3, 3).
+
+    Returns:
+        Yaw angles in radians as a torch tensor, shape (...).
+    """
+    return torch.atan2(rot[..., 1, 0], rot[..., 0, 0])
+
+
 def build_ego_history(
-    poses: list[Any],
+    poses: list[PoseAtTime],
     current_timestamp_us: int,
     num_history_steps: int = 16,
     history_time_step: float = 0.1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build ego history tensors from pose data.
 
-    Constructs ego_history_xyz and ego_history_rot tensors in the rig frame relative
-    to the current pose (t0).
+    Constructs ego_history_xyz and ego_history_rot tensors in the rig frame
+    relative to the current pose (t0).
 
     Args:
-        poses: List of PoseAtTime messages with timestamp_us and Pose in local frame.
-            Each pose must have .timestamp_us (int), .pose.vec.{x,y,z}, .pose.quat.{x,y,z,w}.
-            Quaternions must be unit-length (validated by the Trajectory constructor).
+        poses: List of PoseAtTime messages with timestamp_us and Pose in local
+            frame.  Each pose must have .timestamp_us (int),
+            .pose.vec.{x,y,z}, .pose.quat.{x,y,z,w}.  Quaternions must be
+            unit-length (validated by the Trajectory constructor).
         current_timestamp_us: Current timestamp (t0) in microseconds.
         num_history_steps: Number of history steps to produce.
         history_time_step: Time step between history frames in seconds.
 
     Returns:
         Tuple of (ego_history_xyz, ego_history_rot) in rig frame:
-            - ego_history_xyz: shape (1, 1, num_history_steps, 3) in rig frame
-            - ego_history_rot: shape (1, 1, num_history_steps, 3, 3) in rig frame
+            - ego_history_xyz: shape (1, 1, num_history_steps, 3)
+            - ego_history_rot: shape (1, 1, num_history_steps, 3, 3)
     """
     # 1. Extract raw pose data and sort by timestamp
     pose_data = sorted([(p.timestamp_us, p.pose) for p in poses], key=lambda x: x[0])
@@ -135,20 +151,76 @@ def build_ego_history(
     return ego_history_xyz_tensor, ego_history_rot_tensor
 
 
-class AR1Model(BaseTrajectoryModel):
-    """Alpamayo-R1 wrapper implementing the common interface."""
+class AlpamayoBaseModel(BaseTrajectoryModel):
+    """Shared logic for the Alpamayo model family.
 
-    # AR1 uses bfloat16 for inference
-    DTYPE = torch.bfloat16
+    Subclasses must implement :meth:`_create_chat_message` and provide their
+    own ``__init__`` that loads the model-specific checkpoint, then calls
+    :meth:`_init_common`.
+    """
+
+    # Alpamayo uses bfloat16 for inference
+    DTYPE: torch.dtype = torch.bfloat16
     # Number of historical frames for ego trajectory
-    NUM_HISTORY_STEPS = 16
+    NUM_HISTORY_STEPS: int = 16
     # Time step between history frames (seconds)
-    HISTORY_TIME_STEP = 0.1
+    HISTORY_TIME_STEP: float = 0.1
     # Default context length (number of image frames)
-    DEFAULT_CONTEXT_LENGTH = 4
+    DEFAULT_CONTEXT_LENGTH: int = 4
     # Default output frequency (Hz)
-    OUTPUT_FREQUENCY_HZ = 10
-    IMAGE_INPUT_FREQUENCY_HZ = 10  # Expected input frame rate per camera
+    OUTPUT_FREQUENCY_HZ: int = 10
+    # Expected input frame rate per camera
+    IMAGE_INPUT_FREQUENCY_HZ: int = 10
+
+    # ------------------------------------------------------------------
+    # Initialisation helpers
+    # ------------------------------------------------------------------
+
+    def _init_common(
+        self,
+        *,
+        model: Any,
+        processor: Any,
+        helper_module: Any,
+        device: torch.device,
+        camera_ids: list[str],
+        context_length: int,
+        num_traj_samples: int = 1,
+        top_p: float = 0.98,
+        temperature: float = 0.6,
+    ) -> None:
+        """Shared initialisation called by every subclass ``__init__``."""
+        self._model = model
+        self._processor = processor
+        self._helper = helper_module
+        self._device = device
+        self._camera_ids = camera_ids
+        self._context_length = context_length
+        self._num_traj_samples = num_traj_samples
+        self._top_p = top_p
+        self._temperature = temperature
+
+        output_shape = self._model.action_space.get_action_space_dims()
+        self._pred_num_waypoints, _ = output_shape
+
+        missing_cameras = [
+            cam_id for cam_id in camera_ids if cam_id not in CAMERA_NAME_TO_INDEX
+        ]
+        if missing_cameras:
+            raise ValueError(
+                f"Cameras {missing_cameras} not found in Alpamayo camera mapping."
+            )
+
+        logger.info(
+            "Initialised %s with %d cameras, context_length=%d",
+            self.__class__.__name__,
+            len(camera_ids),
+            context_length,
+        )
+
+    # ------------------------------------------------------------------
+    # BaseTrajectoryModel interface
+    # ------------------------------------------------------------------
 
     @classmethod
     def from_config(
@@ -158,65 +230,17 @@ class AR1Model(BaseTrajectoryModel):
         camera_ids: list[str],
         context_length: int | None,
         output_frequency_hz: int,
-    ) -> "AR1Model":
-        """Create AR1Model from driver configuration."""
+    ) -> "AlpamayoBaseModel":
+        """Create an instance from the driver configuration.
+
+        Subclasses may override to extract additional model-specific config
+        values (e.g. ``use_classifier_free_guidance_nav``).
+        """
         return cls(
             checkpoint_path=model_cfg.checkpoint_path,
             device=device,
             camera_ids=camera_ids,
             context_length=context_length or cls.DEFAULT_CONTEXT_LENGTH,
-        )
-
-    def __init__(
-        self,
-        checkpoint_path: str,
-        device: torch.device,
-        camera_ids: list[str],
-        context_length: int = DEFAULT_CONTEXT_LENGTH,
-        num_traj_samples: int = 1,
-        top_p: float = 0.98,
-        temperature: float = 0.6,
-    ):
-        """Initialize AR1 model.
-
-        Args:
-            checkpoint_path: Path or HuggingFace model ID for AR1 checkpoint.
-            device: Torch device for inference.
-            camera_ids: List of camera IDs (supports multiple cameras).
-            context_length: Number of temporal frames per camera (default 4).
-            num_traj_samples: Number of trajectory samples to generate.
-            top_p: Top-p sampling parameter for VLM generation.
-            temperature: Temperature for VLM sampling.
-        """
-        logger.info("Loading AR1 checkpoint from %s", checkpoint_path)
-
-        self._model = AlpamayoR1.from_pretrained(checkpoint_path, dtype=self.DTYPE).to(
-            device
-        )
-        self._processor = helper.get_processor(self._model.tokenizer)
-
-        self._device = device
-        self._camera_ids = camera_ids
-        self._context_length = context_length
-        self._num_traj_samples = num_traj_samples
-        self._top_p = top_p
-        self._temperature = temperature
-
-        # Extract number of output waypoints from model config
-        output_shape = self._model.action_space.get_action_space_dims()
-        self._pred_num_waypoints, _ = output_shape
-
-        # Verify camera_ids are valid
-        missing_cameras = [
-            cam_id for cam_id in camera_ids if cam_id not in CAMERA_NAME_TO_INDEX
-        ]
-        if missing_cameras:
-            raise ValueError(f"Cameras {missing_cameras} not found in AR1 model.")
-
-        logger.info(
-            "Initialized AR1 with %d cameras, context_length=%d",
-            len(camera_ids),
-            context_length,
         )
 
     @property
@@ -232,26 +256,47 @@ class AR1Model(BaseTrajectoryModel):
         return self.OUTPUT_FREQUENCY_HZ
 
     def _encode_command(self, command: DriveCommand) -> Any:
-        """AR1 reasons about navigation from context, no explicit command encoding."""
+        """Alpamayo models reason about navigation from context."""
         return None
+
+    # ------------------------------------------------------------------
+    # Template-method hooks (override in subclasses as needed)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def _create_chat_message(self, image_frames: torch.Tensor) -> list:
+        """Build the chat-message list from preprocessed image frames.
+
+        Alpamayo 1 passes flattened frames; Alpamayo 1.5 additionally passes camera indices.
+        """
+        ...
+
+    def _run_inference(
+        self, model_inputs: dict[str, Any]
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        """Run trajectory inference.  Override to use an alternative method
+        (e.g. classifier-free guidance navigation in A1.5)."""
+        return self._model.sample_trajectories_from_data_with_vlm_rollout(
+            data=model_inputs,
+            top_p=self._top_p,
+            temperature=self._temperature,
+            num_traj_samples=self._num_traj_samples,
+            return_extra=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
 
     def _select_frames_at_target_rate(
         self,
         frames: list[tuple[int, np.ndarray]],
     ) -> list[tuple[int, np.ndarray]]:
-        """Select frames that best approximate 10Hz spacing.
+        """Select frames that best approximate the target input rate.
 
-        When more frames are available than context_length (e.g. cameras
-        producing frames faster than 10Hz), selects the subset whose
-        timestamps most closely match evenly-spaced intervals at
-        IMAGE_INPUT_FREQUENCY_HZ, anchored at the most recent frame.
-
-        Args:
-            frames: List of (timestamp_us, image) tuples for a single camera.
-
-        Returns:
-            List of up to context_length (timestamp_us, image) tuples in
-            chronological order.
+        When more frames are available than ``context_length``, selects the
+        subset whose timestamps most closely match evenly-spaced intervals at
+        :attr:`IMAGE_INPUT_FREQUENCY_HZ`, anchored at the most recent frame.
         """
         if len(frames) <= self._context_length:
             return frames
@@ -285,15 +330,11 @@ class AR1Model(BaseTrajectoryModel):
         return selected
 
     def _preprocess_images(self, camera_images: CameraImages) -> torch.Tensor:
-        """Preprocess multi-camera images for AR1.
-
-        Args:
-            camera_images: Dict mapping camera_id to list of (timestamp_us, image).
+        """Preprocess multi-camera images into a stacked tensor.
 
         Returns:
-            Image tensor in CHW format, shape (N_cameras, num_frames, 3, H, W).
-            Images are kept as uint8 [0, 255] - the processor handles normalization.
-            Cameras are sorted by their index to match the expected model order.
+            Image tensor of shape ``(N_cameras, num_frames, 3, H, W)`` as
+            uint8 ``[0, 255]``.  Cameras are sorted by their index.
         """
         frames_list = []
 
@@ -305,65 +346,62 @@ class AR1Model(BaseTrajectoryModel):
         # Process each camera in sorted order
         for cam_id in sorted_camera_ids:
             frames = camera_images[cam_id]
-
-            # Extract images (HWC format)
             images = [img for _, img in frames]
 
-            # Convert to CHW format, keeping uint8 dtype
-            # NOTE: Do NOT normalize to [0, 1] - the Qwen3-VL processor expects
-            # uint8 images and handles normalization internally. Pre-normalizing
-            # causes double normalization which corrupts the visual features.
-            camera_frames = []
-            for img in images:
-                # Convert HWC uint8 RGB to CHW uint8 tensor [0, 255]
-                img_tensor = torch.from_numpy(img).permute(2, 0, 1)  # stays uint8
-                camera_frames.append(img_tensor)
+            # Convert to CHW format, keeping uint8 dtype.
+            # NOTE: Do NOT normalize to [0, 1] — the VL processor expects
+            # uint8 images and handles normalization internally.
+            # Pre-normalizing causes double normalization which corrupts
+            # the visual features.
+            camera_frames = [
+                torch.from_numpy(img).permute(2, 0, 1)  # HWC uint8 -> CHW uint8
+                for img in images
+            ]
 
             # Stack frames for this camera: (num_frames, C, H, W)
             camera_tensor = torch.stack(camera_frames, dim=0)
             frames_list.append(camera_tensor)
 
         # Stack all cameras: (N_cameras, num_frames, C, H, W)
-        all_frames = torch.stack(frames_list, dim=0)
+        return torch.stack(frames_list, dim=0)
 
-        return all_frames
+    # ------------------------------------------------------------------
+    # Main prediction
+    # ------------------------------------------------------------------
 
     def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         """Generate trajectory prediction.
 
-        AR1 uses camera images and ego pose history. Command, speed,
-        and acceleration are unused.
-
-        Returns:
-            ModelPrediction with trajectory in rig frame.
+        Uses camera images and ego pose history.  Command, speed, and
+        acceleration are unused.
         """
         self._validate_cameras(prediction_input.camera_images)
 
-        # Downsample frames to approximate 10Hz spacing when cameras produce
-        # frames faster than the model's expected input rate.
+        # Down-sample frames to approximate the target input rate.
         camera_images = {
             cam_id: self._select_frames_at_target_rate(frames)
             for cam_id, frames in prediction_input.camera_images.items()
         }
 
-        # Check context length
+        # Validate context length per camera.
         for cam_id in self._camera_ids:
             if len(camera_images[cam_id]) != self._context_length:
                 logger.warning(
-                    "AR1 expects %d frames per camera, got %d for %s",
+                    "%s expects %d frames per camera, got %d for %s",
+                    self.__class__.__name__,
                     self._context_length,
                     len(camera_images[cam_id]),
                     cam_id,
                 )
                 return ModelPrediction(
-                    trajectory_xy=np.zeros((self._pred_num_waypoints, 2)),
-                    headings=np.zeros(self._pred_num_waypoints),
+                    trajectory_xy=np.zeros((0, 2)),
+                    headings=np.zeros(0),
                 )
 
         # Check ego history covers the required time span for interpolation.
         # We need at least 2 poses spanning (NUM_HISTORY_STEPS-1)*HISTORY_TIME_STEP
-        # seconds back from the current timestamp. The interpolation in
-        # _build_ego_history will fill in the 16 target samples from these poses.
+        # seconds back from the current timestamp.  build_ego_history() will
+        # interpolate the 16 target samples from these poses.
         required_span_us = (self.NUM_HISTORY_STEPS - 1) * self.HISTORY_TIME_STEP * 1e6
         if (
             prediction_input.ego_pose_history is None
@@ -410,14 +448,11 @@ class AR1Model(BaseTrajectoryModel):
             self.HISTORY_TIME_STEP,
         )
 
-        # Preprocess images
+        # Preprocess images and create chat message (model-specific hook).
         image_frames = self._preprocess_images(camera_images)
+        messages = self._create_chat_message(image_frames)
 
-        # Create chat message using AR1's helper
-        # Flatten camera and temporal dimensions for the message
-        messages = helper.create_message(image_frames.flatten(0, 1))
-
-        # Apply chat template
+        # Apply chat template via the processor.
         inputs = self._processor.apply_chat_template(
             messages,
             tokenize=True,
@@ -435,34 +470,29 @@ class AR1Model(BaseTrajectoryModel):
         }
 
         # Move to device
-        model_inputs = helper.to_device(model_inputs, self._device)
+        model_inputs = self._helper.to_device(model_inputs, self._device)
 
         # Run inference with autocast
         with torch.no_grad():
             with torch.autocast(str(self._device.type), dtype=self.DTYPE):
-                pred_xyz, pred_rot, extra = (
-                    self._model.sample_trajectories_from_data_with_vlm_rollout(
-                        data=model_inputs,
-                        top_p=self._top_p,
-                        temperature=self._temperature,
-                        num_traj_samples=self._num_traj_samples,
-                        return_extra=True,
-                    )
-                )
+                pred_xyz, pred_rot, extra = self._run_inference(model_inputs)
 
         # Extract trajectory (x, y coordinates)
         trajectory_xy = _format_trajs(pred_xyz)
 
-        # Headings from model output (yaw per waypoint from 3x3 rotation matrices)
+        # Extract headings (yaw per waypoint).
         rot_first = pred_rot[0, 0, 0, :, :, :]  # (T, 3, 3)
         headings = so3_to_yaw_torch(rot_first).detach().cpu().numpy()
 
-        # Log reasoning trace if available
+        # Log reasoning trace if available.
+        reasoning_text = None
         if "cot" in extra and len(extra["cot"]) > 0:
             reasoning_text = str(extra["cot"][0, 0])
-            logger.info("AR1 Chain-of-Causation: %s", reasoning_text)
-        else:
-            reasoning_text = None
+            logger.info(
+                "%s Chain-of-Causation: %s",
+                self.__class__.__name__,
+                reasoning_text,
+            )
 
         return ModelPrediction(
             trajectory_xy=trajectory_xy,

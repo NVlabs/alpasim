@@ -29,8 +29,8 @@ class PluginRegistry:
 
     Usage:
         model_registry = PluginRegistry("alpasim.models")
-        models = model_registry.get_available()  # {"ar1": <class>, "manual": <class>}
-        model = model_registry.create("ar1", checkpoint="...", device="cuda")
+        models = model_registry.get_available()  # {"alpamayo1": <class>, "alpamayo1_5": <class>, ...}
+        model = model_registry.create("alpamayo1_5", checkpoint="...", device="cuda")
     """
 
     def __init__(self, group: str) -> None:
