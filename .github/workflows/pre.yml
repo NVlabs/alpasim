@@ -27,6 +27,7 @@ permissions:
   contents: read
 
 jobs:
+  # Stage 1: collect canonical CI variables and changed service list.
   prepare-variables:
     runs-on: ubuntu-22.04
     outputs:
@@ -69,6 +70,7 @@ jobs:
           RCLONE_REMOTE_AUTH_VERSION="1"
           DEFAULT_ALPACKAGES_PATH="alpasim/artifacts/alpackages/25.10.08"
 
+          # PRs diff against base->head; pushes diff previous SHA->current SHA.
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"
@@ -113,12 +115,16 @@ jobs:
           echo "changed_services=${CHANGED_SERVICES}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload build.env
+        # Persist this as an artifact so downstream jobs can "source" the exact
+        # same values that were computed in this stage.
         uses: actions/upload-artifact@v4
         with:
           name: build-env
           path: build.env
           retention-days: 7
 
+  # Stage 2 (placeholder): keep parity with GitLab bump flow without mutating
+  # PR branches yet.
   bump-versions-plan:
     # Safe first step: report what would be bumped on PRs to default branch.
     # We can replace with commit/push behavior later.
@@ -145,6 +151,7 @@ jobs:
             echo "Would bump minor version for: ${service}"
           done
 
+  # Stage 3: resolve source policy (build/stable/override) and image tags.
   prepare-images:
     runs-on: ubuntu-22.04
     needs: [prepare-variables]
@@ -175,6 +182,7 @@ jobs:
             printf "%s=%q\n" "${key}" "${value}" >> build.env
           }
 
+          # Keep tags short and human-readable while still traceable to commit.
           SHORT_SHA="$(echo "${{ github.sha }}" | cut -c1-8)"
           IS_RELEASE_PIPELINE="false"
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_name }}" == "${DEFAULT_BRANCH}" ]]; then
@@ -217,6 +225,7 @@ jobs:
             write_env "${service_upper}_IMAGE" "${image}"
           }
 
+          # Resolve in fixed order to keep build.env deterministic across runs.
           append_service_vars "runtime" "${RUNTIME_IMAGE_OVERRIDE}"
           append_service_vars "physics" "${PHYSICS_IMAGE_OVERRIDE}"
           append_service_vars "controller" "${CONTROLLER_IMAGE_OVERRIDE}"
@@ -240,6 +249,7 @@ jobs:
       - name: Health check
         run: echo "Build stage jobs are enabled in pre.yml."
 
+  # Stage 4: build only services marked as SOURCE=build in build.env.
   build-services:
     runs-on: self-hosted
     needs: [prepare-images]
@@ -301,6 +311,7 @@ jobs:
           echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
 
       - name: Skip non-build sources
+        # Stable/override services are intentionally not rebuilt in this stage.
         if: steps.source.outputs.source != 'build'
         run: |
           echo "Skipping ${{ matrix.service }} (source=${{ steps.source.outputs.source }})"
@@ -327,4 +338,5 @@ jobs:
             wizard.log_dir=${LOG_DIR}
 
           cd "${GITHUB_WORKSPACE}"
+          # Compose file is produced by wizard; build only the target service.
           docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"

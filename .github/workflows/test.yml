@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 jobs:
+  # Fast service-level tests that run directly in a job container.
   test-services-native:
     name: test-native-${{ matrix.service }}
     runs-on: [self-hosted, type/docker]
@@ -89,6 +90,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.enable_infra_tests == 'true' }}
     name: test-docker-${{ matrix.service }}
     runs-on: [self-hosted, type/docker, type/gpu]
+    # Docker socket mount lets this job drive sibling containers from inside
+    # the CI container ("Docker-outside-of-Docker" style).
     container:
       image: ubuntu:22.04
       options: >-
@@ -154,6 +157,7 @@ jobs:
 
           CHANGED_FILES="$(bash ./.github/scripts/changed-files.sh "${{ github.event_name }}" "${BASE_SHA}" "${HEAD_SHA}")"
 
+          # Build only when service source changed; otherwise this stage is a no-op.
           SOURCE="stable"
           if echo "${CHANGED_FILES}" | grep -Eq "^src/${SERVICE}/"; then
             SOURCE="build"
@@ -195,6 +199,7 @@ jobs:
             wizard.log_dir=${LOG_DIR}
 
           cd "${GITHUB_WORKSPACE}"
+          # Build just this service image from the generated compose file.
           docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
 
       - name: Run tests in docker container
@@ -225,6 +230,8 @@ jobs:
     name: test-docker-compose-${{ matrix.variant }}
     runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
     timeout-minutes: 120
+    # Compose commands run inside this job container but target the host
+    # Docker daemon and host fake_lustre mount.
     container:
       image: ubuntu:22.04
       options: >-
@@ -345,6 +352,7 @@ jobs:
           test -f "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
 
           # In Docker-socket mode, compose mounts must use host-visible paths.
+          # The wizard generates local paths first, then we rewrite to host paths.
           REPO_ROOT_SRC="$(realpath "${GITHUB_WORKSPACE}/src")"
           sed -i "s|${LOCAL_OUTPUT_PATH}|${OUTPUT_PATH}|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
           sed -i "s|${REPO_ROOT_SRC}|${OUTPUT_PATH}/src|g" "${LOCAL_OUTPUT_PATH}/docker-compose.yaml"
@@ -363,6 +371,7 @@ jobs:
           PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
           echo "Using compose project: ${PROJECT}"
           cd "${LOCAL_OUTPUT_PATH}"
+          # --abort-on-container-failure provides a clear CI failure signal.
           docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --build --abort-on-container-failure --remove-orphans
 
       - name: Collect compose logs and tear down
@@ -375,6 +384,7 @@ jobs:
           mkdir -p "${LOG_DIR}"
           cd "${LOCAL_OUTPUT_PATH}" || exit 0
 
+          # Always collect service logs to simplify failure triage.
           services="$(docker compose -f docker-compose.yaml --project-name "${PROJECT}" ps --services 2>/dev/null)"
           for service in ${services}; do
             docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
@@ -388,6 +398,7 @@ jobs:
     name: test-tutorial-smoke
     runs-on: [self-hosted, type/docker, type/gpu, storage/fake_lustre]
     timeout-minutes: 120
+    # Same host daemon/mount strategy as docker-compose integration job.
     container:
       image: ubuntu:22.04
       options: >-
@@ -514,6 +525,7 @@ jobs:
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${LOCAL_OUTPUT_PATH}"
+          # Tutorial smoke intentionally scopes to the core simulation services.
           docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
 
       - name: Collect tutorial logs and tear down
