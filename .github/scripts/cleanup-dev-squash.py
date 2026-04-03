@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2026 NVIDIA Corporation
 
 """
 Clean up old squash files in the dev/ subdirectory.
@@ -97,7 +97,7 @@ def main() -> int:
         log("ERROR", f"Safety check failed: path {dev_dir} does not end with dev")
         return 1
 
-    # If SSH env isn't configured, skip rather than hard-fail.
+    # Missing SSH configuration indicates CI misconfiguration; fail fast.
     missing_ssh = []
     if not (
         os.getenv("DEV_SQUASH_SSH_KEY_B64", "").strip()
@@ -115,9 +115,8 @@ def main() -> int:
     ):
         missing_ssh.append("DEV_SQUASH_SSH_HOST")
     if missing_ssh:
-        log("WARN", f"Missing SSH config env vars: {', '.join(missing_ssh)}")
-        log("INFO", "Skipping cleanup because remote SSH connection is not configured")
-        return 0
+        log("ERROR", f"Missing SSH config env vars: {', '.join(missing_ssh)}")
+        return 1
 
     try:
         check_cmd = make_ssh_cmd(
