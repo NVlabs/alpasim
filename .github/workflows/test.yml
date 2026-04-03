@@ -187,7 +187,12 @@ jobs:
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
-          uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
+          uv run alpasim_wizard \
+            deploy=docker_build_only \
+            topology=1gpu \
+            driver=vavam \
+            services.${SERVICE}.image=${IMAGE} \
+            wizard.log_dir=${LOG_DIR}
 
           cd "${GITHUB_WORKSPACE}"
           docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
@@ -323,7 +328,9 @@ jobs:
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
           HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
-            +deploy=local \
+            deploy=local \
+            topology=1gpu \
+            driver=vavam \
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
@@ -475,7 +482,9 @@ jobs:
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
-            +deploy=local \
+            deploy=local \
+            topology=1gpu \
+            driver=vavam \
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \

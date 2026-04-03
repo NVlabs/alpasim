@@ -319,7 +319,12 @@ jobs:
           cd "${GITHUB_WORKSPACE}/src/wizard"
           python3 -m pip install uv
           uv sync
-          uv run alpasim_wizard +deploy=docker_build_only services.${SERVICE}.image=${IMAGE} wizard.log_dir=${LOG_DIR}
+          uv run alpasim_wizard \
+            deploy=docker_build_only \
+            topology=1gpu \
+            driver=vavam \
+            services.${SERVICE}.image=${IMAGE} \
+            wizard.log_dir=${LOG_DIR}
 
           cd "${GITHUB_WORKSPACE}"
           docker compose -f "${LOG_DIR}/docker-compose.yaml" build "${SERVICE}-0"
