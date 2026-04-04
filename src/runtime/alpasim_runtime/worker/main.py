@@ -22,6 +22,7 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import Queue
 from queue import Empty as QueueEmpty
 
@@ -65,6 +66,7 @@ async def run_single_rollout(
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
     eval_config: EvalConfig,
+    eval_executor: ProcessPoolExecutor,
 ) -> JobResult:
     """Execute one rollout with the addresses assigned by the parent."""
     ep = job.endpoints
@@ -117,6 +119,7 @@ async def run_single_rollout(
             controller=controller,
             camera_catalog=camera_catalog,
             eval_config=eval_config,
+            eval_executor=eval_executor,
         ).run()
 
         return JobResult(
@@ -207,6 +210,10 @@ async def run_worker_loop(
         max_cache_size=artifact_cache_size,
     )
 
+    # Create a process pool for offloading CPU-bound eval computation.
+    # One slot per consumer so no consumer blocks waiting for a pool slot.
+    eval_executor = ProcessPoolExecutor(max_workers=num_consumers)
+
     async def job_consumer() -> None:
         """
         Consume jobs from the shared queue, one at a time.
@@ -255,14 +262,18 @@ async def run_worker_loop(
                 version_ids=version_ids,
                 rollouts_dir=rollouts_dir,
                 eval_config=eval_config,
+                eval_executor=eval_executor,
             )
             result_queue.put(result)
             rollout_count += 1
 
     # Spawn num_consumers consumer tasks -- each handles one job at a time
-    async with asyncio.TaskGroup() as tg:
-        for _ in range(num_consumers):
-            tg.create_task(job_consumer())
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for _ in range(num_consumers):
+                tg.create_task(job_consumer())
+    finally:
+        eval_executor.shutdown(wait=True)
 
     # TaskGroup ensures all consumers complete before exiting
     return rollout_count

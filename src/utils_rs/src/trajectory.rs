@@ -29,7 +29,7 @@ impl TimestampedPose {
 ///
 /// This is the main trajectory type, providing efficient storage and operations
 /// for interpolation, transforms, and incremental updates.
-#[pyclass(name = "Trajectory")]
+#[pyclass(name = "Trajectory", module = "utils_rs")]
 #[derive(Clone)]
 pub struct Trajectory {
     /// Timestamped poses (strictly increasing by timestamp)
@@ -517,6 +517,25 @@ impl Trajectory {
         }
 
         Polyline::from_flat(points, 3)
+    }
+
+    /// Support pickling by returning (constructor, args) tuple.
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(
+        PyObject,
+        (
+            Bound<'py, PyArray1<u64>>,
+            Bound<'py, PyArray2<f32>>,
+            Bound<'py, PyArray2<f32>>,
+        ),
+    )> {
+        let cls = PyModule::import(py, "utils_rs")?.getattr("Trajectory")?;
+        let ts = self.timestamps_us(py);
+        let pos = self.positions(py);
+        let quat = self.quaternions(py);
+        Ok((cls.into(), (ts, pos, quat)))
     }
 
     /// String representation for debugging.

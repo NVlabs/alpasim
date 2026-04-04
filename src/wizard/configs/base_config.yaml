@@ -29,7 +29,6 @@ defines:
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
-  alpackages: "${defines.filesystem}/alpackages"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
   sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"

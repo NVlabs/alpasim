@@ -13,6 +13,7 @@ import contextlib
 import logging
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -91,6 +92,7 @@ class EventBasedRollout:
     controller: ControllerService
     camera_catalog: CameraCatalog
     eval_config: EvalConfig
+    eval_executor: ProcessPoolExecutor
 
     # Mutable state (initialized in __post_init__)
     ego_trajectory: geometry.DynamicTrajectory = field(init=False)
@@ -513,7 +515,9 @@ class EventBasedRollout:
             if ctx is not None:
                 ctx.rollout_duration.observe(rollout_duration)
 
-            eval_result = self._runtime_evaluator.run_evaluation()
+            eval_result = await self._runtime_evaluator.run_evaluation(
+                self.eval_executor
+            )
 
             mark_rollout_complete(
                 self.unbound.save_path_root, self.unbound.rollout_uuid

@@ -2,6 +2,15 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Move evaluation to a separate thread (03.04.26)
+Runtime evaluation now runs in its own thread instead of inline in the simulation loop. This decouples eval latency from the simulation step, improving throughput when evaluation is expensive.
+
+## Duplicate config detection across providers (01.04.26)
+The Hydra config discovery plugin now detects YAML files that exist at the same relative path in multiple config providers (e.g. both `wizard` and an installed plugin). Duplicate paths raise a `ValueError` at startup, preventing silent config shadowing.
+
+## Dependency fix: override `torchmetrics` pin (03.04.26)
+Added `torchmetrics>=1.8.2` to `override-dependencies` in the root `pyproject.toml` to resolve a conflict between upstream driver dependencies.
+
 ## Rename driver configs: ar1 → alpamayo1, a15 → alpamayo1_5 (31.03.26)
 
 Driver config names, entry points, and `model_type` values now use explicit names instead of abbreviations:

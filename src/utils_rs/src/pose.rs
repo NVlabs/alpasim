@@ -24,7 +24,7 @@ pub use crate::array_utils::{quat_to_proto, quat_to_scipy};
 ///
 /// Quaternions are stored internally in scipy format (x, y, z, w) for
 /// compatibility with scipy.spatial.transform.Rotation.
-#[pyclass]
+#[pyclass(module = "utils_rs")]
 #[derive(Clone, Copy, Debug)]
 pub struct Pose {
     position: Vec3,
@@ -241,6 +241,14 @@ impl Pose {
             position: translation,
             quaternion: rotation,
         })
+    }
+
+    /// Support pickling by returning (constructor, args) tuple.
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(PyObject, (Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>))> {
+        let cls = PyModule::import(py, "utils_rs")?.getattr("Pose")?;
+        let vec3 = self.vec3(py);
+        let quat = self.quat(py);
+        Ok((cls.into(), (vec3, quat)))
     }
 
     /// String representation for debugging.

@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     build-essential \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust toolchain (required for utils_rs maturin build)
