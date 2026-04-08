@@ -10,10 +10,6 @@ on:
         description: "Enable infra-coupled tests (docker/gpu/fake_lustre)"
         required: false
         default: "false"
-      enable_slurm_tests:
-        description: "Enable SLURM smoke tests"
-        required: false
-        default: "false"
 
 permissions:
   contents: read
@@ -542,16 +538,3 @@ jobs:
             docker compose -f docker-compose.yaml --project-name "${PROJECT}" logs --no-color "${service}" > "${LOG_DIR}/${service}.log" 2>&1 || true
           done
           docker compose -f docker-compose.yaml --project-name "${PROJECT}" down -v --remove-orphans || true
-
-  # Equivalent to GitLab test-slurm.
-  # Explicitly disabled for now due SLURM infra dependency.
-  test-slurm:
-    if: ${{ false }}
-    name: test-slurm-${{ matrix.variant }}
-    runs-on: [self-hosted, slurm]
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [slurm_internal, slurm_oss]
-    steps:
-      - run: echo "SLURM tests are not yet migrated. Add run-test-slurm equivalent next."
