@@ -127,6 +127,14 @@ class OffRoadScorer(Scorer):
     def calculate(self, simulation_result: SimulationResult) -> list[MetricReturn]:
         offroad = []
         wrong_lane = []
+        valid = []
+
+        # The first control timestamp is a prerun frame where the ego has not
+        # been controlled yet.  Evaluating offroad/wrong_lane there produces
+        # false positives that poison the MAX-aggregated score and
+        # avg_dist_between_incidents (see GitHub issue #59).
+        sm = simulation_result.session_metadata
+        first_driven_us = sm.start_timestamp_us + sm.control_timestep_us
 
         ego_traj = simulation_result.actor_trajectories["EGO"]
         ego_poses = ego_traj.interpolate_poses_list(
@@ -134,6 +142,13 @@ class OffRoadScorer(Scorer):
         )
 
         for ts, ego_pose in zip(simulation_result.timestamps_us, ego_poses):
+            if ts < first_driven_us:
+                offroad.append(False)
+                wrong_lane.append(False)
+                valid.append(False)
+                continue
+
+            valid.append(True)
             res = _compute_off_lane(simulation_result, ts, ego_pose=ego_pose)
             ego_polygon = res["ego_polygon"]
 
@@ -161,14 +176,14 @@ class OffRoadScorer(Scorer):
             MetricReturn(
                 name="offroad",
                 values=offroad,
-                valid=[True] * len(offroad),
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),
             MetricReturn(
                 name="wrong_lane",
                 values=wrong_lane,
-                valid=[True] * len(wrong_lane),
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),

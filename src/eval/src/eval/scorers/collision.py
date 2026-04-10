@@ -22,8 +22,21 @@ class CollisionScorer(Scorer):
         front_collisions = []
         rear_collisions = []
         lateral_collisions = []
+        valid = []
+
+        # Skip prerun frames where ego has not been controlled yet (see #59).
+        sm = simulation_result.session_metadata
+        first_driven_us = sm.start_timestamp_us + sm.control_timestep_us
 
         for ts in simulation_result.timestamps_us:
+            if ts < first_driven_us:
+                front_collisions.append(False)
+                rear_collisions.append(False)
+                lateral_collisions.append(False)
+                valid.append(False)
+                continue
+
+            valid.append(True)
             timestep_polygons = simulation_result.actor_polygons.get_polygons_at_time(
                 ts
             )
@@ -54,7 +67,6 @@ class CollisionScorer(Scorer):
             front_collisions.append(front_collision)
             rear_collisions.append(rear_collision)
             lateral_collisions.append(lateral_collision)
-        valids = [True] * len(front_collisions)
         any_collision = [
             any([front, rear, lateral])
             for front, rear, lateral in zip(
@@ -66,28 +78,28 @@ class CollisionScorer(Scorer):
             MetricReturn(
                 name="collision_front",
                 values=front_collisions,
-                valid=valids,
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),
             MetricReturn(
                 name="collision_rear",
                 values=rear_collisions,
-                valid=valids,
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),
             MetricReturn(
                 name="collision_lateral",
                 values=lateral_collisions,
-                valid=valids,
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),
             MetricReturn(
                 name="collision_any",
                 values=any_collision,
-                valid=valids,
+                valid=valid,
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),
