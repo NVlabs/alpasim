@@ -15,7 +15,7 @@ concurrency:
 jobs:
   sync-to-gitlab:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, type/docker]
     env:
       # Required secrets:
       #   GITLAB_TOKEN        (PAT with write_repository + api scope)
