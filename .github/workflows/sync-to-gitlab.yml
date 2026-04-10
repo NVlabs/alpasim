@@ -29,9 +29,9 @@ jobs:
       GITLAB_REPO_URL: ${{ secrets.GITLAB_REPO_URL }}
       # Optional repository variables (set in GitHub -> Settings -> Variables):
       #   GITLAB_TARGET_BRANCH (default: main)
-      #   GITLAB_SYNC_BRANCH   (default: github-sync/main)
+      #   GITLAB_SYNC_BRANCH_PREFIX (default: github-sync/pr-<PR_NUMBER>)
       GITLAB_TARGET_BRANCH: ${{ vars.GITLAB_TARGET_BRANCH || 'main' }}
-      GITLAB_SYNC_BRANCH: ${{ vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
+      GITLAB_SYNC_BRANCH_PREFIX: ${{ vars.GITLAB_SYNC_BRANCH_PREFIX || format('github-sync/pr-{0}', github.event.pull_request.number) }}
     steps:
       - name: Fix workspace ownership on self-hosted runner
         shell: bash
@@ -72,6 +72,7 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
           AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
@@ -145,6 +146,11 @@ jobs:
             exit 0
           fi
 
+          # Unique sync branch per PR head commit.
+          SYNC_BRANCH="${GITLAB_SYNC_BRANCH_PREFIX}-${AFTER_SHA:0:12}"
+          echo "Using sync branch: ${SYNC_BRANCH}"
+          git fetch --quiet --no-tags gitlab "${SYNC_BRANCH}" || true
+
           RANGE="${BEFORE_SHA}..${AFTER_SHA}"
           mapfile -t commits < <(git rev-list --reverse "${RANGE}")
           total="${#commits[@]}"
@@ -156,7 +162,7 @@ jobs:
             exit 0
           fi
 
-          git checkout -B "${GITLAB_SYNC_BRANCH}" "${TARGET_REF}"
+          git checkout -B "${SYNC_BRANCH}" "${TARGET_REF}"
 
           idx=0
           for commit in "${commits[@]}"; do
@@ -233,14 +239,15 @@ jobs:
           done
 
           echo "applied=${applied}" >> "${GITHUB_OUTPUT}"
-          echo "sync_branch=${GITLAB_SYNC_BRANCH}" >> "${GITHUB_OUTPUT}"
+          echo "sync_branch=${SYNC_BRANCH}" >> "${GITHUB_OUTPUT}"
 
           if [[ "${applied}" -eq 0 ]]; then
             echo "No non-excluded changes to sync."
             exit 0
           fi
 
-          git push --force-with-lease gitlab "HEAD:refs/heads/${GITLAB_SYNC_BRANCH}"
+          # Dedicated automation branch: deterministic overwrite is expected.
+          git push --force gitlab "HEAD:refs/heads/${SYNC_BRANCH}"
 
       - name: Create or update GitLab MR
         if: steps.replay.outputs.applied != '0'
