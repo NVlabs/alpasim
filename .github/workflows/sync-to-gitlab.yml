@@ -127,7 +127,11 @@ jobs:
             echo "Continuing; git fetch will provide authoritative connectivity/auth errors."
           fi
 
-          git remote add gitlab "${REMOTE_URL}"
+          if git remote get-url gitlab >/dev/null 2>&1; then
+            git remote set-url gitlab "${REMOTE_URL}"
+          else
+            git remote add gitlab "${REMOTE_URL}"
+          fi
           # Fetch only the SHAs needed for this PR range from origin.
           # Keep this quiet to avoid noisy ref output in logs.
           git fetch --quiet --no-tags origin "${BEFORE_SHA}" "${AFTER_SHA}" || true
