@@ -41,6 +41,11 @@ def test_clock_ith_trigger(clock_10_1_25):
     assert trigger.sequential_idx == 1
 
 
+def test_clock_ith_trigger_negative_index_raises(clock_10_1_25):
+    with pytest.raises(ValueError, match="non-negative"):
+        clock_10_1_25.ith_trigger(-1)
+
+
 def test_clock_last_trigger(clock_10_1_25):
     times_trigger_is_25 = [25, 26, 27]
     times_trigger_is_35 = [35, 36, 37]

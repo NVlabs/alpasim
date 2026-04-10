@@ -52,7 +52,8 @@ class Clock:
 
     def ith_trigger(self, i: int) -> Trigger:
         """Returns the i-th trigger of the clock since self.start_us"""
-        # TODO(mwatson): raise if i is negative???
+        if i < 0:
+            raise ValueError(f"Trigger index must be non-negative, got {i}")
         return Clock.Trigger(
             range(
                 self.start_us + i * self.interval_us,
