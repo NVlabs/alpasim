@@ -249,6 +249,10 @@ jobs:
           SYNC_BRANCH: ${{ steps.replay.outputs.sync_branch }}
           BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
         run: |
           set -euo pipefail
 
@@ -258,9 +262,12 @@ jobs:
           API_BASE="https://${GITLAB_HOST_NORMALIZED}/api/v4"
           PROJECT_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))')"
 
-          TITLE="sync(github-pr): ${AFTER_SHA:0:8}"
-          DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
+          TITLE="sync(github-pr #${PR_NUMBER}): ${PR_TITLE}"
+
+          DESCRIPTION="$(printf '%s\n\n- GitHub PR: %s\n- GitHub PR title: %s\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
             "Automated sync from GitHub PR into GitLab \`${GITLAB_TARGET_BRANCH}\`." \
+            "${PR_URL}" \
+            "${PR_TITLE}" \
             "${AFTER_SHA}" \
             "${GITHUB_REPOSITORY}" \
             "${BEFORE_SHA}" \
@@ -268,6 +275,12 @@ jobs:
             "${GITHUB_REPOSITORY}" \
             "${GITHUB_RUN_ID}" \
             "${SYNC_BRANCH}")"
+
+          if [[ -n "${PR_BODY}" ]]; then
+            DESCRIPTION="${DESCRIPTION}"$'\n'"## Original GitHub PR Description"$'\n\n'"${PR_BODY}"
+          else
+            DESCRIPTION="${DESCRIPTION}"$'\n'"## Original GitHub PR Description"$'\n\n'"(No description provided on GitHub PR.)"
+          fi
 
           EXISTING_MR_JSON="$(curl -sS --fail --get \
             --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
