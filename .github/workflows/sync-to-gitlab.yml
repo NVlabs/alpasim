@@ -117,8 +117,11 @@ jobs:
           fi
 
           git remote add gitlab "${REMOTE_URL}"
-          git fetch --all --prune
-          git fetch gitlab "${GITLAB_TARGET_BRANCH}"
+          # Fetch only the SHAs needed for this PR range from origin.
+          # Keep this quiet to avoid noisy ref output in logs.
+          git fetch --quiet --no-tags origin "${BEFORE_SHA}" "${AFTER_SHA}" || true
+          # Fetch only target branch from GitLab (do not enumerate all refs).
+          git fetch --quiet --no-tags gitlab "${GITLAB_TARGET_BRANCH}"
 
           if [[ -z "${BEFORE_SHA}" || "${BEFORE_SHA}" == "0000000000000000000000000000000000000000" || -z "${AFTER_SHA}" ]]; then
             echo "Unable to determine a valid commit range."
