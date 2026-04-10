@@ -43,8 +43,8 @@ jobs:
       # Optional repository variables (set in GitHub -> Settings -> Variables):
       #   GITLAB_TARGET_BRANCH (default: main)
       #   GITLAB_SYNC_BRANCH   (default: github-sync/main)
-      GITLAB_TARGET_BRANCH: ${{ inputs.gitlab_target_branch || vars.GITLAB_TARGET_BRANCH || 'main' }}
-      GITLAB_SYNC_BRANCH: ${{ inputs.gitlab_sync_branch || vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
+      GITLAB_TARGET_BRANCH: ${{ github.event.inputs.gitlab_target_branch || vars.GITLAB_TARGET_BRANCH || 'main' }}
+      GITLAB_SYNC_BRANCH: ${{ github.event.inputs.gitlab_sync_branch || vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
     steps:
       - name: Validate required secret
         shell: bash
@@ -75,9 +75,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
           PUSH_AFTER_SHA: ${{ github.sha }}
-          INPUT_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
-          INPUT_BEFORE_SHA: ${{ inputs.before_sha || '' }}
-          INPUT_AFTER_SHA: ${{ inputs.after_sha || '' }}
+          INPUT_SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'main' }}
+          INPUT_BEFORE_SHA: ${{ github.event.inputs.before_sha || '' }}
+          INPUT_AFTER_SHA: ${{ github.event.inputs.after_sha || '' }}
         run: |
           set -euo pipefail
 
