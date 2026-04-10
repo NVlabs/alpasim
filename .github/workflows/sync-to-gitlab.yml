@@ -33,6 +33,17 @@ jobs:
       GITLAB_TARGET_BRANCH: ${{ vars.GITLAB_TARGET_BRANCH || 'main' }}
       GITLAB_SYNC_BRANCH: ${{ vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
     steps:
+      - name: Fix workspace ownership on self-hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sudo >/dev/null 2>&1; then
+            sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" || true
+          else
+            chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}" || true
+          fi
+          chmod -R u+rwX "${GITHUB_WORKSPACE}" || true
+
       - name: Validate required secret
         shell: bash
         run: |
