@@ -111,11 +111,10 @@ jobs:
 
           echo "Checking GitLab host DNS..."
           REMOTE_HOST="$(printf "%s" "${REMOTE_URL}" | sed -E 's#^[a-z]+://([^/@]+@)?([^/:]+).*#\2#')"
-          getent hosts "${REMOTE_HOST}" >/dev/null || {
-            echo "Unable to resolve GitLab host: ${REMOTE_HOST}"
-            echo "If this is an internal host, use a self-hosted runner with internal DNS/VPN access."
-            exit 1
-          }
+          if ! getent hosts "${REMOTE_HOST}" >/dev/null; then
+            echo "Warning: Unable to resolve GitLab host via getent: ${REMOTE_HOST}"
+            echo "Continuing; git fetch will provide authoritative connectivity/auth errors."
+          fi
 
           git remote add gitlab "${REMOTE_URL}"
           git fetch --all --prune
