@@ -248,25 +248,18 @@ jobs:
           set -euo pipefail
 
           API_BASE="https://${GITLAB_HOST}/api/v4"
-          PROJECT_ENCODED="$(python3 - <<'PY'
-import os, urllib.parse
-print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))
-PY
-)"
+          PROJECT_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))')"
 
           TITLE="sync(github-main): ${GITHUB_SHA:0:8}"
-          DESCRIPTION="$(cat <<EOF
-Automated sync from GitHub \`main\` to GitLab \`${GITLAB_TARGET_BRANCH}\`.
-
-- GitHub commit: ${GITHUB_SHA}
-- GitHub compare: https://github.com/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${GITHUB_SHA}
-- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-- Excluded paths: \`.github/**\`
-
-This MR branch is force-updated by GitHub Actions:
-\`${SYNC_BRANCH}\`
-EOF
-)"
+          DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
+            "Automated sync from GitHub \`main\` to GitLab \`${GITLAB_TARGET_BRANCH}\`." \
+            "${GITHUB_SHA}" \
+            "${GITHUB_REPOSITORY}" \
+            "${BEFORE_SHA}" \
+            "${GITHUB_SHA}" \
+            "${GITHUB_REPOSITORY}" \
+            "${GITHUB_RUN_ID}" \
+            "${SYNC_BRANCH}")"
 
           EXISTING_MR_JSON="$(curl -sS --fail --get \
             --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
@@ -275,12 +268,7 @@ EOF
             --data-urlencode "target_branch=${GITLAB_TARGET_BRANCH}" \
             "${API_BASE}/projects/${PROJECT_ENCODED}/merge_requests")"
 
-          EXISTING_IID="$(printf "%s" "${EXISTING_MR_JSON}" | python3 - <<'PY'
-import json, sys
-data = json.load(sys.stdin)
-print(data[0]["iid"] if data else "")
-PY
-)"
+          EXISTING_IID="$(printf "%s" "${EXISTING_MR_JSON}" | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[0]["iid"] if data else "")')"
 
           if [[ -n "${EXISTING_IID}" ]]; then
             curl -sS --fail --request PUT \
@@ -299,10 +287,6 @@ PY
               --data-urlencode "remove_source_branch=false" \
               "${API_BASE}/projects/${PROJECT_ENCODED}/merge_requests")"
 
-            WEB_URL="$(printf "%s" "${CREATED_JSON}" | python3 - <<'PY'
-import json, sys
-print(json.load(sys.stdin).get("web_url", ""))
-PY
-)"
+            WEB_URL="$(printf "%s" "${CREATED_JSON}" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("web_url", ""))')"
             echo "Created GitLab MR: ${WEB_URL}"
           fi
