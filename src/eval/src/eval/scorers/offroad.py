@@ -6,6 +6,7 @@ from typing import Literal, Optional
 import numpy as np
 import shapely
 import shapely.geometry
+import shapely.ops
 from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from shapely import plotting as shapely_plotting
@@ -145,6 +146,21 @@ class OffRoadScorer(Scorer):
             if len(res["curr_lanes_containing_polygon"]) > 0:
                 offroad.append(False)
                 continue
+
+            # When straddling two adjacent lanes (e.g. during a lane change
+            # across a dashed line), no single lane fully contains the ego
+            # polygon.  Check whether the union of all nearby lane polygons
+            # covers it instead (see GitHub issue #61).
+            if len(res["possible_current_lanes"]) > 1:
+                lane_union = shapely.ops.unary_union(
+                    [
+                        _get_lane_polygon(lane)
+                        for lane in res["possible_current_lanes"]
+                    ]
+                )
+                if lane_union.contains(ego_polygon):
+                    offroad.append(False)
+                    continue
 
             # Check if we're too close to the road edge. This will still miss
             # offroad cases when we're far outside the road - but then either
