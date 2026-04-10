@@ -90,3 +90,37 @@ async def test_request_store_too_many_results_raises() -> None:
 
     with pytest.raises(RuntimeError, match="Too many results recorded"):
         store.record_result(_make_result("req-1", "job-2"))
+
+
+@pytest.mark.asyncio
+async def test_request_store_reap_abandoned_cleans_cancelled_waiters() -> None:
+    store = RequestStore()
+    await store.register_request("req-1", expected_jobs=1)
+
+    waiter = asyncio.create_task(store.wait_for_completion("req-1"))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    # Request state is still tracked (the leak scenario).
+    assert store.active_request_count == 1
+
+    # Complete the jobs so the future is done.
+    store.record_result(_make_result("req-1", "job-1"))
+
+    # Reap should clean up the completed-but-unreaped entry.
+    reaped = store.reap_abandoned()
+    assert reaped == 1
+    assert store.active_request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_request_store_reap_abandoned_ignores_pending() -> None:
+    store = RequestStore()
+    await store.register_request("req-1", expected_jobs=1)
+
+    # Request is still pending (no results yet) — should not be reaped.
+    reaped = store.reap_abandoned()
+    assert reaped == 0
+    assert store.active_request_count == 1

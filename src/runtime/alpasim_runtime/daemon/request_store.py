@@ -87,9 +87,6 @@ class RequestStore:
             return await state.completion
         except asyncio.CancelledError:
             # Keep request state alive — jobs may still complete.
-            # TODO: completed-but-unreaped requests will leak memory. Add an
-            #  explicit cancel/drain path to periodically clean up abandoned
-            #  request state.
             raise
         finally:
             if state.completion.done():
@@ -101,6 +98,27 @@ class RequestStore:
             raise RuntimeError(f"Unknown request_id: {request_id}")
         if not state.completion.done():
             state.completion.set_exception(RuntimeError(message))
+
+    def reap_abandoned(self) -> int:
+        """Remove completed requests whose waiters were cancelled.
+
+        Returns the number of reaped entries.  Safe to call periodically
+        (e.g. after each simulation step) to bound memory growth from
+        client disconnects.
+        """
+        abandoned = [
+            rid
+            for rid, state in self._requests.items()
+            if state.completion.done()
+        ]
+        for rid in abandoned:
+            del self._requests[rid]
+        return len(abandoned)
+
+    @property
+    def active_request_count(self) -> int:
+        """Number of requests currently tracked (pending + abandoned)."""
+        return len(self._requests)
 
     def fail_all_requests(self, message: str) -> None:
         for state in self._requests.values():
