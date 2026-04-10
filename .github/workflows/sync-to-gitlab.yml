@@ -1,0 +1,308 @@
+name: Sync GitHub main -> GitLab MR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: "GitHub branch to sync from (for manual testing)"
+        required: false
+        default: "main"
+      before_sha:
+        description: "Optional range start SHA (exclusive)"
+        required: false
+      after_sha:
+        description: "Optional range end SHA (inclusive)"
+        required: false
+      gitlab_target_branch:
+        description: "Optional GitLab MR target branch override"
+        required: false
+      gitlab_sync_branch:
+        description: "Optional GitLab sync branch override"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-sync-main
+  cancel-in-progress: true
+
+jobs:
+  sync-to-gitlab:
+    runs-on: ubuntu-22.04
+    env:
+      # Required secrets:
+      #   GITLAB_TOKEN        (PAT with write_repository + api scope)
+      #   GITLAB_HOST         (GitLab host, e.g. internal hostname)
+      #   GITLAB_PROJECT_PATH (group/project path)
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+      GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+      # Optional repository variables (set in GitHub -> Settings -> Variables):
+      #   GITLAB_TARGET_BRANCH (default: main)
+      #   GITLAB_SYNC_BRANCH   (default: github-sync/main)
+      GITLAB_TARGET_BRANCH: ${{ inputs.gitlab_target_branch || vars.GITLAB_TARGET_BRANCH || 'main' }}
+      GITLAB_SYNC_BRANCH: ${{ inputs.gitlab_sync_branch || vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
+    steps:
+      - name: Validate required secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GITLAB_TOKEN:-}" ]]; then
+            echo "Missing required secret: GITLAB_TOKEN"
+            exit 1
+          fi
+          if [[ -z "${GITLAB_HOST:-}" ]]; then
+            echo "Missing required secret: GITLAB_HOST"
+            exit 1
+          fi
+          if [[ -z "${GITLAB_PROJECT_PATH:-}" ]]; then
+            echo "Missing required secret: GITLAB_PROJECT_PATH"
+            exit 1
+          fi
+
+      - name: Checkout GitHub main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replay missing commits onto GitLab sync branch
+        id: replay
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+          PUSH_AFTER_SHA: ${{ github.sha }}
+          INPUT_SOURCE_BRANCH: ${{ inputs.source_branch || 'main' }}
+          INPUT_BEFORE_SHA: ${{ inputs.before_sha || '' }}
+          INPUT_AFTER_SHA: ${{ inputs.after_sha || '' }}
+        run: |
+          set -euo pipefail
+
+          TARGET_REF="gitlab/${GITLAB_TARGET_BRANCH}"
+          REMOTE_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/${GITLAB_PROJECT_PATH}.git"
+
+          # Exclude GitHub-only CI metadata from GitLab.
+          EXCLUDE_PATHS=(
+            ".github"
+          )
+
+          should_exclude_path() {
+            local file="$1"
+            for p in "${EXCLUDE_PATHS[@]}"; do
+              if [[ "${file}" == "${p}" ]] || [[ "${file}" == "${p}/"* ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          is_merge_commit() {
+            local commit="$1"
+            local parent_count
+            parent_count=$(git rev-list --parents -n 1 "${commit}" | awk '{print NF-1}')
+            [[ "${parent_count}" -gt 1 ]]
+          }
+
+          git config user.name "GitHub Actions Sync Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote add gitlab "${REMOTE_URL}"
+          SOURCE_BRANCH="${INPUT_SOURCE_BRANCH}"
+          git fetch origin "${SOURCE_BRANCH}"
+          git fetch gitlab "${GITLAB_TARGET_BRANCH}"
+
+          BEFORE_SHA=""
+          AFTER_SHA=""
+
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            BEFORE_SHA="${PUSH_BEFORE_SHA}"
+            AFTER_SHA="${PUSH_AFTER_SHA}"
+          else
+            # Manual test mode: allow explicit SHAs or infer latest commit on source branch.
+            AFTER_SHA="${INPUT_AFTER_SHA}"
+            if [[ -z "${AFTER_SHA}" ]]; then
+              AFTER_SHA="$(git rev-parse "origin/${SOURCE_BRANCH}")"
+            fi
+
+            BEFORE_SHA="${INPUT_BEFORE_SHA}"
+            if [[ -z "${BEFORE_SHA}" ]]; then
+              BEFORE_SHA="$(git rev-parse "${AFTER_SHA}^" 2>/dev/null || true)"
+            fi
+          fi
+
+          if [[ -z "${BEFORE_SHA}" || "${BEFORE_SHA}" == "0000000000000000000000000000000000000000" || -z "${AFTER_SHA}" ]]; then
+            echo "Unable to determine a valid commit range."
+            echo "EVENT_NAME=${EVENT_NAME} SOURCE_BRANCH=${SOURCE_BRANCH}"
+            echo "BEFORE_SHA=${BEFORE_SHA} AFTER_SHA=${AFTER_SHA}"
+            echo "applied=0" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          RANGE="${BEFORE_SHA}..${AFTER_SHA}"
+          mapfile -t commits < <(git rev-list --reverse "${RANGE}")
+          total="${#commits[@]}"
+          applied=0
+
+          if [[ "${total}" -eq 0 ]]; then
+            echo "No commits found in push range: ${RANGE}"
+            echo "applied=0" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          git checkout -B "${GITLAB_SYNC_BRANCH}" "${TARGET_REF}"
+
+          idx=0
+          for commit in "${commits[@]}"; do
+            idx=$((idx + 1))
+            subject="$(git log -1 --pretty=%s "${commit}")"
+            echo "[${idx}/${total}] Processing ${commit:0:8} ${subject}"
+            cherry_pick_failed=0
+
+            # Apply commit to index/worktree without committing yet.
+            if is_merge_commit "${commit}"; then
+              if ! git cherry-pick -m 1 --no-commit "${commit}"; then
+                echo "Merge-commit cherry-pick failed for ${commit:0:8}"
+                cherry_pick_failed=1
+              fi
+            else
+              if ! git cherry-pick --no-commit "${commit}"; then
+                echo "Cherry-pick failed for ${commit:0:8}"
+                cherry_pick_failed=1
+              fi
+            fi
+
+            # Resolve excluded-path conflicts by keeping current GitLab branch state.
+            mapfile -t conflict_files < <(git diff --name-only --diff-filter=U || true)
+            if [[ "${#conflict_files[@]}" -gt 0 ]]; then
+              included_conflicts=0
+              for f in "${conflict_files[@]}"; do
+                if should_exclude_path "${f}"; then
+                  git checkout --ours -- "${f}" || true
+                  git add "${f}" || true
+                else
+                  included_conflicts=$((included_conflicts + 1))
+                fi
+              done
+              if [[ "${included_conflicts}" -gt 0 ]]; then
+                echo "Non-excluded conflicts detected in ${commit:0:8}; aborting."
+                git status --short
+                git cherry-pick --abort || true
+                exit 1
+              fi
+            fi
+
+            if [[ "${cherry_pick_failed}" -eq 1 && "${#conflict_files[@]}" -eq 0 ]]; then
+              # Empty/already-applied/non-conflict failure; clear state and skip.
+              git cherry-pick --abort || true
+              git reset --hard HEAD
+              echo "Skipping ${commit:0:8}: cherry-pick produced no applicable patch."
+              continue
+            fi
+
+            # Remove excluded paths from staged and working tree.
+            for p in "${EXCLUDE_PATHS[@]}"; do
+              git restore --source=HEAD --staged --worktree -- "${p}" 2>/dev/null || true
+            done
+
+            # Skip empty commit after exclusion.
+            if git diff --cached --quiet && git diff --quiet; then
+              git reset --hard HEAD
+              git cherry-pick --quit || true
+              echo "Skipping ${commit:0:8}: no non-excluded changes remain."
+              continue
+            fi
+
+            author="$(git log -1 --pretty=%an\ <%ae> "${commit}")"
+            author_date="$(git log -1 --pretty=%aI "${commit}")"
+            message="$(git log -1 --pretty=%B "${commit}")"
+            message="${message}"$'\n\n'"(cherry picked from commit ${commit})"
+
+            GIT_AUTHOR_DATE="${author_date}" \
+            GIT_COMMITTER_DATE="${author_date}" \
+              git commit --author="${author}" -F <(printf "%s" "${message}")
+            git cherry-pick --quit || true
+
+            applied=$((applied + 1))
+          done
+
+          echo "applied=${applied}" >> "${GITHUB_OUTPUT}"
+          echo "sync_branch=${GITLAB_SYNC_BRANCH}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${applied}" -eq 0 ]]; then
+            echo "No non-excluded changes to sync."
+            exit 0
+          fi
+
+          git push --force-with-lease gitlab "HEAD:refs/heads/${GITLAB_SYNC_BRANCH}"
+
+      - name: Create or update GitLab MR
+        if: steps.replay.outputs.applied != '0'
+        shell: bash
+        env:
+          SYNC_BRANCH: ${{ steps.replay.outputs.sync_branch }}
+          BEFORE_SHA: ${{ github.event.before || github.sha }}
+        run: |
+          set -euo pipefail
+
+          API_BASE="https://${GITLAB_HOST}/api/v4"
+          PROJECT_ENCODED="$(python3 - <<'PY'
+import os, urllib.parse
+print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))
+PY
+)"
+
+          TITLE="sync(github-main): ${GITHUB_SHA:0:8}"
+          DESCRIPTION="$(cat <<EOF
+Automated sync from GitHub \`main\` to GitLab \`${GITLAB_TARGET_BRANCH}\`.
+
+- GitHub commit: ${GITHUB_SHA}
+- GitHub compare: https://github.com/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${GITHUB_SHA}
+- Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+- Excluded paths: \`.github/**\`
+
+This MR branch is force-updated by GitHub Actions:
+\`${SYNC_BRANCH}\`
+EOF
+)"
+
+          EXISTING_MR_JSON="$(curl -sS --fail --get \
+            --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            --data-urlencode "state=opened" \
+            --data-urlencode "source_branch=${SYNC_BRANCH}" \
+            --data-urlencode "target_branch=${GITLAB_TARGET_BRANCH}" \
+            "${API_BASE}/projects/${PROJECT_ENCODED}/merge_requests")"
+
+          EXISTING_IID="$(printf "%s" "${EXISTING_MR_JSON}" | python3 - <<'PY'
+import json, sys
+data = json.load(sys.stdin)
+print(data[0]["iid"] if data else "")
+PY
+)"
+
+          if [[ -n "${EXISTING_IID}" ]]; then
+            curl -sS --fail --request PUT \
+              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+              --data-urlencode "title=${TITLE}" \
+              --data-urlencode "description=${DESCRIPTION}" \
+              "${API_BASE}/projects/${PROJECT_ENCODED}/merge_requests/${EXISTING_IID}" >/dev/null
+            echo "Updated existing MR !${EXISTING_IID} in GitLab."
+          else
+            CREATED_JSON="$(curl -sS --fail --request POST \
+              --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+              --data-urlencode "source_branch=${SYNC_BRANCH}" \
+              --data-urlencode "target_branch=${GITLAB_TARGET_BRANCH}" \
+              --data-urlencode "title=${TITLE}" \
+              --data-urlencode "description=${DESCRIPTION}" \
+              --data-urlencode "remove_source_branch=false" \
+              "${API_BASE}/projects/${PROJECT_ENCODED}/merge_requests")"
+
+            WEB_URL="$(printf "%s" "${CREATED_JSON}" | python3 - <<'PY'
+import json, sys
+print(json.load(sys.stdin).get("web_url", ""))
+PY
+)"
+            echo "Created GitLab MR: ${WEB_URL}"
+          fi
