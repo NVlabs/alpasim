@@ -215,7 +215,7 @@ jobs:
               continue
             fi
 
-            author="$(git log -1 --pretty=%an\ <%ae> "${commit}")"
+            author="$(git log -1 --pretty=format:'%an <%ae>' "${commit}")"
             author_date="$(git log -1 --pretty=%aI "${commit}")"
             message="$(git log -1 --pretty=%B "${commit}")"
             message="${message}"$'\n\n'"(cherry picked from commit ${commit})"
