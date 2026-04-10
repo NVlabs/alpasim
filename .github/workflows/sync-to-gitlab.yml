@@ -21,9 +21,12 @@ jobs:
       #   GITLAB_TOKEN        (PAT with write_repository + api scope)
       #   GITLAB_HOST         (GitLab host, e.g. internal hostname)
       #   GITLAB_PROJECT_PATH (group/project path)
+      # Optional:
+      #   GITLAB_REPO_URL     (full HTTPS Git URL; overrides host/path construction)
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
       GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+      GITLAB_REPO_URL: ${{ secrets.GITLAB_REPO_URL }}
       # Optional repository variables (set in GitHub -> Settings -> Variables):
       #   GITLAB_TARGET_BRANCH (default: main)
       #   GITLAB_SYNC_BRANCH   (default: github-sync/main)
@@ -62,7 +65,24 @@ jobs:
           set -euo pipefail
 
           TARGET_REF="gitlab/${GITLAB_TARGET_BRANCH}"
-          REMOTE_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST}/${GITLAB_PROJECT_PATH}.git"
+
+          # Build GitLab remote URL robustly. If full URL is provided, add auth if needed.
+          if [[ -n "${GITLAB_REPO_URL:-}" ]]; then
+            if [[ "${GITLAB_REPO_URL}" =~ ^https://oauth2: ]]; then
+              REMOTE_URL="${GITLAB_REPO_URL}"
+            elif [[ "${GITLAB_REPO_URL}" =~ ^https:// ]]; then
+              REMOTE_URL="${GITLAB_REPO_URL/https:\/\//https://oauth2:${GITLAB_TOKEN}@}"
+            else
+              echo "GITLAB_REPO_URL must be an https URL if provided."
+              exit 1
+            fi
+          else
+            # Normalize host in case secret includes protocol/path by mistake.
+            GITLAB_HOST_NORMALIZED="${GITLAB_HOST#http://}"
+            GITLAB_HOST_NORMALIZED="${GITLAB_HOST_NORMALIZED#https://}"
+            GITLAB_HOST_NORMALIZED="${GITLAB_HOST_NORMALIZED%%/*}"
+            REMOTE_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_HOST_NORMALIZED}/${GITLAB_PROJECT_PATH}.git"
+          fi
 
           # Exclude GitHub-only CI metadata from GitLab.
           EXCLUDE_PATHS=(
@@ -88,6 +108,14 @@ jobs:
 
           git config user.name "GitHub Actions Sync Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "Checking GitLab host DNS..."
+          REMOTE_HOST="$(printf "%s" "${REMOTE_URL}" | sed -E 's#^[a-z]+://([^/@]+@)?([^/:]+).*#\2#')"
+          getent hosts "${REMOTE_HOST}" >/dev/null || {
+            echo "Unable to resolve GitLab host: ${REMOTE_HOST}"
+            echo "If this is an internal host, use a self-hosted runner with internal DNS/VPN access."
+            exit 1
+          }
 
           git remote add gitlab "${REMOTE_URL}"
           git fetch --all --prune
@@ -207,7 +235,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          API_BASE="https://${GITLAB_HOST}/api/v4"
+          GITLAB_HOST_NORMALIZED="${GITLAB_HOST#http://}"
+          GITLAB_HOST_NORMALIZED="${GITLAB_HOST_NORMALIZED#https://}"
+          GITLAB_HOST_NORMALIZED="${GITLAB_HOST_NORMALIZED%%/*}"
+          API_BASE="https://${GITLAB_HOST_NORMALIZED}/api/v4"
           PROJECT_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))')"
 
           TITLE="sync(github-pr): ${AFTER_SHA:0:8}"
