@@ -8,6 +8,10 @@ on:
   pull_request:
     # Run on all PRs (matches GitLab merge_request_event for lint)
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pre-commit:
     runs-on: ubuntu-22.04
