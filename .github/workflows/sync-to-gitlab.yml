@@ -1,26 +1,9 @@
 name: Sync GitHub main -> GitLab MR
 
 on:
-  push:
+  pull_request:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      source_branch:
-        description: "GitHub branch to sync from (for manual testing)"
-        required: false
-        default: "main"
-      before_sha:
-        description: "Optional range start SHA (exclusive)"
-        required: false
-      after_sha:
-        description: "Optional range end SHA (inclusive)"
-        required: false
-      gitlab_target_branch:
-        description: "Optional GitLab MR target branch override"
-        required: false
-      gitlab_sync_branch:
-        description: "Optional GitLab sync branch override"
-        required: false
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -31,6 +14,7 @@ concurrency:
 
 jobs:
   sync-to-gitlab:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-22.04
     env:
       # Required secrets:
@@ -43,8 +27,8 @@ jobs:
       # Optional repository variables (set in GitHub -> Settings -> Variables):
       #   GITLAB_TARGET_BRANCH (default: main)
       #   GITLAB_SYNC_BRANCH   (default: github-sync/main)
-      GITLAB_TARGET_BRANCH: ${{ github.event.inputs.gitlab_target_branch || vars.GITLAB_TARGET_BRANCH || 'main' }}
-      GITLAB_SYNC_BRANCH: ${{ github.event.inputs.gitlab_sync_branch || vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
+      GITLAB_TARGET_BRANCH: ${{ vars.GITLAB_TARGET_BRANCH || 'main' }}
+      GITLAB_SYNC_BRANCH: ${{ vars.GITLAB_SYNC_BRANCH || 'github-sync/main' }}
     steps:
       - name: Validate required secret
         shell: bash
@@ -63,7 +47,7 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout GitHub main
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -72,12 +56,8 @@ jobs:
         id: replay
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
-          PUSH_AFTER_SHA: ${{ github.sha }}
-          INPUT_SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'main' }}
-          INPUT_BEFORE_SHA: ${{ github.event.inputs.before_sha || '' }}
-          INPUT_AFTER_SHA: ${{ github.event.inputs.after_sha || '' }}
+          BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
 
@@ -110,32 +90,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git remote add gitlab "${REMOTE_URL}"
-          SOURCE_BRANCH="${INPUT_SOURCE_BRANCH}"
-          git fetch origin "${SOURCE_BRANCH}"
+          git fetch --all --prune
           git fetch gitlab "${GITLAB_TARGET_BRANCH}"
-
-          BEFORE_SHA=""
-          AFTER_SHA=""
-
-          if [[ "${EVENT_NAME}" == "push" ]]; then
-            BEFORE_SHA="${PUSH_BEFORE_SHA}"
-            AFTER_SHA="${PUSH_AFTER_SHA}"
-          else
-            # Manual test mode: allow explicit SHAs or infer latest commit on source branch.
-            AFTER_SHA="${INPUT_AFTER_SHA}"
-            if [[ -z "${AFTER_SHA}" ]]; then
-              AFTER_SHA="$(git rev-parse "origin/${SOURCE_BRANCH}")"
-            fi
-
-            BEFORE_SHA="${INPUT_BEFORE_SHA}"
-            if [[ -z "${BEFORE_SHA}" ]]; then
-              BEFORE_SHA="$(git rev-parse "${AFTER_SHA}^" 2>/dev/null || true)"
-            fi
-          fi
 
           if [[ -z "${BEFORE_SHA}" || "${BEFORE_SHA}" == "0000000000000000000000000000000000000000" || -z "${AFTER_SHA}" ]]; then
             echo "Unable to determine a valid commit range."
-            echo "EVENT_NAME=${EVENT_NAME} SOURCE_BRANCH=${SOURCE_BRANCH}"
             echo "BEFORE_SHA=${BEFORE_SHA} AFTER_SHA=${AFTER_SHA}"
             echo "applied=0" >> "${GITHUB_OUTPUT}"
             exit 0
@@ -243,20 +202,21 @@ jobs:
         shell: bash
         env:
           SYNC_BRANCH: ${{ steps.replay.outputs.sync_branch }}
-          BEFORE_SHA: ${{ github.event.before || github.sha }}
+          BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
 
           API_BASE="https://${GITLAB_HOST}/api/v4"
           PROJECT_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))')"
 
-          TITLE="sync(github-main): ${GITHUB_SHA:0:8}"
+          TITLE="sync(github-pr): ${AFTER_SHA:0:8}"
           DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
-            "Automated sync from GitHub \`main\` to GitLab \`${GITLAB_TARGET_BRANCH}\`." \
-            "${GITHUB_SHA}" \
+            "Automated sync from GitHub PR into GitLab \`${GITLAB_TARGET_BRANCH}\`." \
+            "${AFTER_SHA}" \
             "${GITHUB_REPOSITORY}" \
             "${BEFORE_SHA}" \
-            "${GITHUB_SHA}" \
+            "${AFTER_SHA}" \
             "${GITHUB_REPOSITORY}" \
             "${GITHUB_RUN_ID}" \
             "${SYNC_BRANCH}")"
