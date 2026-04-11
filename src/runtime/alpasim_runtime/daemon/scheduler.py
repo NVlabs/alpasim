@@ -166,6 +166,10 @@ class DaemonScheduler:
         release_all(pools, acquired)
         self._request_store.record_result(result)
 
+        reaped = self._request_store.reap_abandoned()
+        if reaped:
+            logger.info("Reaped %d abandoned request(s)", reaped)
+
     async def _dispatch_loop(self) -> None:
         """Background loop that processes completed jobs and re-dispatches.
 
