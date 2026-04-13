@@ -20,6 +20,7 @@ from eval.aggregation.modifiers import (
     AddCombinedEvent,
     MetricAggregationModifiers,
     RemoveTimestepsAfterEvent,
+    RemoveTimestepsBeforeFirstDriven,
     RemoveTrajectoryWithEvent,
     get_removed_rows,
 )
@@ -28,6 +29,10 @@ from eval.data import AggregationType
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODIFIERS = [
+    # Drop prerun timesteps before any event combining / filtering so that
+    # spurious offroad / collision events on the prerun frame do not
+    # short-circuit the rest of the pipeline (e.g. RemoveTimestepsAfterEvent).
+    RemoveTimestepsBeforeFirstDriven(),
     AddCombinedEvent(
         event=(pl.col("collision_any") > 0.0) | (pl.col("offroad") > 0.0),
         name="offroad_or_collision",

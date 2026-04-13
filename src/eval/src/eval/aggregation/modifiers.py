@@ -159,3 +159,28 @@ class RemoveTrajectoryWithEvent(MetricAggregationModifiers):
             .over("trajectory_uid")
         )
         return df_wide.filter(~event_per_traj)
+
+
+class RemoveTimestepsBeforeFirstDriven(MetricAggregationModifiers):
+    """Drop rows whose timestamp precedes the ego's first driven step.
+
+    Uses the ``first_driven_timestamp_us`` column (attached to the metrics
+    dataframe by ``create_metrics_dataframe`` when the caller provides it)
+    to filter out prerun / warmup timesteps that otherwise produce spurious
+    offroad / collision events on the aggregated score.
+
+    Acts as a no-op for dataframes without the column, which keeps this
+    safe to include in the default pipeline while also letting callers
+    (e.g. ground-truth baseline runs) opt out by simply not populating it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(event=pl.lit(True))
+
+    def apply(self, df_wide: pl.DataFrame) -> pl.DataFrame:
+        if "first_driven_timestamp_us" not in df_wide.columns:
+            return df_wide
+        return df_wide.filter(
+            pl.col("first_driven_timestamp_us").is_null()
+            | (pl.col("timestamps_us") >= pl.col("first_driven_timestamp_us"))
+        )
