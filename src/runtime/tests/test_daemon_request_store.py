@@ -124,3 +124,29 @@ async def test_request_store_reap_abandoned_ignores_pending() -> None:
     reaped = store.reap_abandoned()
     assert reaped == 0
     assert store.active_request_count == 1
+
+
+@pytest.mark.asyncio
+async def test_request_store_reap_abandoned_ignores_done_but_unawaited() -> None:
+    """Results may arrive before the caller awaits wait_for_completion.
+
+    In that window the future is done() but the request is not abandoned —
+    the reaper must leave it alone so the pending waiter can still retrieve
+    its results.
+    """
+    store = RequestStore()
+    await store.register_request("req-1", expected_jobs=1)
+
+    # Results arrive before any waiter is scheduled.
+    store.record_result(_make_result("req-1", "job-1"))
+    assert store.active_request_count == 1
+
+    # Reap must NOT remove this entry — no cancelled waiter.
+    reaped = store.reap_abandoned()
+    assert reaped == 0
+    assert store.active_request_count == 1
+
+    # The caller can still retrieve its results.
+    results = await store.wait_for_completion("req-1")
+    assert len(results) == 1
+    assert store.active_request_count == 0
