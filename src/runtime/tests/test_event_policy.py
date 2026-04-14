@@ -14,6 +14,7 @@ import pytest
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.events.base import EventQueue
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
+from alpasim_runtime.observation_cache import ObservationCache
 from alpasim_runtime.events.policy import (
     PolicyEvent,
     assert_sensors_up_to_date,
@@ -21,6 +22,7 @@ from alpasim_runtime.events.policy import (
 )
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_utils.geometry import Polyline, Pose, Trajectory
+from alpasim_utils.types import ImageWithMetadata
 
 # ---------------------------------------------------------------------------
 # PolicyEvent tests
@@ -126,7 +128,67 @@ class TestPolicyEvent:
         assert rollout_state.step_context is not None
         assert rollout_state.step_context.step_start_us == 200_000
         assert rollout_state.step_context.target_time_us == 300_000
+        assert rollout_state.step_context.decision_bundle is not None
+        assert rollout_state.step_context.decision_bundle.snapshot.step_id == 2
+        assert rollout_state.step_context.decision_bundle.selected_candidate_id is not None
         assert rollout_state.step_context.driver_trajectory is not None
+
+    @pytest.mark.asyncio
+    async def test_run_builds_stable_input_snapshot_identity(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ) -> None:
+        mock_driver.drive.return_value = simple_trajectory.clip(200_000, 300_001)
+
+        await policy_event.run(rollout_state, EventQueue())
+        first_bundle = rollout_state.step_context.decision_bundle
+        assert first_bundle is not None
+
+        rollout_state.step_context = StepContext()
+        rollout_state.data_sensorsim_to_driver = None
+        mock_driver.drive.reset_mock()
+        mock_driver.drive.return_value = simple_trajectory.clip(200_000, 300_001)
+
+        await policy_event.run(rollout_state, EventQueue())
+        second_bundle = rollout_state.step_context.decision_bundle
+        assert second_bundle is not None
+        assert (
+            first_bundle.snapshot.input_snapshot_id
+            == second_bundle.snapshot.input_snapshot_id
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_appends_shared_observation_frame(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ) -> None:
+        rollout_state.observation_cache = ObservationCache(max_frames=4)
+        rollout_state.last_rendered_images = {
+            "cam_front": ImageWithMetadata(
+                start_timestamp_us=167_000,
+                end_timestamp_us=200_000,
+                image_bytes=b"frame-bytes",
+                camera_logical_id="cam_front",
+            )
+        }
+        rollout_state.data_sensorsim_to_driver = b"renderer-bytes"
+        mock_driver.drive.return_value = simple_trajectory.clip(200_000, 300_001)
+
+        await policy_event.run(rollout_state, EventQueue())
+
+        cached = rollout_state.observation_cache.latest()
+        assert cached is not None
+        assert cached.input_snapshot_id == (
+            rollout_state.step_context.decision_bundle.snapshot.input_snapshot_id
+        )
+        assert cached.rendered_images["cam_front"].image_bytes == b"frame-bytes"
+        assert cached.renderer_data == b"renderer-bytes"
 
     @pytest.mark.asyncio
     async def test_drains_outstanding_tasks_before_drive(

@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
+import json
 import logging
 import os
 import pickle
@@ -139,6 +141,48 @@ def _rig_est_offsets_to_local_positions(
 
 # Unique queue marker instructing the worker thread to flush and exit.
 _SENTINEL_JOB = object()
+_DRIVER_CONTROL_PREFIX = b"ALPASIM_DRIVER_CTRL_V1:"
+
+
+def _decode_driver_control(
+    renderer_data: bytes | None,
+) -> tuple[str | None, dict[str, Any] | None, bytes]:
+    """Decode per-frame driver control envelope from renderer_data."""
+    if renderer_data is None:
+        return None, None, b""
+    if not renderer_data.startswith(_DRIVER_CONTROL_PREFIX):
+        return None, None, renderer_data
+
+    payload = renderer_data[len(_DRIVER_CONTROL_PREFIX) :]
+    try:
+        obj = json.loads(payload.decode("utf-8"))
+    except Exception:
+        logger.warning("Invalid driver control payload; ignoring override")
+        return None, None, b""
+
+    next_model = obj.get("next_model")
+    if next_model is not None and not isinstance(next_model, str):
+        logger.warning("driver control next_model must be string; ignoring override")
+        next_model = None
+
+    planner_context = obj.get("planner_context")
+    if planner_context is not None and not isinstance(planner_context, dict):
+        logger.warning("driver control planner_context must be object; ignoring")
+        planner_context = None
+
+    raw_renderer_data = obj.get("renderer_data_b64")
+    if raw_renderer_data is None:
+        return next_model, planner_context, b""
+    if not isinstance(raw_renderer_data, str):
+        logger.warning("driver control renderer_data_b64 must be string")
+        return next_model, planner_context, b""
+
+    try:
+        decoded = base64.b64decode(raw_renderer_data.encode("ascii"))
+    except Exception:
+        logger.warning("Failed to decode renderer_data_b64 from driver control payload")
+        return next_model, planner_context, b""
+    return next_model, planner_context, decoded
 
 
 @dataclass
@@ -148,9 +192,11 @@ class DriveJob:
     session_id: str
     session: "Session"
     command: DriveCommand
+    model_type: str
+    planner_context: dict[str, Any] | None
     pose: Optional[PoseAtTime]
     timestamp_us: int
-    result: asyncio.Future[DriveResponse]
+    result: asyncio.Future[ModelPrediction]
 
 
 @dataclass
@@ -479,7 +525,8 @@ class EgoDriverService(EgodriverServiceServicer):
             cfg.model.device if torch.cuda.is_available() else "cpu"
         )
 
-        # Create model using factory
+        # Create default model using factory
+        self._default_model_type = cfg.model.model_type
         self._model = _create_model(
             cfg.model,
             self._device,
@@ -487,6 +534,9 @@ class EgoDriverService(EgodriverServiceServicer):
             context_length=cfg.inference.context_length,
             output_frequency_hz=cfg.inference.output_frequency_hz,
         )
+        self._models: dict[str, BaseTrajectoryModel] = {
+            self._default_model_type: self._model
+        }
 
         # Get context length from model or config override
         self._context_length = (
@@ -497,7 +547,7 @@ class EgoDriverService(EgodriverServiceServicer):
 
         logger.info(
             "Initialized %s model with %d cameras, context_length=%d",
-            cfg.model.model_type,
+            self._default_model_type,
             self._model.num_cameras,
             self._context_length,
         )
@@ -626,6 +676,62 @@ class EgoDriverService(EgodriverServiceServicer):
                 continue
             self._loop.call_soon_threadsafe(leftover.result.cancel)
 
+    def _get_model(self, model_type: str) -> BaseTrajectoryModel:
+        """Return model instance for model_type, creating it lazily."""
+        existing = self._models.get(model_type)
+        if existing is not None:
+            return existing
+
+        model_cfg = ModelConfig(
+            model_type=model_type,
+            checkpoint_path=self._cfg.model.checkpoint_path,
+            device=self._cfg.model.device,
+            tokenizer_path=self._cfg.model.tokenizer_path,
+        )
+        candidate = _create_model(
+            model_cfg,
+            self._device,
+            camera_ids=self._cfg.inference.use_cameras,
+            context_length=self._cfg.inference.context_length,
+            output_frequency_hz=self._cfg.inference.output_frequency_hz,
+        )
+
+        # Switching is only safe when model I/O cadence matches the default runtime setup.
+        if candidate.camera_ids != self._model.camera_ids:
+            raise ValueError(
+                f"Model '{model_type}' camera_ids={candidate.camera_ids} do not match "
+                f"default model camera_ids={self._model.camera_ids}"
+            )
+        if candidate.context_length != self._model.context_length:
+            raise ValueError(
+                f"Model '{model_type}' context_length={candidate.context_length} does "
+                f"not match default model context_length={self._model.context_length}"
+            )
+        if candidate.output_frequency_hz != self._model.output_frequency_hz:
+            raise ValueError(
+                f"Model '{model_type}' output_frequency_hz="
+                f"{candidate.output_frequency_hz} does not match default model "
+                f"output_frequency_hz={self._model.output_frequency_hz}"
+            )
+
+        self._models[model_type] = candidate
+        logger.info("Loaded switchable model '%s'", model_type)
+        return candidate
+
+    def _resolve_model_type_for_request(self, request: DriveRequest) -> str:
+        """Resolve per-request model type from optional control payload."""
+        override_model, _, _ = _decode_driver_control(request.renderer_data)
+        if override_model is None or override_model.strip() == "":
+            return self._default_model_type
+        return override_model
+
+    def _resolve_planner_context_for_request(
+        self, request: DriveRequest
+    ) -> dict[str, Any] | None:
+        """Resolve per-request planner context from optional control payload."""
+        _, planner_context, _ = _decode_driver_control(request.renderer_data)
+        return planner_context
+
     def _get_speed_and_acceleration(self, session: Session) -> tuple[float, float]:
         """Extract speed and acceleration from session's dynamic state.
 
@@ -653,7 +759,9 @@ class EgoDriverService(EgodriverServiceServicer):
 
         return float(speed), float(acceleration)
 
-    def _prepare_camera_images(self, session: Session) -> CameraImages:
+    def _prepare_camera_images(
+        self, session: Session, model: BaseTrajectoryModel
+    ) -> CameraImages:
         """Collect raw images from frame caches for all cameras.
 
         Returns dict mapping camera_id to list of CameraFrame tuples.
@@ -661,7 +769,7 @@ class EgoDriverService(EgodriverServiceServicer):
         """
         camera_images: CameraImages = {}
 
-        for cam_id in self._model.camera_ids:
+        for cam_id in model.camera_ids:
             frame_cache = session.frame_caches[cam_id]
             entries = frame_cache.latest_frame_entries(self._context_length)
             camera_images[cam_id] = [(e.timestamp_us, e.image) for e in entries]
@@ -717,19 +825,34 @@ class EgoDriverService(EgodriverServiceServicer):
         Builds a PredictionInput per job and delegates to predict_batch(),
         which models can override for GPU-level batching.
         """
-        inputs = []
-        for job in batch:
-            speed, acceleration = self._get_speed_and_acceleration(job.session)
-            inputs.append(
-                PredictionInput(
-                    camera_images=self._prepare_camera_images(job.session),
-                    command=job.command,
-                    speed=speed,
-                    acceleration=acceleration,
-                    ego_pose_history=job.session.poses,
+        predictions: list[ModelPrediction | None] = [None] * len(batch)
+        grouped: dict[str, list[tuple[int, DriveJob]]] = {}
+        for index, job in enumerate(batch):
+            grouped.setdefault(job.model_type, []).append((index, job))
+
+        for model_type, indexed_jobs in grouped.items():
+            model = self._get_model(model_type)
+            inputs: list[PredictionInput] = []
+            for _, job in indexed_jobs:
+                speed, acceleration = self._get_speed_and_acceleration(job.session)
+                inputs.append(
+                    PredictionInput(
+                        camera_images=self._prepare_camera_images(job.session, model),
+                        command=job.command,
+                        speed=speed,
+                        acceleration=acceleration,
+                        ego_pose_history=job.session.poses,
+                        planner_context=job.planner_context,
+                    )
                 )
-            )
-        return self._model.predict_batch(inputs)
+
+            model_predictions = model.predict_batch(inputs)
+            for (index, _), prediction in zip(
+                indexed_jobs, model_predictions, strict=True
+            ):
+                predictions[index] = prediction
+
+        return [cast(ModelPrediction, prediction) for prediction in predictions]
 
     @async_log_call
     async def start_session(
@@ -894,11 +1017,18 @@ class EgoDriverService(EgodriverServiceServicer):
                 trajectory=empty_traj,
             )
 
+        selected_model_type = self._resolve_model_type_for_request(request)
+        planner_context = self._resolve_planner_context_for_request(request)
+        # Validate model eagerly to fail this request immediately if unavailable.
+        self._get_model(selected_model_type)
+
         future: asyncio.Future[ModelPrediction] = self._loop.create_future()
         job = DriveJob(
             session_id=request.session_uuid,
             session=session,
             command=session.current_command,
+            model_type=selected_model_type,
+            planner_context=planner_context,
             pose=pose_snapshot,
             timestamp_us=request.time_now_us,
             result=future,
@@ -908,12 +1038,18 @@ class EgoDriverService(EgodriverServiceServicer):
         prediction = await future
 
         # Convert model prediction to Alpasim trajectory format
+        selected_model = self._get_model(job.model_type)
         alpasim_traj: Trajectory = self._convert_prediction_to_alpasim_trajectory(
-            prediction, job.pose, job.timestamp_us
+            prediction,
+            job.pose,
+            job.timestamp_us,
+            output_frequency_hz=selected_model.output_frequency_hz,
         )
         reasoning_text: str | None = prediction.reasoning_text
 
         debug_data = {
+            "selected_model_type": job.model_type,
+            "has_planner_context": job.planner_context is not None,
             "command": int(session.current_command),
             "command_name": session.current_command.name,
             "num_frames": {
@@ -925,6 +1061,15 @@ class EgoDriverService(EgodriverServiceServicer):
             "trajectory_points": len(alpasim_traj.poses),
             "reasoning_text": reasoning_text,
         }
+        if prediction.debug_metadata is not None:
+            debug_data["model_debug"] = prediction.debug_metadata
+            debug_data.update(
+                {
+                    key: value
+                    for key, value in prediction.debug_metadata.items()
+                    if key not in debug_data
+                }
+            )
         debug_info = DriveResponse.DebugInfo(
             unstructured_debug_info=pickle.dumps(debug_data)
         )
@@ -938,6 +1083,7 @@ class EgoDriverService(EgodriverServiceServicer):
         prediction: ModelPrediction,
         current_pose: PoseAtTime,
         time_now_us: int,
+        output_frequency_hz: int,
     ) -> Trajectory:
         """Convert model prediction to Alpasim trajectory format.
 
@@ -948,6 +1094,7 @@ class EgoDriverService(EgodriverServiceServicer):
             prediction: Model prediction with trajectory_xy and optional headings.
             current_pose: Current vehicle pose in local frame.
             time_now_us: Current time in microseconds.
+            output_frequency_hz: Output waypoint frequency of the selected model.
 
         Returns:
             Alpasim Trajectory protobuf message.
@@ -961,7 +1108,7 @@ class EgoDriverService(EgodriverServiceServicer):
         trajectory.poses.append(current_pose)
 
         curr_z = current_pose.pose.vec.z
-        frequency_hz = self._model.output_frequency_hz
+        frequency_hz = output_frequency_hz
         time_delta_us = int(1_000_000 / frequency_hz)
         time_step = 1.0 / frequency_hz
 

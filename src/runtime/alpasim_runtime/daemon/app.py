@@ -8,7 +8,9 @@ import signal
 from contextlib import suppress
 
 from alpasim_grpc.v0 import runtime_pb2_grpc
+from alpasim_grpc.v1 import interactive_runtime_pb2_grpc
 from alpasim_runtime.daemon.engine import DaemonEngine
+from alpasim_runtime.daemon.interactive_servicer import InteractiveRuntimeServicer
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
 
 import grpc
@@ -76,6 +78,12 @@ class RuntimeDaemonApp:
                 RuntimeDaemonServicer(
                     engine=self._engine,
                     on_shutdown_requested=self.request_shutdown,
+                ),
+                server,
+            )
+            interactive_runtime_pb2_grpc.add_InteractiveRuntimeServiceServicer_to_server(
+                InteractiveRuntimeServicer(
+                    manager=self._engine.interactive_session_manager,
                 ),
                 server,
             )

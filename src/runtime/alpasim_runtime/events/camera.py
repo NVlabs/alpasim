@@ -25,6 +25,14 @@ from alpasim_utils import geometry
 logger = logging.getLogger(__name__)
 
 
+def _remember_rendered_images(
+    state: RolloutState,
+    images: list,
+) -> None:
+    for image in images:
+        state.last_rendered_images[image.camera_logical_id] = image
+
+
 class GroupedRenderEvent(RecurringEvent):
     """Render all cameras whose shutters closed within a control step window.
 
@@ -119,6 +127,11 @@ class GroupedRenderEvent(RecurringEvent):
             ego_mask_rig_config_id=state.unbound.ego_mask_rig_config_id,
         )
 
+        if state.rendered_images_handler is not None:
+            await state.rendered_images_handler(images_with_metadata)
+
+        _remember_rendered_images(state, images_with_metadata)
+
         for image in images_with_metadata:
             state.step_context.track_task(self.driver.submit_image(image))
 
@@ -148,6 +161,11 @@ class GroupedRenderEvent(RecurringEvent):
                 for camera, trigger in camera_triggers
             ]
         )
+
+        if state.rendered_images_handler is not None:
+            await state.rendered_images_handler(images)
+
+        _remember_rendered_images(state, images)
 
         for image in images:
             state.step_context.track_task(self.driver.submit_image(image))

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import AddressPool
@@ -19,6 +19,7 @@ from alpasim_runtime.validation import (
     validate_scenarios,
 )
 from alpasim_utils.artifact import Artifact
+from omegaconf import OmegaConf
 
 from eval.schema import EvalConfig
 
@@ -176,8 +177,12 @@ async def build_runtime_context(
     )
     config_for_validation = config
     if not validate_config_scenes:
+        if is_dataclass(config.user):
+            user_for_validation = replace(config.user, scenes=[])
+        else:
+            user_for_validation = OmegaConf.merge(config.user, {"scenes": []})
         config_for_validation = SimulatorConfig(
-            user=replace(config.user, scenes=[]),
+            user=user_for_validation,
             network=config.network,
         )
     await validate_scenarios(config_for_validation)

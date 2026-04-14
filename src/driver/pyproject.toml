@@ -35,6 +35,7 @@ alpasim_driver_main = "alpasim_driver.main:main"
 ar1 = "alpasim_driver.models.ar1_model:AR1Model"
 vam = "alpasim_driver.models.vam_model:VAMModel"
 manual = "alpasim_driver.models.manual_model:ManualModel"
+pdm = "alpasim_driver.models.pdm_model:PDMModel"
 
 [tool.uv.sources]
 vam = { git = "https://github.com/valeoai/VideoActionModel.git" }

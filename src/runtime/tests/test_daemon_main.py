@@ -242,7 +242,11 @@ def test_simulate_parser_rejects_removed_grpc_shutdown_flag() -> None:
 async def test_runtime_daemon_app_run_starts_and_stops_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
+    engine = SimpleNamespace(
+        startup=AsyncMock(),
+        shutdown=AsyncMock(),
+        interactive_session_manager=object(),
+    )
 
     class _FakeServer:
         def __init__(self) -> None:
@@ -268,6 +272,10 @@ async def test_runtime_daemon_app_run_starts_and_stops_server(
         "alpasim_runtime.daemon.app.runtime_pb2_grpc.add_RuntimeServiceServicer_to_server",
         lambda _servicer, _server: None,
     )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.app.interactive_runtime_pb2_grpc.add_InteractiveRuntimeServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
 
     app = RuntimeDaemonApp(
         engine=engine,
@@ -288,7 +296,11 @@ async def test_runtime_daemon_app_run_starts_and_stops_server(
 async def test_runtime_daemon_app_servicer_shutdown_request_stops_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
+    engine = SimpleNamespace(
+        startup=AsyncMock(),
+        shutdown=AsyncMock(),
+        interactive_session_manager=object(),
+    )
 
     class _FakeServer:
         def __init__(self) -> None:
@@ -320,6 +332,10 @@ async def test_runtime_daemon_app_servicer_shutdown_request_stops_run(
         "alpasim_runtime.daemon.app.runtime_pb2_grpc.add_RuntimeServiceServicer_to_server",
         register_servicer,
     )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.app.interactive_runtime_pb2_grpc.add_InteractiveRuntimeServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
 
     app = RuntimeDaemonApp(
         engine=engine,
@@ -342,7 +358,11 @@ async def test_runtime_daemon_app_servicer_shutdown_request_stops_run(
 async def test_runtime_daemon_app_shutdowns_engine_when_server_start_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
+    engine = SimpleNamespace(
+        startup=AsyncMock(),
+        shutdown=AsyncMock(),
+        interactive_session_manager=object(),
+    )
 
     class _FakeServer:
         def add_insecure_port(self, listen_address: str) -> None:
@@ -362,6 +382,10 @@ async def test_runtime_daemon_app_shutdowns_engine_when_server_start_fails(
         "alpasim_runtime.daemon.app.runtime_pb2_grpc.add_RuntimeServiceServicer_to_server",
         lambda _servicer, _server: None,
     )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.app.interactive_runtime_pb2_grpc.add_InteractiveRuntimeServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
 
     app = RuntimeDaemonApp(
         engine=engine,
@@ -379,7 +403,11 @@ async def test_runtime_daemon_app_shutdowns_engine_when_server_start_fails(
 async def test_runtime_daemon_app_shutdowns_engine_when_server_stop_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = SimpleNamespace(startup=AsyncMock(), shutdown=AsyncMock())
+    engine = SimpleNamespace(
+        startup=AsyncMock(),
+        shutdown=AsyncMock(),
+        interactive_session_manager=object(),
+    )
 
     class _FakeServer:
         def add_insecure_port(self, listen_address: str) -> None:
@@ -397,6 +425,10 @@ async def test_runtime_daemon_app_shutdowns_engine_when_server_stop_fails(
     )
     monkeypatch.setattr(
         "alpasim_runtime.daemon.app.runtime_pb2_grpc.add_RuntimeServiceServicer_to_server",
+        lambda _servicer, _server: None,
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.app.interactive_runtime_pb2_grpc.add_InteractiveRuntimeServiceServicer_to_server",
         lambda _servicer, _server: None,
     )
 

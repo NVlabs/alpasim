@@ -32,3 +32,11 @@ asset_harvesting/
 # which does not require uv.lock.
 **/uv.lock
 .worktrees/
+
+
+interactive_run
+src/pdm_planner
+
+*node_modules
+
+run_interactive_gpu1

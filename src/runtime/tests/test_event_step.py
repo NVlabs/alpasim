@@ -9,6 +9,12 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
+from alpasim_runtime.decision import (
+    CandidateDecision,
+    CandidateStatus,
+    DecisionBundle,
+    DecisionSnapshot,
+)
 from alpasim_runtime.events.base import EventQueue
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_runtime.events.step import StepEvent
@@ -127,3 +133,57 @@ class TestStepEventNormalCase:
         assert rollout_state.step_context is not None
         assert rollout_state.step_context.outstanding_tasks == []
         assert rollout_state.step_context.step_start_us == 0  # fresh defaults
+
+    @pytest.mark.asyncio
+    async def test_persists_last_committed_decision_bundle(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+    ) -> None:
+        ego_traj = _make_trajectory(300_000, 300_000, 100_000)
+        zero_dynamics = np.zeros((len(ego_traj), 12), dtype=np.float64)
+        dynamic_traj = DynamicTrajectory.from_trajectory_and_dynamics(
+            ego_traj, zero_dynamics
+        )
+        snapshot = DecisionSnapshot(
+            step_id=2,
+            input_snapshot_id="snapshot-2",
+            time_now_us=200_000,
+            time_query_us=300_000,
+            ego_pose_history_timestamps_us=[0, 200_000],
+            traffic_actor_ids=[],
+            route_waypoints_in_rig=[],
+            planner_context=None,
+            renderer_data=None,
+            camera_frame_timestamps_us={},
+        )
+        candidate = CandidateDecision(
+            candidate_id="snapshot-2:default:0",
+            step_id=2,
+            input_snapshot_id="snapshot-2",
+            backend_id="default",
+            status=CandidateStatus.SELECTED,
+            trajectory=ego_traj,
+        )
+        decision_bundle = DecisionBundle(
+            snapshot=snapshot,
+            candidates=[candidate],
+            selected_candidate_id=candidate.candidate_id,
+            arbitration_reason="test",
+        )
+
+        old_ctx = StepContext(step_start_us=200_000, target_time_us=300_000)
+        old_ctx.decision_bundle = decision_bundle
+        old_ctx.ego_true = dynamic_traj
+        old_ctx.ego_estimated = dynamic_traj
+        old_ctx.corrected_ego_trajectory = ego_traj
+        rollout_state.step_context = old_ctx
+
+        event = StepEvent(
+            timestamp_us=200_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        assert rollout_state.last_committed_decision_bundle == decision_bundle

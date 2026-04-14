@@ -39,3 +39,11 @@ When asked to access any of the following services, check if you have access to 
 
 - Linar
 - Gitlab (especially relevant for MRs)
+
+## Skills
+
+A skill is a set of local instructions stored in a `SKILL.md` file.
+
+### Project skills
+
+- alpasim-data-access: Comprehensive data access guide for AlpaSim scene/state/map access. Use when implementing or reviewing ego state queries, traffic object access, traffic rule extraction, or map/lane lookups. (file: `.codeartsdoer/skills/alpasim-data-access/SKILL.md`)

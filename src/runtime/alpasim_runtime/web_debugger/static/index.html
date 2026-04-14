@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alpasim 仿真控制台 (标准版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { brand: { 500: '#0ea5e9', 600: '#0284c7' } } } } }
+    </script>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e293b; }
+        
+        /* 优雅进度条样式 */
+        input[type="range"] { -webkit-appearance: none; background: transparent; }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%; height: 6px; cursor: pointer; background: #e2e8f0; border-radius: 10px; transition: all 0.2s;
+        }
+        input[type="range"]:hover::-webkit-slider-runnable-track { background: #cbd5e1; height: 8px; }
+        input[type="range"]::-webkit-slider-thumb {
+            height: 18px; width: 18px; border-radius: 50%; background: #ffffff; border: 3px solid #0ea5e9;
+            cursor: pointer; -webkit-appearance: none; margin-top: -6px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); transition: transform 0.1s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+        
+        .panel { background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1); border-radius: 12px; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+    <div id="error-banner" class="hidden mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"></div>
+    <!-- Header -->
+    <header class="h-12 border-b border-slate-200 bg-white/80 backdrop-blur flex items-center justify-between px-6 shrink-0 z-50">
+        <div class="flex items-center space-x-4">
+            <h1 class="text-sm font-black text-slate-900 uppercase tracking-tighter">Alpasim <span class="text-brand-500">Console</span></h1>
+            <div class="h-4 w-px bg-slate-200"></div>
+            <div class="flex items-center space-x-4 text-[10px] font-bold text-slate-500">
+                <span id="session-status" class="flex items-center uppercase"><span class="w-2 h-2 rounded-full bg-slate-300 mr-2" id="status-dot"></span>离线</span>
+                <span>当前帧: <span id="session-tick" class="text-slate-900 font-mono">-</span></span>
+                <span id="session-time">时长: -</span>
+            </div>
+        </div>
+        <div class="flex items-center space-x-4 text-[10px] font-bold">
+            <span class="text-slate-400 uppercase">主车时速</span>
+            <span id="ego-speed" class="text-sm font-mono text-brand-600">-</span>
+            <button id="refresh-state" class="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"><i data-lucide="refresh-cw" class="w-4 h-4 text-slate-400"></i></button>
+        </div>
+    </header>
+
+    <!-- Content -->
+    <main class="flex-1 flex overflow-hidden p-4 gap-4">
+        <!-- Sidebar -->
+        <aside class="w-64 flex flex-col gap-4 shrink-0">
+            <section class="panel p-4 space-y-4">
+                <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center"><i data-lucide="settings" class="w-3 h-3 mr-1.5"></i> 场景配置</h3>
+                <select id="scene-id" class="w-full text-xs border border-slate-200 rounded-lg p-2 outline-none focus:border-brand-500 bg-white">
+                    <option value="">加载场景中...</option>
+                </select>
+                <button id="create-session" class="w-full bg-slate-900 text-white text-[10px] font-bold py-2 rounded-lg hover:bg-slate-800 transition-all uppercase">创建仿真</button>
+                <button id="reconnect-session" class="w-full bg-slate-100 text-slate-700 text-[10px] font-bold py-2 rounded-lg hover:bg-slate-200 transition-all uppercase">恢复上次会话</button>
+            </section>
+            <section class="panel p-4 overflow-hidden flex flex-col">
+                <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center"><i data-lucide="plug-zap" class="w-3 h-3 mr-1.5"></i> 当前会话</h3>
+                <div id="session-list" class="overflow-y-auto space-y-2"></div>
+            </section>
+            <section class="panel p-4 flex-1 overflow-hidden flex flex-col">
+                <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center"><i data-lucide="bookmark" class="w-3 h-3 mr-1.5"></i> 检查点</h3>
+                <div id="checkpoint-list" class="flex-1 overflow-y-auto space-y-2 pr-1"></div>
+            </section>
+        </aside>
+
+        <!-- Main Area -->
+        <div class="flex-1 flex flex-col gap-4 overflow-hidden">
+            <div class="flex-1 panel relative overflow-hidden bg-white">
+                <canvas id="map-canvas" class="w-full h-full"></canvas>
+                <div class="absolute top-3 left-3 bg-white/90 border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm text-[10px] font-bold" id="scene-label">未加载场景</div>
+            </div>
+            <div class="h-64 flex gap-4">
+                <div class="flex-1 panel flex flex-col overflow-hidden">
+                    <div class="px-4 py-2 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
+                        <span class="text-[9px] font-black text-slate-400 uppercase">传感器视角</span>
+                        <div id="sensor-tabs" class="flex gap-1"></div>
+                    </div>
+                    <div class="flex-1 relative bg-slate-100 flex items-center justify-center overflow-hidden">
+                        <img id="primary-sensor-image" class="max-w-full max-h-full" />
+                    </div>
+                </div>
+                <div class="w-80 panel flex flex-col overflow-hidden p-4">
+                    <span class="text-[9px] font-black text-slate-400 uppercase mb-3">速度曲线</span>
+                    <canvas id="chart-canvas" class="flex-1"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side -->
+        <aside class="w-72 panel p-4 flex flex-col overflow-hidden shrink-0">
+            <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center"><i data-lucide="brain" class="w-3 h-3 mr-1.5 text-brand-500"></i> 决策链路</h3>
+            <div class="mb-4 bg-slate-50 rounded-lg p-3 border border-slate-100">
+                <div class="text-[11px] text-slate-600 italic font-medium leading-tight" id="decision-reason">等待中...</div>
+            </div>
+            <div id="candidate-list" class="flex-1 overflow-y-auto space-y-2"></div>
+        </aside>
+    </main>
+
+    <!-- Playback -->
+    <footer class="h-20 bg-white border-t border-slate-200 px-8 flex items-center space-x-12 shrink-0 shadow-lg">
+        <div class="w-48">
+            <div id="playback-mode" class="text-[9px] font-black text-brand-600 uppercase tracking-widest mb-1 italic">REAL-TIME</div>
+            <div class="text-sm font-mono flex items-center space-x-2">
+                <span id="timeline-current" class="font-bold text-slate-900">T0</span>
+                <span class="text-slate-300">/</span>
+                <span id="timeline-end" class="text-slate-400">T0</span>
+            </div>
+        </div>
+        <div class="flex-1 px-4">
+            <input id="timeline-slider" type="range" min="0" max="0" value="0" class="w-full" />
+        </div>
+        <div class="flex items-center space-x-3 shrink-0">
+            <div class="flex bg-slate-100 rounded-xl p-1 border border-slate-200 shadow-inner">
+                <button id="prev-frame" class="p-2 text-slate-500 hover:text-slate-900 transition-all" title="上一帧"><i data-lucide="skip-back" class="w-5 h-5"></i></button>
+                <div class="w-px h-4 bg-slate-200 my-auto mx-1"></div>
+                <button id="play-session" class="p-2 text-emerald-600 hover:text-emerald-500 transition-all" title="播放"><i data-lucide="play" class="w-5 h-5 fill-emerald-600/20"></i></button>
+                <button id="pause-session" class="p-2 text-slate-600 hover:text-slate-900 transition-all" title="暂停"><i data-lucide="pause" class="w-4 h-4 fill-slate-600/20"></i></button>
+                <div class="w-px h-4 bg-slate-200 my-auto mx-1"></div>
+                <button id="next-frame" class="p-2 text-slate-500 hover:text-slate-900 transition-all" title="下一帧"><i data-lucide="skip-forward" class="w-5 h-5"></i></button>
+            </div>
+            <button id="live-jump" class="bg-brand-600 text-white text-[10px] font-black px-5 py-2.5 rounded-xl hover:bg-brand-500 shadow-md shadow-brand-100 uppercase tracking-widest transition-all">
+                回到实时
+            </button>
+        </div>
+    </footer>
+
+    <script type="module" src="/assets/app.js"></script>
+</body>
+</html>

@@ -71,6 +71,18 @@ class RuntimeCameraConfig:
 
 
 @dataclass
+class DriverBackendConfig:
+    """Optional runtime-side backend registry entry for multi-model orchestration."""
+
+    backend_id: str = MISSING
+    model_type: str = MISSING
+    priority: int = 0
+    backend_type: str = "driver_model"
+    supports_parallel: bool = False
+    supports_hot_switch: bool = True
+
+
+@dataclass
 class PoseConfig:
     translation_m: tuple[float, float, float]
     rotation_xyzw: tuple[float, float, float, float]
@@ -201,6 +213,11 @@ class SimulationConfig:
 
     # Whether to send optional messages to the driver
     send_recording_ground_truth: bool = False
+
+    # Optional runtime-side multi-backend registry. Empty keeps legacy single-driver behavior.
+    driver_backends: list[DriverBackendConfig] = field(default_factory=list)
+    observation_cache_size: int = 32
+    observation_window_summary_size: int = 4
 
     # Actors that appear for less than this amount of time will be dropped
     # before the simulation starts. Set to 0 to disable filtering.

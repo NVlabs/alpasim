@@ -14,6 +14,7 @@ from typing import Optional
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
+    DriverBackendConfig,
     PhysicsUpdateMode,
     RouteGeneratorType,
     RuntimeCameraConfig,
@@ -89,6 +90,9 @@ class UnboundRollout:
     planner_delay_us: int
     route_generator_type: RouteGeneratorType
     send_recording_ground_truth: bool
+    driver_backends: list[DriverBackendConfig]
+    observation_cache_size: int
+    observation_window_summary_size: int
     nre_runid: str
     nre_version: str
     nre_uuid: str
@@ -235,6 +239,9 @@ class UnboundRollout:
             pose_reporting_interval_us=simulation_config.pose_reporting_interval_us,
             route_generator_type=simulation_config.route_generator_type,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
+            driver_backends=list(simulation_config.driver_backends),
+            observation_cache_size=simulation_config.observation_cache_size,
+            observation_window_summary_size=simulation_config.observation_window_summary_size,
             vehicle_config=vehicle,
             vector_map=artifact.map,
             hidden_traffic_objs=hidden_traffic_objs,

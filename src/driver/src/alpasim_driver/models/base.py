@@ -53,6 +53,7 @@ class PredictionInput:
     speed: float  # m/s
     acceleration: float  # m/s²
     ego_pose_history: list[Any]  # list[PoseAtTime]
+    planner_context: dict[str, Any] | None = None
 
 
 @dataclass
@@ -64,6 +65,7 @@ class ModelPrediction:
     reasoning_text: str | None = (
         None  # optional text output (e.g. chain-of-causation reasoning)
     )
+    debug_metadata: dict[str, Any] | None = None
 
 
 class BaseTrajectoryModel(ABC):

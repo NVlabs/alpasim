@@ -13,6 +13,7 @@ from .base import (
     PredictionInput,
 )
 from .manual_model import ManualModel
+from .pdm_model import PDMModel
 from .vam_model import VAMModel
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "DriveCommand",
     "ManualModel",
     "ModelPrediction",
+    "PDMModel",
     "PredictionInput",
     "VAMModel",
 ]

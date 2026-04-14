@@ -1,0 +1,49 @@
+# Should be used in defaults list, e.g.
+# - /driver: pdm
+# Type validation happens at driver runtime via OmegaConf.structured merge
+
+defaults:
+  - _self_               # YAML values override schema defaults
+  - pdm_runtime_configs  # Runtime overrides suitable for PDMClosed-style planner
+
+# PDM Driver Configuration for Alpasim
+
+# Logging level (uses wizard's global setting)
+log_level: ${wizard.log_level}
+
+# Model configuration
+model:
+  model_type: pdm
+  # The PDM backend is dependency-free and does not require weights.
+  checkpoint_path: "unused"
+  # Current implementation is CPU-friendly; can be moved to CUDA later if needed.
+  device: "cpu"
+
+# Server configuration
+host: "0.0.0.0"
+port: ???
+
+# Inference configuration
+inference:
+  # Current driver interface still requires camera streams.
+  use_cameras: ["camera_front_wide_120fov"]
+  max_batch_size: 1
+  subsample_factor: 1
+  context_length: 1
+  output_frequency_hz: 10
+
+# Route configuration
+route:
+  default_command: 2  # Default command: 0=right, 1=left, 2=straight
+  use_waypoint_commands: true
+  command_distance_threshold: 3.0
+  min_lookahead_distance: 20.0
+
+# Output configuration
+output_dir: "/mnt/output/driver"
+
+# Optional smoothing/retiming can be enabled later if needed
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

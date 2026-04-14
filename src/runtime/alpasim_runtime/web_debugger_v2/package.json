@@ -1,0 +1,23 @@
+{
+  "name": "alpasim-webviz-debugger",
+  "version": "2.0.0",
+  "description": "Professional Webviz-style debugger for Alpasim",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --dev"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^2.0.6",
+    "axios": "^1.6.0"
+  },
+  "keywords": [
+    "autonomous-driving",
+    "webviz",
+    "debugger",
+    "simulation"
+  ],
+  "author": "Alpasim Team",
+  "license": "Apache-2.0"
+}

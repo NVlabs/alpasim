@@ -11,11 +11,13 @@ replacing the many individual constructor parameters with a single reference.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Coroutine, Optional
+from typing import Any, Awaitable, Callable, Coroutine, Optional
 
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.broadcaster import MessageBroadcaster
+from alpasim_runtime.decision import DecisionBundle, DriverOrchestrator
 from alpasim_runtime.delay_buffer import DelayBuffer
+from alpasim_runtime.observation_cache import ObservationCache
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
@@ -23,6 +25,7 @@ from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_utils import geometry
 from alpasim_utils.scenario import TrafficObjects
+from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,7 @@ class ServiceBundle:
     trafficsim: TrafficService
     broadcaster: MessageBroadcaster
     planner_delay_buffer: DelayBuffer
+    driver_orchestrator: DriverOrchestrator | None = None
 
 
 @dataclass(slots=True)
@@ -60,6 +64,8 @@ class StepContext:
     force_gt: bool = False
 
     # PolicyEvent → ControllerEvent
+    # Candidate set and selected output for the current policy step.
+    decision_bundle: DecisionBundle | None = None
     # Driver output transformed to the true local frame.
     driver_trajectory: Optional[geometry.Trajectory] = None
 
@@ -117,9 +123,18 @@ class RolloutState:
     # === Assertion tracking (for assert_zero_decision_delay) ===
     last_egopose_update_us: int = 0
     last_camera_frame_us: dict[str, int] = field(default_factory=dict)
+    last_decision_step_id: int = 0
+    last_committed_decision_bundle: DecisionBundle | None = None
+    available_driver_backend_ids: list[str] = field(default_factory=list)
+    active_driver_backend_ids: list[str] | None = None
+    observation_cache: ObservationCache | None = None
 
     # === Inter-event data ===
     data_sensorsim_to_driver: Optional[bytes] = None
+    last_rendered_images: dict[str, ImageWithMetadata] = field(default_factory=dict)
+    rendered_images_handler: (
+        Callable[[list[ImageWithMetadata]], Awaitable[None]] | None
+    ) = None
 
     # === Step timing (for step_duration telemetry) ===
     step_wall_start: float = 0.0

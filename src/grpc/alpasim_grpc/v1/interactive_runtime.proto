@@ -1,0 +1,242 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 NVIDIA Corporation
+
+syntax = "proto3";
+
+import "alpasim_grpc/v0/common.proto";
+
+// Frontend-facing interactive control plane for runtime.
+//
+// This API intentionally coexists with v0 RuntimeService:
+// - v0 RuntimeService: batch rollout submission
+// - v1 InteractiveRuntimeService: session-oriented debugging and stepping
+//
+// The first iteration is camera-first and step-oriented. It exposes stable
+// post-commit snapshots and separate frame retrieval by tick.
+
+service InteractiveRuntimeService {
+    rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+    rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+    rpc StartSession(StartSessionRequest) returns (SessionState);
+    rpc PauseSession(PauseSessionRequest) returns (SessionState);
+    rpc ResumeSession(ResumeSessionRequest) returns (SessionState);
+    rpc StepSession(StepSessionRequest) returns (StepSessionResponse);
+    rpc GetSessionState(GetSessionStateRequest) returns (SessionState);
+    rpc SetActiveBackends(SetActiveBackendsRequest) returns (SessionState);
+    rpc ListCandidates(ListCandidatesRequest) returns (ListCandidatesResponse);
+    rpc SelectCandidate(SelectCandidateRequest) returns (SessionState);
+    rpc RecomputeCandidate(RecomputeCandidateRequest) returns (SessionState);
+    rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+    rpc RestoreCheckpoint(RestoreCheckpointRequest) returns (SessionState);
+    rpc ListSensors(ListSensorsRequest) returns (ListSensorsResponse);
+    rpc GetFrame(GetFrameRequest) returns (GetFrameResponse);
+    rpc StreamSession(StreamSessionRequest) returns (stream SessionEvent);
+}
+
+enum SessionStatus {
+    SESSION_STATUS_UNSPECIFIED = 0;
+    SESSION_STATUS_CREATED = 1;
+    SESSION_STATUS_RUNNING = 2;
+    SESSION_STATUS_PAUSED = 3;
+    SESSION_STATUS_COMPLETED = 4;
+    SESSION_STATUS_FAILED = 5;
+}
+
+enum SensorType {
+    SENSOR_TYPE_UNSPECIFIED = 0;
+    SENSOR_TYPE_CAMERA = 1;
+}
+
+enum FrameEncoding {
+    FRAME_ENCODING_UNSPECIFIED = 0;
+    FRAME_ENCODING_JPEG = 1;
+    FRAME_ENCODING_PNG = 2;
+}
+
+message CreateSessionRequest {
+    string scene_id = 1;
+    repeated string sensor_ids = 2;
+    bool start_paused = 3;
+    uint32 max_retained_ticks = 4;
+}
+
+message CreateSessionResponse {
+    string interactive_session_id = 1;
+    SessionState initial_state = 2;
+}
+
+message ListSessionsRequest {}
+
+message StartSessionRequest {
+    string interactive_session_id = 1;
+}
+
+message PauseSessionRequest {
+    string interactive_session_id = 1;
+}
+
+message ResumeSessionRequest {
+    string interactive_session_id = 1;
+}
+
+message StepSessionRequest {
+    string interactive_session_id = 1;
+    uint32 num_steps = 2;
+}
+
+message GetSessionStateRequest {
+    string interactive_session_id = 1;
+}
+
+message ListCandidatesRequest {
+    string interactive_session_id = 1;
+}
+
+message SetActiveBackendsRequest {
+    string interactive_session_id = 1;
+    repeated string backend_ids = 2;
+}
+
+message RecomputeCandidateRequest {
+    string interactive_session_id = 1;
+    string backend_id = 2;
+}
+
+message SelectCandidateRequest {
+    string interactive_session_id = 1;
+    string candidate_id = 2;
+}
+
+message ListCheckpointsRequest {
+    string interactive_session_id = 1;
+}
+
+message RestoreCheckpointRequest {
+    string interactive_session_id = 1;
+    string checkpoint_id = 2;
+}
+
+message ListSensorsRequest {
+    string interactive_session_id = 1;
+}
+
+message GetFrameRequest {
+    string interactive_session_id = 1;
+    string sensor_id = 2;
+    uint64 tick_id = 3;
+}
+
+message StreamSessionRequest {
+    string interactive_session_id = 1;
+    bool include_snapshots = 2;
+}
+
+message SensorDescriptor {
+    string sensor_id = 1;
+    string logical_id = 2;
+    SensorType sensor_type = 3;
+    uint32 nominal_width = 4;
+    uint32 nominal_height = 5;
+    uint64 nominal_frame_interval_us = 6;
+    common.Pose rig_to_sensor = 7;
+    FrameEncoding frame_encoding = 8;
+}
+
+message FrameRef {
+    string sensor_id = 1;
+    uint64 tick_id = 2;
+    uint64 frame_start_us = 3;
+    uint64 frame_end_us = 4;
+    FrameEncoding frame_encoding = 5;
+}
+
+message EgoState {
+    common.Pose pose = 1;
+    common.DynamicState dynamics = 2;
+}
+
+message ActorState {
+    string actor_id = 1;
+    common.Pose pose = 2;
+}
+
+message CandidateSummary {
+    string candidate_id = 1;
+    string backend_id = 2;
+    string status = 3;
+    bool selected = 4;
+    string error = 5;
+}
+
+message DecisionSummary {
+    uint64 step_id = 1;
+    string input_snapshot_id = 2;
+    string selected_candidate_id = 3;
+    repeated CandidateSummary candidates = 4;
+    string arbitration_reason = 5;
+}
+
+message CheckpointSummary {
+    string checkpoint_id = 1;
+    uint64 tick_id = 2;
+    uint64 sim_time_us = 3;
+    SessionStatus status = 4;
+    bool restore_supported = 5;
+    repeated string unsupported_backend_ids = 6;
+}
+
+message SessionSnapshot {
+    string interactive_session_id = 1;
+    uint64 tick_id = 2;
+    uint64 sim_time_us = 3;
+    EgoState ego = 4;
+    repeated ActorState actors = 5;
+    repeated FrameRef frame_refs = 6;
+    DecisionSummary latest_decision = 7;
+}
+
+message SessionState {
+    string interactive_session_id = 1;
+    string rollout_uuid = 2;
+    string scene_id = 3;
+    SessionStatus status = 4;
+    uint64 current_tick_id = 5;
+    uint64 current_sim_time_us = 6;
+    string error = 7;
+    SessionSnapshot latest_snapshot = 8;
+    DecisionSummary latest_decision = 9;
+    repeated string active_backend_ids = 10;
+}
+
+message StepSessionResponse {
+    SessionState state = 1;
+    repeated SessionSnapshot committed_snapshots = 2;
+}
+
+message ListSensorsResponse {
+    repeated SensorDescriptor sensors = 1;
+}
+
+message ListSessionsResponse {
+    repeated SessionState sessions = 1;
+}
+
+message ListCandidatesResponse {
+    repeated CandidateSummary candidates = 1;
+}
+
+message ListCheckpointsResponse {
+    repeated CheckpointSummary checkpoints = 1;
+}
+
+message GetFrameResponse {
+    FrameRef frame_ref = 1;
+    bytes image_bytes = 2;
+}
+
+message SessionEvent {
+    oneof event {
+        SessionState state = 1;
+        SessionSnapshot snapshot = 2;
+    }
+}

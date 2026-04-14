@@ -39,6 +39,9 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
     version_ids = MagicMock()
     eval_config = MagicMock()
     worker_runtime = SimpleNamespace(stop=AsyncMock())
+    scheduler_pools = {"driver": MagicMock()}
+    interactive_pools = {"driver": MagicMock()}
+    captured_interactive_pools = None
 
     class _FakeScheduler:
         def __init__(
@@ -66,9 +69,18 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             eval_config=eval_config,
             version_ids=version_ids,
             scene_id_to_artifact_path={"clipgt-a": "/tmp/scene-a.usdz"},
-            pools={"driver": MagicMock()},
+            pools=scheduler_pools,
             max_in_flight=1,
         )
+
+    class _FakeInteractiveSessionManager:
+        def __init__(self, *, pools, **kwargs) -> None:
+            del kwargs
+            nonlocal captured_interactive_pools
+            captured_interactive_pools = pools
+
+        async def close_all(self) -> None:
+            return None
 
     monkeypatch.setattr(
         "alpasim_runtime.daemon.engine.build_runtime_context",
@@ -82,6 +94,14 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
         "alpasim_runtime.daemon.engine.start_worker_runtime", _fake_start_worker_runtime
     )
     monkeypatch.setattr("alpasim_runtime.daemon.engine.DaemonScheduler", _FakeScheduler)
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.create_address_pools",
+        lambda *_args, **_kwargs: interactive_pools,
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.InteractiveSessionManager",
+        _FakeInteractiveSessionManager,
+    )
 
     engine = DaemonEngine(
         user_config="u.yaml",
@@ -93,6 +113,8 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
 
     await engine.startup()
     assert engine.version_ids is version_ids
+    assert captured_interactive_pools is interactive_pools
+    assert captured_interactive_pools is not scheduler_pools
     await engine.shutdown()
 
 
@@ -104,6 +126,7 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
     version_ids = MagicMock()
     eval_config = MagicMock()
     worker_runtime = SimpleNamespace(stop=AsyncMock())
+    interactive_pools = {"driver": MagicMock()}
 
     class _FakeScheduler:
         def __init__(
@@ -147,6 +170,14 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
         "alpasim_runtime.daemon.engine.start_worker_runtime", _fake_start_worker_runtime
     )
     monkeypatch.setattr("alpasim_runtime.daemon.engine.DaemonScheduler", _FakeScheduler)
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.create_address_pools",
+        lambda *_args, **_kwargs: interactive_pools,
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.InteractiveSessionManager",
+        lambda **_kwargs: SimpleNamespace(close_all=AsyncMock()),
+    )
 
     engine = DaemonEngine(
         user_config="u.yaml",

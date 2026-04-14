@@ -10,9 +10,11 @@ from uuid import uuid4
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
+from alpasim_runtime.interactive.session_manager import InteractiveSessionManager
 from alpasim_runtime.runtime_context import (
     build_runtime_context,
     compute_num_consumers_per_worker,
+    create_address_pools,
 )
 from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
 from alpasim_runtime.worker.runtime import WorkerRuntime, start_worker_runtime
@@ -181,6 +183,7 @@ class DaemonEngine:
         self._scene_id_to_artifact_path: dict[str, str] = {}
         self._scheduler: DaemonScheduler | None = None
         self._worker_runtime: WorkerRuntime | None = None
+        self._interactive_session_manager: InteractiveSessionManager | None = None
         self._started = False
 
     @property
@@ -188,6 +191,12 @@ class DaemonEngine:
         if self._version_ids is None:
             raise RuntimeError("daemon is not started")
         return self._version_ids
+
+    @property
+    def interactive_session_manager(self) -> InteractiveSessionManager:
+        if self._interactive_session_manager is None:
+            raise RuntimeError("daemon is not started")
+        return self._interactive_session_manager
 
     async def startup(self) -> None:
         """Initialize the runtime context, start workers, and begin scheduling.
@@ -231,6 +240,14 @@ class DaemonEngine:
         self._scene_id_to_artifact_path = runtime_context.scene_id_to_artifact_path
         self._worker_runtime = worker_runtime
         self._scheduler = scheduler
+        self._interactive_session_manager = InteractiveSessionManager(
+            user_config=runtime_context.config.user,
+            eval_config=runtime_context.eval_config,
+            version_ids=runtime_context.version_ids,
+            scene_id_to_artifact_path=runtime_context.scene_id_to_artifact_path,
+            pools=create_address_pools(runtime_context.config),
+            rollouts_dir=f"{self._log_dir}/rollouts",
+        )
         self._started = True
 
     async def simulate(
@@ -291,9 +308,13 @@ class DaemonEngine:
         assert self._scheduler is not None
         assert self._worker_runtime is not None
 
+        if self._interactive_session_manager is not None:
+            await self._interactive_session_manager.close_all()
+
         await self._scheduler.shutdown(reason="daemon shutting down")
         await self._worker_runtime.stop()
 
         self._scheduler = None
         self._worker_runtime = None
+        self._interactive_session_manager = None
         self._started = False

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import random
 from typing import Optional, Type
@@ -38,6 +40,28 @@ from alpasim_utils.geometry import (
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
+_DRIVER_CONTROL_PREFIX = b"ALPASIM_DRIVER_CTRL_V1:"
+
+
+def _encode_driver_control(
+    renderer_data: Optional[bytes],
+    next_model: Optional[str],
+    planner_context: Optional[dict[str, object]],
+) -> bytes:
+    """Encode optional model-switch control in renderer_data envelope."""
+    if next_model is None and planner_context is None:
+        return renderer_data or b""
+
+    payload: dict[str, object] = {}
+    if next_model is not None:
+        payload["next_model"] = next_model
+    if planner_context is not None:
+        payload["planner_context"] = planner_context
+    if renderer_data:
+        payload["renderer_data_b64"] = base64.b64encode(renderer_data).decode("ascii")
+
+    encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return _DRIVER_CONTROL_PREFIX + encoded
 
 
 class DriverService(ServiceBase[EgodriverServiceStub]):
@@ -47,6 +71,21 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     This service handles communication with the driver model, including
     submitting sensor observations and receiving driving decisions.
     """
+
+    def __init__(self, address: str, skip: bool = False):
+        super().__init__(address=address, skip=skip)
+        self._next_model_override: str | None = None
+        self._planner_context_override: dict[str, object] | None = None
+
+    def set_next_model_for_next_drive(self, model_type: str | None) -> None:
+        """Request a model switch for the next drive() call only."""
+        self._next_model_override = model_type
+
+    def set_planner_context_for_next_drive(
+        self, planner_context: dict[str, object] | None
+    ) -> None:
+        """Set per-frame planner context payload for the next drive() call only."""
+        self._planner_context_override = planner_context
 
     @property
     def stub_class(self) -> Type[EgodriverServiceStub]:
@@ -213,11 +252,19 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         """
         session_info = self._require_session_info()
         # Create request with both old and new fields for backward compatibility
+        packed_renderer_data = _encode_driver_control(
+            renderer_data=renderer_data,
+            next_model=self._next_model_override,
+            planner_context=self._planner_context_override,
+        )
+        self._next_model_override = None
+        self._planner_context_override = None
+
         request = DriveRequest(
             session_uuid=session_info.uuid,
             time_now_us=time_now_us,
             time_query_us=time_query_us,
-            renderer_data=renderer_data or b"",
+            renderer_data=packed_renderer_data,
         )
 
         await session_info.broadcaster.broadcast(LogEntry(driver_request=request))

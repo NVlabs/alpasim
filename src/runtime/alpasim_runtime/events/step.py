@@ -48,6 +48,7 @@ class StepEvent(RecurringEvent):
             ), f"StepEvent timestamp mismatch: {ctx.step_start_us} != {self.timestamp_us}"
             assert ctx.ego_estimated is not None
             assert ctx.corrected_ego_trajectory is not None
+            state.last_committed_decision_bundle = ctx.decision_bundle
 
             # Commit ego trajectories (bulk concat)
             corrected_ego = geometry.DynamicTrajectory.from_trajectory_and_dynamics(

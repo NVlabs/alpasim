@@ -1,0 +1,22 @@
+# @package _global_
+
+runtime:
+  simulation_config:
+    force_gt_duration_us: 2_000_000
+    n_sim_steps: 100
+    n_rollouts: 1
+    control_timestep_us: 100_000  # 10 Hz driver drive() calls
+    time_start_offset_us: 500_000
+
+    cameras:
+      - height: 540
+        width: 960
+        logical_id: camera_front_wide_120fov
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+        first_frame_offset_us: -30_000
+
+services:
+  driver:
+    gpus: null
+    replicas_per_container: 1
