@@ -75,6 +75,7 @@ class EvalDataAccumulator:
         default=None, init=False
     )
     _gt_ego_trajectory: Optional[Trajectory] = field(default=None, init=False)
+    _force_gt_duration_us: Optional[int] = field(default=None, init=False)
 
     # Actor data from rollout_metadata + actor_poses
     _actor_aabb_dims: dict[str, tuple[float, float, float]] = field(
@@ -146,6 +147,7 @@ class EvalDataAccumulator:
             metadata: The RolloutMetadata protobuf message.
         """
         self._session_metadata = metadata.session_metadata
+        self._force_gt_duration_us = int(metadata.force_gt_duration)
 
         # Extract actor AABB dimensions and initialize trajectory data
         for actor_aabb in metadata.actor_definitions.actor_aabb:
@@ -369,4 +371,5 @@ class EvalDataAccumulator:
             run_uuid=run_uuid,
             run_name=run_name,
             batch_id=batch_id,
+            force_gt_duration_us=self._force_gt_duration_us,
         )

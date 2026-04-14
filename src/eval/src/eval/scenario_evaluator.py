@@ -104,15 +104,11 @@ class ScenarioEvaluator:
         clipgt_id = simulation_result.session_metadata.scene_id
         rollout_id = simulation_result.session_metadata.session_uuid
 
-        # The first control timestamp is a prerun frame where the ego is not
-        # yet under policy control; any metric triggered there is spurious.
-        # Compute the first driven timestamp from session metadata so the
-        # aggregation pipeline can filter out prerun rows (see GitHub #59).
-        # NOTE: This excludes only the single prerun step.  Force-GT steps
-        # are still included; propagating force_gt_duration into eval is a
-        # follow-up.
-        sm = simulation_result.session_metadata
-        first_driven_timestamp_us = sm.start_timestamp_us + sm.control_timestep_us
+        # Earliest timestamp at which the ego is under policy control (prerun
+        # + force-gt steps excluded).  Used by the aggregation pipeline to
+        # filter out spurious metric events on warmup frames; ``None`` for
+        # ground-truth baseline runs (see GitHub #59).
+        first_driven_timestamp_us = simulation_result.first_driven_timestamp_us
 
         metrics_df = create_metrics_dataframe(
             metric_results=timestep_metrics,
