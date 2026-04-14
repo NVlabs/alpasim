@@ -2,8 +2,7 @@
 # Copyright (c) 2026 NVIDIA Corporation
 
 import numpy as np
-import pytest
-from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3
+from alpasim_grpc.v0.common_pb2 import Pose, Quat, Vec3
 from alpasim_physics.utils import (
     aabb_to_ndarray,
     ndarray_to_aabb,
@@ -11,7 +10,6 @@ from alpasim_physics.utils import (
     ndarray_to_quat,
     ndarray_to_vec3,
     pose_grpc_to_ndarray,
-    pose_status_to_grpc,
     scipy_to_quat,
     se3_inverse,
     so3_trans_2_se3,
@@ -67,7 +65,10 @@ class TestPoseRoundtrip:
 
         # Convert to grpc via ndarray_to_quat (w, x, y, z)
         quat_wxyz = np.array(
-            [rotation.as_quat(canonical=False)[3], *rotation.as_quat(canonical=False)[:3]]
+            [
+                rotation.as_quat(canonical=False)[3],
+                *rotation.as_quat(canonical=False)[:3],
+            ]
         )
         grpc_pose = ndarray_to_pose(translation, quat_wxyz)
 
@@ -77,9 +78,7 @@ class TestPoseRoundtrip:
         np.testing.assert_array_almost_equal(recovered[:3, :3], se3[:3, :3], decimal=5)
 
     def test_identity_pose_roundtrip(self):
-        identity_pose = Pose(
-            vec=Vec3(x=0, y=0, z=0), quat=Quat(w=1, x=0, y=0, z=0)
-        )
+        identity_pose = Pose(vec=Vec3(x=0, y=0, z=0), quat=Quat(w=1, x=0, y=0, z=0))
         recovered = pose_grpc_to_ndarray(identity_pose)
         np.testing.assert_array_almost_equal(recovered, np.eye(4))
 
