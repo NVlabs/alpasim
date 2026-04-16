@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import copy
 import math
 from dataclasses import dataclass
@@ -19,9 +20,12 @@ from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
-from alpasim_utils.artifact import Artifact
+from omegaconf import OmegaConf
+from trajdata.dataset import UnifiedDataset
 
 from eval.schema import EvalConfig
+
+logger = logging.getLogger(__name__)
 
 ALL_SKIP_PER_WORKER_CONCURRENCY = 16
 
@@ -121,13 +125,14 @@ class RuntimeContext:
     """Immutable snapshot of all runtime state needed to dispatch simulation jobs.
 
     Built once during startup by ``build_runtime_context`` after config parsing,
-    service version probing, scenario validation, and address pool creation.
+    service version probing, scenario validation, and scene mapping creation.
     """
 
     config: SimulatorConfig
     eval_config: EvalConfig
     version_ids: RolloutMetadata.VersionIds
-    scene_id_to_artifact_path: dict[str, str]
+    scene_id_to_idx: dict[str, int]
+    dataset: UnifiedDataset
     pools: dict[str, AddressPool]
     max_in_flight: int
 
@@ -147,7 +152,6 @@ async def build_runtime_context(
     user_config_path: str,
     network_config_path: str,
     eval_config_path: str,
-    usdz_glob: str,
     validate_config_scenes: bool = True,
 ) -> RuntimeContext:
     """Build the RuntimeContext by parsing configs, probing services, and validating scenarios.
@@ -156,20 +160,20 @@ async def build_runtime_context(
         1. Parse user and network configs.
         2. Probe all service addresses for version IDs.
         3. Validate scenario compatibility (unless *validate_config_scenes* is False).
-        4. Discover scene artifacts from *usdz_glob*.
+        4. Create UnifiedDataset from data_source config and build scene data sources.
         5. Create address pools and compute max in-flight concurrency.
 
     Args:
         user_config_path: Path to user YAML config.
         network_config_path: Path to network YAML config.
         eval_config_path: Path to evaluation YAML config.
-        usdz_glob: Glob pattern for USDZ artifact discovery.
         validate_config_scenes: If False, skip scene compatibility checks
             (useful for daemon mode where scenes come from requests).
     """
     config = parse_simulator_config(user_config_path, network_config_path)
     eval_config = typed_parse_config(eval_config_path, EvalConfig)
 
+    # Validate configuration
     version_ids = await gather_versions_from_addresses(
         config.network,
         config.user.endpoints,
@@ -185,13 +189,28 @@ async def build_runtime_context(
         )
     await validate_scenarios(config_for_validation)
 
-    scene_id_to_artifact_path = {
-        scene_id: artifact.source
-        for scene_id, artifact in Artifact.discover_from_glob(
-            usdz_glob,
-            smooth_trajectories=config.user.smooth_trajectories,
-        ).items()
-    }
+    # Create UnifiedDataset and build scene_id to data source mapping
+    logger.info("Creating UnifiedDataset from config")
+    data_source_config = OmegaConf.to_object(config.user.data_source)
+    trajdata_params = data_source_config.to_trajdata_params()
+    dataset = UnifiedDataset(**trajdata_params)
+    logger.info(
+        f"Created UnifiedDataset with {dataset.num_scenes()} scenes, "
+        f"desired_data={trajdata_params['desired_data']}"
+    )
+
+    # Build scene_id to index mapping (once, in main process)
+    scene_id_to_idx = {}
+    num_scenes = dataset.num_scenes()
+    for idx in range(num_scenes):
+        try:
+            scene = dataset.get_scene(idx)
+            scene_id_to_idx[scene.name] = idx
+        except Exception as e:
+            logger.warning(f"Failed to get scene at index {idx}: {e}")
+            continue
+    logger.info(f"Built scene_id mapping for {len(scene_id_to_idx)} scenes")
+
     pools = create_address_pools(config)
     max_in_flight = compute_max_in_flight(pools, config)
 
@@ -199,7 +218,8 @@ async def build_runtime_context(
         config=config,
         eval_config=eval_config,
         version_ids=version_ids,
-        scene_id_to_artifact_path=scene_id_to_artifact_path,
+        scene_id_to_idx=scene_id_to_idx,
+        dataset=dataset,
         pools=pools,
         max_in_flight=max_in_flight,
     )

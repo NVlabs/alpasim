@@ -65,7 +65,7 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_id_to_artifact_path={"clipgt-a": "/tmp/scene-a.usdz"},
+            scene_id_to_idx={"clipgt-a": 0},
             pools={"driver": MagicMock()},
             max_in_flight=1,
         )
@@ -87,7 +87,6 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
 
@@ -130,7 +129,7 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_id_to_artifact_path={"clipgt-a": "/tmp/scene-a.usdz"},
+            scene_id_to_idx={"clipgt-a": 0},
             pools={"driver": MagicMock()},
             max_in_flight=1,
         )
@@ -152,7 +151,6 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         validate_config_scenes=False,
     )
@@ -184,11 +182,13 @@ async def test_engine_simulate_submits_without_global_request_lock() -> None:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -232,11 +232,13 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -285,11 +287,13 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
