@@ -1,9 +1,8 @@
 name: Sync GitHub main -> GitLab MR
 
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -14,7 +13,6 @@ concurrency:
 
 jobs:
   sync-to-gitlab:
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: [self-hosted, type/docker]
     env:
       # Required secrets:
@@ -29,9 +27,9 @@ jobs:
       GITLAB_REPO_URL: ${{ secrets.GITLAB_REPO_URL }}
       # Optional repository variables (set in GitHub -> Settings -> Variables):
       #   GITLAB_TARGET_BRANCH (default: main)
-      #   GITLAB_SYNC_BRANCH_PREFIX (default: github-sync/pr-<PR_NUMBER>)
+      #   GITLAB_SYNC_BRANCH_PREFIX (default: github-sync/main)
       GITLAB_TARGET_BRANCH: ${{ vars.GITLAB_TARGET_BRANCH || 'main' }}
-      GITLAB_SYNC_BRANCH_PREFIX: ${{ vars.GITLAB_SYNC_BRANCH_PREFIX || format('github-sync/pr-{0}', github.event.pull_request.number) }}
+      GITLAB_SYNC_BRANCH_PREFIX: ${{ vars.GITLAB_SYNC_BRANCH_PREFIX || 'github-sync/main' }}
     steps:
       - name: Fix workspace ownership on self-hosted runner
         shell: bash
@@ -70,9 +68,8 @@ jobs:
         id: replay
         shell: bash
         env:
-          BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          AFTER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -254,12 +251,8 @@ jobs:
         shell: bash
         env:
           SYNC_BRANCH: ${{ steps.replay.outputs.sync_branch }}
-          BEFORE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-          AFTER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          BEFORE_SHA: ${{ github.event.before || github.sha }}
+          AFTER_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -269,12 +262,10 @@ jobs:
           API_BASE="https://${GITLAB_HOST_NORMALIZED}/api/v4"
           PROJECT_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["GITLAB_PROJECT_PATH"], safe=""))')"
 
-          TITLE="sync(github-pr #${PR_NUMBER}): ${PR_TITLE}"
+          TITLE="sync(github-main): ${AFTER_SHA:0:12}"
 
-          DESCRIPTION="$(printf '%s\n\n- GitHub PR: %s\n- GitHub PR title: %s\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
-            "Automated sync from GitHub PR into GitLab \`${GITLAB_TARGET_BRANCH}\`." \
-            "${PR_URL}" \
-            "${PR_TITLE}" \
+          DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
+            "Automated sync from GitHub \`main\` push into GitLab \`${GITLAB_TARGET_BRANCH}\`." \
             "${AFTER_SHA}" \
             "${GITHUB_REPOSITORY}" \
             "${BEFORE_SHA}" \
@@ -282,12 +273,6 @@ jobs:
             "${GITHUB_REPOSITORY}" \
             "${GITHUB_RUN_ID}" \
             "${SYNC_BRANCH}")"
-
-          if [[ -n "${PR_BODY}" ]]; then
-            DESCRIPTION="${DESCRIPTION}"$'\n'"## Original GitHub PR Description"$'\n\n'"${PR_BODY}"
-          else
-            DESCRIPTION="${DESCRIPTION}"$'\n'"## Original GitHub PR Description"$'\n\n'"(No description provided on GitHub PR.)"
-          fi
 
           EXISTING_MR_JSON="$(curl -sS --fail --get \
             --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
