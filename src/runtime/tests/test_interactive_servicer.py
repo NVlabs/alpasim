@@ -94,6 +94,7 @@ def test_snapshot_to_proto_includes_latest_decision() -> None:
         ego=EgoStateModel(
             pose=_make_pose(),
             dynamics=DynamicState(),
+            front_steering_angle_rad=0.15,
         ),
         actors=[],
         frame_refs=[],
@@ -104,6 +105,7 @@ def test_snapshot_to_proto_includes_latest_decision() -> None:
 
     assert proto.latest_decision.input_snapshot_id == "input-3"
     assert proto.latest_decision.candidates[1].selected is True
+    assert proto.ego.front_steering_angle_rad == pytest.approx(0.15)
 
 
 class _AbortContext:

@@ -38,6 +38,8 @@ class ActorView:
     y: float
     heading_deg: float = 0.0
     speed_mps: float = 0.0
+    yaw_rate_rps: float = 0.0
+    front_steering_angle_rad: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,14 @@ class DecisionView:
 
 
 @dataclass(frozen=True)
+class CandidatePlanView:
+    candidate_id: str
+    backend_id: str
+    selected: bool
+    points: list[dict[str, float]]
+
+
+@dataclass(frozen=True)
 class CheckpointView:
     checkpoint_id: str
     tick_id: int
@@ -77,6 +87,9 @@ class SessionSnapshotView:
     actors: list[ActorView]
     frame_refs: list[dict[str, object]]
     latest_decision: DecisionView | None = None
+    ego_history: list[dict[str, float]] = field(default_factory=list)
+    selected_plan: list[dict[str, float]] = field(default_factory=list)
+    candidate_plans: list[CandidatePlanView] = field(default_factory=list)
 
 
 @dataclass
@@ -90,6 +103,7 @@ class SessionStateView:
     latest_snapshot: SessionSnapshotView | None
     latest_decision: DecisionView | None = None
     active_backend_ids: list[str] = field(default_factory=list)
+    available_backend_ids: list[str] = field(default_factory=list)
     error: str = ""
 
 
@@ -155,6 +169,14 @@ class InteractiveApiAdapter:
 
 def _yaw_deg_from_pose(pose) -> float:
     quat = pose.quat
+    norm_sq = (
+        float(quat.w) ** 2
+        + float(quat.x) ** 2
+        + float(quat.y) ** 2
+        + float(quat.z) ** 2
+    )
+    if not math.isfinite(norm_sq) or norm_sq < 1.0e-12:
+        return 0.0
     siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)
     cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z)
     return math.degrees(math.atan2(siny_cosp, cosy_cosp))
@@ -450,6 +472,8 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
             y=session.ego_y,
             heading_deg=10.0,
             speed_mps=5.6,
+            yaw_rate_rps=0.08,
+            front_steering_angle_rad=0.12,
         )
         actors = [
             ActorView(
@@ -492,6 +516,30 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
             actors=actors,
             frame_refs=frame_refs,
             latest_decision=self._build_decision(session),
+            ego_history=[
+                {"x": session.ego_x - 12.0, "y": session.ego_y},
+                {"x": session.ego_x - 8.0, "y": session.ego_y + 0.3},
+                {"x": session.ego_x - 4.0, "y": session.ego_y + 0.4},
+                {"x": session.ego_x, "y": session.ego_y},
+            ],
+            selected_plan=[
+                {"x": session.ego_x, "y": session.ego_y},
+                {"x": session.ego_x + 8.0, "y": session.ego_y + 0.8},
+                {"x": session.ego_x + 16.0, "y": session.ego_y + 1.2},
+                {"x": session.ego_x + 24.0, "y": session.ego_y + 1.4},
+            ],
+            candidate_plans=[
+                CandidatePlanView(
+                    candidate_id=f"vla_default:step{session.current_tick_id}:r0",
+                    backend_id="vla_default",
+                    selected=True,
+                    points=[
+                        {"x": session.ego_x, "y": session.ego_y},
+                        {"x": session.ego_x + 8.0, "y": session.ego_y + 0.8},
+                        {"x": session.ego_x + 16.0, "y": session.ego_y + 1.2},
+                    ],
+                )
+            ],
         )
 
     def _build_state(self, session: _MockSession) -> SessionStateView:
@@ -506,6 +554,7 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
             latest_snapshot=session.latest_snapshot,
             latest_decision=latest_decision,
             active_backend_ids=list(session.active_backend_ids),
+            available_backend_ids=list(session.available_backend_ids),
         )
 
     def _build_decision(self, session: _MockSession) -> DecisionView:
@@ -553,6 +602,9 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
             actors=snapshot.actors,
             frame_refs=snapshot.frame_refs,
             latest_decision=decision,
+            ego_history=snapshot.ego_history,
+            selected_plan=snapshot.selected_plan,
+            candidate_plans=snapshot.candidate_plans,
         )
 
     def _record_checkpoint(self, session: _MockSession) -> None:
@@ -735,6 +787,9 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:  # noqa: BLE001
@@ -789,6 +844,9 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -804,6 +862,9 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -846,6 +907,7 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
             "latest_snapshot": latest_snapshot,
             "latest_decision": self._decision_to_dict(state.latest_decision),
             "active_backend_ids": state.active_backend_ids,
+            "available_backend_ids": state.available_backend_ids,
             "error": state.error,
         }
 
@@ -860,6 +922,17 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
             "actors": [actor.__dict__ for actor in snapshot.actors],
             "frame_refs": snapshot.frame_refs,
             "latest_decision": self._decision_to_dict(snapshot.latest_decision),
+            "ego_history": snapshot.ego_history,
+            "selected_plan": snapshot.selected_plan,
+            "candidate_plans": [
+                {
+                    "candidate_id": item.candidate_id,
+                    "backend_id": item.backend_id,
+                    "selected": item.selected,
+                    "points": item.points,
+                }
+                for item in snapshot.candidate_plans
+            ],
         }
 
     @staticmethod
@@ -1141,6 +1214,7 @@ class GrpcInteractiveApiAdapter(InteractiveApiAdapter):
             latest_snapshot=latest_snapshot,
             latest_decision=latest_decision,
             active_backend_ids=list(getattr(state, "active_backend_ids", [])),
+            available_backend_ids=list(getattr(state, "available_backend_ids", [])),
             error=state.error,
         )
 
@@ -1161,6 +1235,10 @@ class GrpcInteractiveApiAdapter(InteractiveApiAdapter):
                 y=float(snapshot.ego.pose.vec.y),
                 heading_deg=_yaw_deg_from_pose(snapshot.ego.pose),
                 speed_mps=_speed_mps_from_dynamics(snapshot.ego.dynamics),
+                yaw_rate_rps=float(snapshot.ego.dynamics.angular_velocity.z),
+                front_steering_angle_rad=float(
+                    getattr(snapshot.ego, "front_steering_angle_rad", 0.0)
+                ),
             ),
             actors=[
                 ActorView(
@@ -1184,6 +1262,26 @@ class GrpcInteractiveApiAdapter(InteractiveApiAdapter):
                 for frame_ref in snapshot.frame_refs
             ],
             latest_decision=latest_decision,
+            ego_history=[
+                {"x": float(point.x), "y": float(point.y)}
+                for point in getattr(snapshot, "ego_history", [])
+            ],
+            selected_plan=[
+                {"x": float(point.x), "y": float(point.y)}
+                for point in getattr(snapshot, "selected_plan", [])
+            ],
+            candidate_plans=[
+                CandidatePlanView(
+                    candidate_id=item.candidate_id,
+                    backend_id=item.backend_id,
+                    selected=bool(item.selected),
+                    points=[
+                        {"x": float(point.x), "y": float(point.y)}
+                        for point in item.points
+                    ],
+                )
+                for item in getattr(snapshot, "candidate_plans", [])
+            ],
         )
 
 

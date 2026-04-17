@@ -174,6 +174,7 @@ def _clone_rollout_state(state: RolloutState) -> RolloutState:
             state.unbound.control_timestamps_us[-1] + 1,
         ),
         last_egopose_update_us=state.last_egopose_update_us,
+        current_front_steering_angle_rad=state.current_front_steering_angle_rad,
         last_camera_frame_us=dict(state.last_camera_frame_us),
         last_decision_step_id=state.last_decision_step_id,
         last_committed_decision_bundle=_clone_decision_bundle(

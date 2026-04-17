@@ -9,11 +9,13 @@ import logging
 from alpasim_grpc.v1 import interactive_runtime_pb2, interactive_runtime_pb2_grpc
 from alpasim_runtime.interactive.models import (
     ActorStateModel,
+    CandidatePlanModel,
     CandidateSummaryModel,
     CheckpointSummaryModel,
     DecisionSummaryModel,
     EgoStateModel,
     FrameRefModel,
+    PolylinePointModel,
     SensorDescriptorModel,
     SessionSnapshotModel,
     SessionStateModel,
@@ -72,11 +74,29 @@ def _ego_to_proto(ego: EgoStateModel) -> interactive_runtime_pb2.EgoState:
     return interactive_runtime_pb2.EgoState(
         pose=ego.pose,
         dynamics=ego.dynamics,
+        front_steering_angle_rad=ego.front_steering_angle_rad,
     )
 
 
 def _actor_to_proto(actor: ActorStateModel) -> interactive_runtime_pb2.ActorState:
     return interactive_runtime_pb2.ActorState(actor_id=actor.actor_id, pose=actor.pose)
+
+
+def _polyline_point_to_proto(
+    point: PolylinePointModel,
+) -> interactive_runtime_pb2.PolylinePoint:
+    return interactive_runtime_pb2.PolylinePoint(x=point.x, y=point.y)
+
+
+def _candidate_plan_to_proto(
+    candidate_plan: CandidatePlanModel,
+) -> interactive_runtime_pb2.CandidatePlan:
+    return interactive_runtime_pb2.CandidatePlan(
+        candidate_id=candidate_plan.candidate_id,
+        backend_id=candidate_plan.backend_id,
+        selected=candidate_plan.selected,
+        points=[_polyline_point_to_proto(point) for point in candidate_plan.points],
+    )
 
 
 def _snapshot_to_proto(snapshot: SessionSnapshotModel) -> interactive_runtime_pb2.SessionSnapshot:
@@ -87,6 +107,12 @@ def _snapshot_to_proto(snapshot: SessionSnapshotModel) -> interactive_runtime_pb
         ego=_ego_to_proto(snapshot.ego),
         actors=[_actor_to_proto(actor) for actor in snapshot.actors],
         frame_refs=[_frame_ref_to_proto(frame_ref) for frame_ref in snapshot.frame_refs],
+        ego_history=[_polyline_point_to_proto(point) for point in snapshot.ego_history],
+        selected_plan=[_polyline_point_to_proto(point) for point in snapshot.selected_plan],
+        candidate_plans=[
+            _candidate_plan_to_proto(candidate_plan)
+            for candidate_plan in snapshot.candidate_plans
+        ],
     )
     if snapshot.latest_decision is not None and hasattr(message, "latest_decision"):
         message.latest_decision.CopyFrom(_decision_to_proto(snapshot.latest_decision))
@@ -103,6 +129,7 @@ def _state_to_proto(state: SessionStateModel) -> interactive_runtime_pb2.Session
         current_sim_time_us=state.current_sim_time_us,
         error=state.error,
         active_backend_ids=state.active_backend_ids,
+        available_backend_ids=state.available_backend_ids,
     )
     if state.latest_snapshot is not None:
         message.latest_snapshot.CopyFrom(_snapshot_to_proto(state.latest_snapshot))

@@ -67,6 +67,7 @@ message RunControllerAndVehicleModelResponse {
   common.PoseAtTime pose_local_to_rig_estimated = 2 [deprecated = true];
   common.DynamicState dynamic_state = 3 [deprecated = true];
   common.DynamicState dynamic_state_estimated = 4 [deprecated = true];
+  double front_steering_angle_rad = 5 [deprecated = true];
 
   // Vehicle state at a point in time, produced by stepping the vehicle model.
   message PropagatedState {
@@ -75,10 +76,11 @@ message RunControllerAndVehicleModelResponse {
     common.Pose pose_local_to_rig_estimated = 3;
     common.DynamicState dynamic_state = 4;
     common.DynamicState dynamic_state_estimated = 5;
+    double front_steering_angle_rad = 6;
   }
 
   // All propagated states in chronological order.
   // Contains intermediate states at pose_reporting_interval_us boundaries
   // followed by the final state at future_time_us.
-  repeated PropagatedState states = 6;
+  repeated PropagatedState states = 7;
 }

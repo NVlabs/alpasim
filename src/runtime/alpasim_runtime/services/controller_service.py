@@ -40,6 +40,7 @@ class PropagatedPosesAtTime:
     pose_local_to_rig_estimate: Pose  # The "software" estimated pose in local frame
     dynamic_state: DynamicState  # The true dynamic state (velocities, accelerations)
     dynamic_state_estimated: DynamicState  # The estimated dynamic state
+    front_steering_angle_rad: float = 0.0  # True front wheel steering angle
 
 
 class ControllerService(ServiceBase[VDCServiceStub]):
@@ -228,6 +229,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     pose_local_to_rig_estimate=fallback_pose_local_to_rig,
                     dynamic_state=DynamicState(),
                     dynamic_state_estimated=DynamicState(),
+                    front_steering_angle_rad=0.0,
                 )
             ]
             return self._ensure_intermediates(
@@ -274,6 +276,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     pose_local_to_rig_estimate=fallback_pose_local_to_rig,
                     dynamic_state=DynamicState(),
                     dynamic_state_estimated=DynamicState(),
+                    front_steering_angle_rad=0.0,
                 )
             ]
         elif response.states:
@@ -287,6 +290,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     ),
                     dynamic_state=s.dynamic_state,
                     dynamic_state_estimated=s.dynamic_state_estimated,
+                    front_steering_angle_rad=float(s.front_steering_angle_rad),
                 )
                 for s in response.states
             ]
@@ -300,6 +304,9 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     ),
                     dynamic_state=response.dynamic_state,
                     dynamic_state_estimated=response.dynamic_state_estimated,
+                    front_steering_angle_rad=float(
+                        getattr(response, "front_steering_angle_rad", 0.0)
+                    ),
                 )
             ]
 

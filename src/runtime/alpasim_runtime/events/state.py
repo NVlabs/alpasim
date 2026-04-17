@@ -122,6 +122,7 @@ class RolloutState:
 
     # === Assertion tracking (for assert_zero_decision_delay) ===
     last_egopose_update_us: int = 0
+    current_front_steering_angle_rad: float = 0.0
     last_camera_frame_us: dict[str, int] = field(default_factory=dict)
     last_decision_step_id: int = 0
     last_committed_decision_bundle: DecisionBundle | None = None

@@ -71,6 +71,9 @@ def test_alpasimvdc_one_step(dt_propagation_us) -> None:
     # sanity check that the integration is approximately working
     assert len(response.states) > 0
     final = response.states[-1]
+    assert final.front_steering_angle_rad == pytest.approx(
+        response.front_steering_angle_rad, abs=1e-9
+    )
     assert final.pose_local_to_rig.vec.x == pytest.approx(
         X_ORIGINAL + get_vx() * dt_propagation_us / 1e6, abs=TOLERANCE_GT
     )

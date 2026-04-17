@@ -153,11 +153,24 @@ message FrameRef {
 message EgoState {
     common.Pose pose = 1;
     common.DynamicState dynamics = 2;
+    double front_steering_angle_rad = 3;
 }
 
 message ActorState {
     string actor_id = 1;
     common.Pose pose = 2;
+}
+
+message PolylinePoint {
+    double x = 1;
+    double y = 2;
+}
+
+message CandidatePlan {
+    string candidate_id = 1;
+    string backend_id = 2;
+    bool selected = 3;
+    repeated PolylinePoint points = 4;
 }
 
 message CandidateSummary {
@@ -193,6 +206,9 @@ message SessionSnapshot {
     repeated ActorState actors = 5;
     repeated FrameRef frame_refs = 6;
     DecisionSummary latest_decision = 7;
+    repeated PolylinePoint ego_history = 8;
+    repeated PolylinePoint selected_plan = 9;
+    repeated CandidatePlan candidate_plans = 10;
 }
 
 message SessionState {
@@ -206,6 +222,7 @@ message SessionState {
     SessionSnapshot latest_snapshot = 8;
     DecisionSummary latest_decision = 9;
     repeated string active_backend_ids = 10;
+    repeated string available_backend_ids = 11;
 }
 
 message StepSessionResponse {

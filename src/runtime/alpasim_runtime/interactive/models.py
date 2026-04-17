@@ -40,12 +40,27 @@ class FrameRefModel:
 class EgoStateModel:
     pose: object
     dynamics: object
+    front_steering_angle_rad: float = 0.0
 
 
 @dataclass(frozen=True)
 class ActorStateModel:
     actor_id: str
     pose: object
+
+
+@dataclass(frozen=True)
+class PolylinePointModel:
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class CandidatePlanModel:
+    candidate_id: str
+    backend_id: str
+    selected: bool
+    points: list[PolylinePointModel]
 
 
 @dataclass(frozen=True)
@@ -85,6 +100,9 @@ class SessionSnapshotModel:
     actors: list[ActorStateModel]
     frame_refs: list[FrameRefModel]
     latest_decision: DecisionSummaryModel | None = None
+    ego_history: list[PolylinePointModel] = field(default_factory=list)
+    selected_plan: list[PolylinePointModel] = field(default_factory=list)
+    candidate_plans: list[CandidatePlanModel] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -98,6 +116,7 @@ class SessionStateModel:
     latest_snapshot: SessionSnapshotModel | None
     latest_decision: DecisionSummaryModel | None = None
     active_backend_ids: list[str] = field(default_factory=list)
+    available_backend_ids: list[str] = field(default_factory=list)
     error: str = ""
 
 

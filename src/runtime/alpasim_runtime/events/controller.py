@@ -123,6 +123,10 @@ class ControllerEvent(RecurringEvent):
             pose_reporting_interval_us=state.unbound.pose_reporting_interval_us
             or state.unbound.control_timestep_us,
         )
+        if propagated_states:
+            state.current_front_steering_angle_rad = float(
+                propagated_states[-1].front_steering_angle_rad
+            )
 
         # Convert list[PropagatedPosesAtTime] → two DynamicTrajectory instances.
         timestamps = np.array(

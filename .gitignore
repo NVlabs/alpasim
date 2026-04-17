@@ -40,3 +40,4 @@ src/pdm_planner
 *node_modules
 
 run_interactive_gpu1
+run_interactive_gpu1_local

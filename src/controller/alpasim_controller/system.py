@@ -210,10 +210,12 @@ class System:
                         pose_local_to_rig_estimated=pose_grpc,
                         dynamic_state=dyn_state,
                         dynamic_state_estimated=dyn_state,
+                        front_steering_angle_rad=self._vehicle_model.front_steering_angle,
                     )
                 )
 
         return controller_pb2.RunControllerAndVehicleModelResponse(
+            front_steering_angle_rad=self._vehicle_model.front_steering_angle,
             states=reported_states,
         )
 

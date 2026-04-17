@@ -41,11 +41,13 @@ from eval.schema import EvalConfig
 from .frame_store import FrameStore
 from .models import (
     ActorStateModel,
+    CandidatePlanModel,
     CandidateSummaryModel,
     CheckpointSummaryModel,
     DecisionSummaryModel,
     EgoStateModel,
     FrameDataModel,
+    PolylinePointModel,
     SensorDescriptorModel,
     SessionEventModel,
     SessionSnapshotModel,
@@ -490,14 +492,28 @@ class InteractiveSessionRunner:
                 )
             )
 
+        ego_history = _polyline_from_positions(state.ego_trajectory.positions)
+        candidate_plans = _candidate_plans_from_bundle(state.last_committed_decision_bundle)
+        selected_plan = next(
+            (candidate.points for candidate in candidate_plans if candidate.selected),
+            [],
+        )
+
         return SessionSnapshotModel(
             interactive_session_id=self._interactive_session_id,
             tick_id=self._tick_id,
             sim_time_us=sim_time_us,
-            ego=EgoStateModel(pose=ego_pose, dynamics=ego_dynamics),
+            ego=EgoStateModel(
+                pose=ego_pose,
+                dynamics=ego_dynamics,
+                front_steering_angle_rad=state.current_front_steering_angle_rad,
+            ),
             actors=actors,
             frame_refs=list(frame_refs),
             latest_decision=self._latest_decision_summary(),
+            ego_history=ego_history,
+            selected_plan=selected_plan,
+            candidate_plans=candidate_plans,
         )
 
     def _build_state(self) -> SessionStateModel:
@@ -514,6 +530,7 @@ class InteractiveSessionRunner:
             latest_snapshot=self._latest_snapshot,
             latest_decision=self._latest_decision_summary(),
             active_backend_ids=self._active_backend_ids(),
+            available_backend_ids=self._available_backend_ids(),
             error=self._error,
         )
 
@@ -530,6 +547,11 @@ class InteractiveSessionRunner:
             return []
         active = self._rollout.current_state.active_driver_backend_ids
         return list(active) if active is not None else []
+
+    def _available_backend_ids(self) -> list[str]:
+        if self._rollout is None:
+            return []
+        return list(self._rollout.current_state.available_driver_backend_ids)
 
     def _driver_orchestrator(self):
         assert self._rollout is not None
@@ -613,3 +635,58 @@ def _decision_summary_from_bundle(bundle: DecisionBundle) -> DecisionSummaryMode
         ],
         arbitration_reason=bundle.arbitration_reason or "",
     )
+
+
+def _polyline_from_positions(positions: np.ndarray | None) -> list[PolylinePointModel]:
+    if positions is None or len(positions) == 0:
+        return []
+    return [
+        PolylinePointModel(x=float(position[0]), y=float(position[1]))
+        for position in positions
+    ]
+
+
+def _selected_plan_from_bundle(
+    bundle: DecisionBundle | None,
+) -> list[PolylinePointModel]:
+    if bundle is None:
+        return []
+
+    selected_candidate: CandidateDecision | None = None
+    if bundle.selected_candidate_id is not None:
+        selected_candidate = next(
+            (
+                candidate
+                for candidate in bundle.candidates
+                if candidate.candidate_id == bundle.selected_candidate_id
+            ),
+            None,
+        )
+    if selected_candidate is None:
+        selected_candidate = next(
+            (candidate for candidate in bundle.candidates if candidate.status.value == "SELECTED"),
+            None,
+        )
+    if selected_candidate is None or selected_candidate.trajectory is None:
+        return []
+    return _polyline_from_positions(selected_candidate.trajectory.positions)
+
+
+def _candidate_plans_from_bundle(
+    bundle: DecisionBundle | None,
+) -> list[CandidatePlanModel]:
+    if bundle is None:
+        return []
+    plans: list[CandidatePlanModel] = []
+    for candidate in bundle.candidates:
+        if candidate.trajectory is None:
+            continue
+        plans.append(
+            CandidatePlanModel(
+                candidate_id=candidate.candidate_id,
+                backend_id=candidate.backend_id,
+                selected=candidate.candidate_id == bundle.selected_candidate_id,
+                points=_polyline_from_positions(candidate.trajectory.positions),
+            )
+        )
+    return plans
