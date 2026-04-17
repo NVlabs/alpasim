@@ -170,3 +170,5 @@ Laura Leal-Taixe, Nicole Yang
   <strong>Built for researchers, by researchers</strong><br>
   <em>Accelerating autonomous vehicle development through realistic simulation</em>
 </div>
+
+Remove after testing: Sync CI test marker: GitHub-to-GitLab workflow validation.
