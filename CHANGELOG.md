@@ -5,11 +5,11 @@ It should be sorted by date (more recent on top) and link to MRs which introduce
 ## Move evaluation to a separate thread (03.04.26)
 Runtime evaluation now runs in its own thread instead of inline in the simulation loop. This decouples eval latency from the simulation step, improving throughput when evaluation is expensive.
 
-## Duplicate config detection across providers (01.04.26)
-The Hydra config discovery plugin now detects YAML files that exist at the same relative path in multiple config providers (e.g. both `wizard` and an installed plugin). Duplicate paths raise a `ValueError` at startup, preventing silent config shadowing.
-
 ## Dependency fix: override `torchmetrics` pin (03.04.26)
 Added `torchmetrics>=1.8.2` to `override-dependencies` in the root `pyproject.toml` to resolve a conflict between upstream driver dependencies.
+
+## Duplicate config detection across providers (01.04.26)
+The Hydra config discovery plugin now detects YAML files that exist at the same relative path in multiple config providers (e.g. both `wizard` and an installed plugin). Duplicate paths raise a `ValueError` at startup, preventing silent config shadowing.
 
 ## Rename driver configs: ar1 → alpamayo1, a15 → alpamayo1_5 (31.03.26)
 
@@ -25,7 +25,7 @@ Driver config names, entry points, and `model_type` values now use explicit name
 ## Upgrade OSS sensorsim to NRE-GA 26.02 and unify entrypoint (30.03.26)
 The OSS sensorsim image has been upgraded from `docker.io/carlasimulator/nvidia-nurec-grpc:0.2.0` to `nvcr.io/nvidia/nre/nre-ga:26.02`.
 
-* The sensorsim entrypoint (`/app/run serve-grpc`) and all shared flags are now defined once in `base_config.yaml`; both OSS and internal manifests inherit it instead of duplicating the command block.
+* The sensorsim entrypoint (`/app/run serve-grpc`) and all shared flags are now defined once in `base_config.yaml`.
 * New flag `--enable-editing-actors` added to the base sensorsim command, required by NRE 26.3 for render requests that include dynamic object updates.
 
 **Migration**: If you override `services.sensorsim.command` in a custom manifest, add `--enable-editing-actors` to the argument list.
@@ -60,11 +60,11 @@ Each driver config now includes its own runtime settings via the Hydra defaults 
 
 ### stable_manifest removed, images derived from pyproject.toml
 
-The `stable_manifest` config group has been removed. Its content has been merged into `base_config.yaml`:
+The `stable_manifest` config group (`oss.yaml`, `oss_gitlab.yaml`) has been removed. Its content has been merged into `base_config.yaml`:
 
 * Services built from the repo (driver, physics, controller, trafficsim, runtime) use `${defines.base_image}`, which reads the version from `pyproject.toml` at runtime via a `repo-version:` OmegaConf resolver.
 * The external sensorsim image (`nvcr.io/nvidia/nre/nre-ga:26.02`) is set directly in `base_config.yaml`.
-* A default scene ID is now in `base_config.yaml`, so new users can run without specifying scenes.
+* A default OSS scene ID is now in `base_config.yaml`, so new users can run without specifying scenes.
 
 ### Runtime endpoint config moved to topology
 
@@ -93,7 +93,7 @@ New optional groups in `base_config.yaml` defaults allow overriding service-spec
 * `driver=[<model>,<runtime_configs>]` list syntax is now just `driver=<model>`.
 * `cameras/wide_only_cam.yaml` removed (use `cameras/1cam.yaml`).
 * `stable_manifest` config group removed entirely.
-* Deleted monolithic deploy configs: `local_2gpus`. Use `deploy=<target> topology=<layout>` instead.
+* Deleted monolithic deploy configs: `iad_oss`, `ord_oss`, `ord_oss_single`, `local_2gpus`, `iad` (OSS). Use `deploy=<target> topology=<layout>` instead.
 * `runtime.nr_workers` and `runtime.endpoints.*` defaults removed from `base_config.yaml` (set by topology).
 * `defines.nre_cache_size` removed from `base_config.yaml` (set by topology).
 
@@ -112,12 +112,7 @@ The root `pyproject.toml` now exposes every workspace member as a named optional
 
 * `uv sync --extra wizard` — wizard and its transitive deps only
 * `uv sync --extra all` — all core packages
-* `uv sync --extra all --extra internal` — core + internal plugin
 * `source setup_local_env.sh` still works and installs all core packages (plugins must be added separately).
-
-Internal-only content (CI/CD, configs, tools, docs) has been moved to an optional package at `plugins/internal/`.
-
-The default stable manifest (`src/wizard/configs/stable_manifest/oss.yaml`) now references public / locally-built Docker images. A new `plugins/internal/configs/stable_manifest/oss_gitlab.yaml` provides the internal-CI equivalent with `nvcr.io`-hosted images; the CI auto-bump scripts update versions there.
 
 See [Onboarding — Dependency management](docs/ONBOARDING.md#dependency-management) for details.
 
@@ -169,7 +164,7 @@ Additionally, changed the way that the `HF_HOME` environment variable is handled
 
 **Migration**: Update SLURM submit commands:
 - `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> submit.sh +deploy=ord_oss`
-- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus=4 submit.sh +deploy=ipp5`
+- `cd src/tools/run-on-ipp5 && sbatch submit.sh` → `cd src/tools/run-on-slurm && sbatch --account=<acct> --partition=<part> --gpus-per-node=4 submit.sh +deploy=ipp5`
 
 ## Output directory structure changes (03.02.26)
 The wizard output directory structure has been reorganized for clarity:

@@ -247,7 +247,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
             vec_map=None,
         )
 
@@ -255,7 +254,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         assert result.session_metadata.session_uuid == "test-uuid-123"
         assert result.run_uuid == "test-run"
         assert result.run_name == "test"
-        assert result.batch_id == "0"
 
     def test_builds_actor_trajectories(self, default_eval_config: EvalConfig) -> None:
         """Test that actor trajectories are built from accumulated poses."""
@@ -277,7 +275,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
         )
 
         # Check EGO trajectory
@@ -317,7 +314,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
         )
 
         assert result.driver_responses is not None
@@ -344,7 +340,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
         )
 
         assert result.ego_aabb_x_m == 4.5
@@ -371,7 +366,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
         )
 
         assert result.ego_recorded_ground_truth_trajectory is not None
@@ -387,7 +381,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
             accumulator.build_scenario_eval_input(
                 run_uuid="test-run",
                 run_name="test",
-                batch_id="0",
             )
 
     def test_handles_empty_actor_poses(self, default_eval_config: EvalConfig) -> None:
@@ -403,7 +396,6 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         result = accumulator.build_scenario_eval_input(
             run_uuid="test-run",
             run_name="test",
-            batch_id="0",
         )
 
         assert isinstance(result, ScenarioEvalInput)
@@ -441,7 +433,6 @@ class TestEvalDataAccumulatorIntegration:
         result = accumulator.build_scenario_eval_input(
             run_uuid="integration-test",
             run_name="integration",
-            batch_id="0",
         )
 
         # Verify result

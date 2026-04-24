@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 from omegaconf import MISSING, DictConfig, OmegaConf
 
@@ -40,8 +39,8 @@ class AlpasimConfig:
 @dataclass
 class ScenesConfig:
     # Selection method (exactly one must be set)
-    scene_ids: Optional[list[str]] = None
-    test_suite_id: Optional[str] = None
+    scene_ids: list[str] | None = None
+    test_suite_id: str | None = None
 
     # Limit the number of scenes to run (0 or negative means no limit)
     limit_to_first_n: int = 0
@@ -53,7 +52,7 @@ class ScenesConfig:
 
     # Relative path within scene_cache to the sceneset directory for this run.
     # Set automatically by the wizard; used by reeval to locate the correct USDZs.
-    sceneset_path: Optional[str] = None
+    sceneset_path: str | None = None
 
     # Optional: path to a local directory containing *.usdz files.
     # When set, the wizard will scan this directory to generate in-memory
@@ -61,10 +60,10 @@ class ScenesConfig:
     # is created automatically containing all discovered scenes.
     # If local_usdz_dir is provided and neither scene_ids nor test_suite_id is set,
     # all scenes in the directory will be simulated.
-    local_usdz_dir: Optional[str] = None
+    local_usdz_dir: str | None = None
 
     # used to override services.sensorsim.image for the USDZ database service if NRE is not enabled
-    nre_version_string: Optional[str] = None
+    nre_version_string: str | None = None
 
 
 class RunMethod(Enum):
@@ -83,18 +82,18 @@ class RunMode(Enum):
 @dataclass
 class WizardConfig:
     # Name of the run, used to identify the run in the databases.
-    run_name: Optional[str] = None
+    run_name: str | None = None
     run_method: RunMethod = MISSING
     run_mode: RunMode = MISSING
 
     # Global log level for all alpasim services (DEBUG, INFO, WARNING, ERROR)
     log_level: str = "INFO"
-    description: Optional[str] = None  # TODO(mwatson): is this redundant to run_name?
-    submitter: Optional[str] = None
+    description: str | None = None  # TODO(mwatson): is this redundant to run_name?
+    submitter: str | None = None
 
     latest_symlink: bool = MISSING
     log_dir: str = "."
-    array_job_dir: Optional[str] = None
+    array_job_dir: str | None = None
     dry_run: bool = MISSING
     baseport: int = MISSING
     validate_mount_points: bool = MISSING
@@ -102,37 +101,42 @@ class WizardConfig:
     # If set, the wizard will pull the driver code from the specified hash into
     # `${wizard.log_dir}/driver_code`. Can be useful for mounting into the
     # driver container for debugging.
-    driver_code_hash: Optional[str] = None
+    driver_code_hash: str | None = None
 
     # Used if `driver_code_hash` is set. Requires configured ssh keys for
     # pulling from gitlab, but can also point towards a local repo!
-    driver_code_repo: Optional[str] = None
+    driver_code_repo: str | None = None
 
     helper: str = MISSING
     vscode: str = MISSING
 
     sqshcaches: list[str] = MISSING
 
-    slurm_job_id: Optional[int] = MISSING
+    slurm_job_id: int | None = MISSING
     timeout: int = MISSING
     nr_retries: int = 3
-    run_sim_services: Optional[list[str]] = MISSING
+    run_sim_services: list[str] | None = MISSING
     debug_flags: DebugFlags = field(default_factory=DebugFlags)
+
+    # When True, add --cpu-bind=none to srun --overlap steps.  Required on
+    # SLURM nodes where the batch step binds all CPUs (e.g. non-exclusive
+    # allocations on CI nodes), otherwise overlapping steps are killed.
+    slurm_cpu_bind_none: bool = False
 
     # External service addresses for services running outside the deployment.
     # Maps service name to list of addresses (e.g., {"driver": ["localhost:6789"]}).
     # These addresses are added to generated-network-config.yaml so the runtime
     # can connect to services running externally (e.g., on developer's machine).
-    external_services: Optional[dict[str, list[str]]] = None
+    external_services: dict[str, list[str]] | None = None
 
 
 @dataclass
 class ServicesConfig:
-    driver: Optional[ServiceConfig] = MISSING
-    sensorsim: Optional[ServiceConfig] = MISSING
-    physics: Optional[ServiceConfig] = MISSING
-    trafficsim: Optional[ServiceConfig] = MISSING
-    controller: Optional[ServiceConfig] = MISSING
+    driver: ServiceConfig | None = MISSING
+    sensorsim: ServiceConfig | None = MISSING
+    physics: ServiceConfig | None = MISSING
+    trafficsim: ServiceConfig | None = MISSING
+    controller: ServiceConfig | None = MISSING
     runtime: RuntimeServiceConfig = MISSING
 
 
@@ -148,10 +152,10 @@ class ServiceConfig:
     # If gpus is None or empty, creates a single container with this many replicas.
     # If gpus is specified, creates one container per GPU, each with this many replicas.
     replicas_per_container: int = MISSING
-    gpus: Optional[list[int]] = MISSING
+    gpus: list[int] | None = MISSING
 
     environments: list[str] = field(default_factory=list)
-    workdir: Optional[str] = None
+    workdir: str | None = None
     remap_root: bool = False
 
 

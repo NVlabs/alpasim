@@ -6,7 +6,7 @@ import io
 import logging
 import pickle
 from enum import StrEnum
-from typing import Callable, Iterable, Literal, Optional
+from typing import Callable, Iterable, Literal
 
 import matplotlib.image as mpimg
 import matplotlib.transforms as transforms
@@ -404,11 +404,11 @@ class DriverResponseAtTime:
     # List over timesteps. Each element is a list of sampled trajectories.
     sampled_trajectories: list[RenderableTrajectory]
     # Safety monitor safe (not triggered) status.
-    safety_monitor_safe: Optional[bool] = None
+    safety_monitor_safe: bool | None = None
     # Command name from driver debug info (e.g. "LEFT", "RIGHT", "STRAIGHT").
-    command_name: Optional[str] = None
+    command_name: str | None = None
     # Optional reasoning text from driver debug info.
-    reasoning_text: Optional[str] = None
+    reasoning_text: str | None = None
 
     @staticmethod
     def _extract_debug_extra(driver_response: DriveResponse) -> dict | None:
@@ -1464,8 +1464,8 @@ class Routes:
         default_factory=dict
     )
     # Set after convert_routes_to_global_frame is called; used for camera projection.
-    _ego_trajectory: Optional["RenderableTrajectory"] = None
-    _ego_coords_rig_to_aabb_center: Optional[geometry.Pose] = None
+    _ego_trajectory: RenderableTrajectory | None = None
+    _ego_coords_rig_to_aabb_center: geometry.Pose | None = None
 
     def add_route(self, route: Route) -> None:
         """Add a route to the routes.
@@ -1679,7 +1679,7 @@ class Routes:
 #     (runtime memory via BoundRollout, or ASL files via asl_loader)
 #   - Uses simple types: raw Trajectory objects, explicit AABB dimensions as tuples
 #   - Many fields are optional (vec_map, cameras, routes, driver_responses)
-#   - Contains run metadata for aggregation (run_uuid, run_name, batch_id)
+#   - Contains run metadata for aggregation (run_uuid, run_name)
 #
 # SimulationResult (processed state):
 #   - A "computed object" with enriched data ready for scoring and video rendering
@@ -1715,7 +1715,6 @@ class ScenarioEvalInput:
     # Run metadata for aggregation (required)
     run_uuid: str = dataclasses.field()
     run_name: str = dataclasses.field()
-    batch_id: str = dataclasses.field()  # Usually "0" for single-batch runs
 
     # Transformation from Rig frame to AABB center frame
     ego_coords_rig_to_aabb_center: geometry.Pose
@@ -1736,23 +1735,23 @@ class ScenarioEvalInput:
     ego_recorded_ground_truth_trajectory: geometry.Trajectory
 
     # Driver responses (optional, needed for some metrics)
-    driver_responses: Optional[DriverResponses] = None
+    driver_responses: DriverResponses | None = None
 
     # Vector map (needed for offroad detection)
-    vec_map: Optional[VectorMap] = None
+    vec_map: VectorMap | None = None
 
     # Cameras data (optional, needed for image-based metrics)
-    cameras: Optional[Cameras] = None
+    cameras: Cameras | None = None
 
     # Routes data (optional)
-    routes: Optional[Routes] = None
+    routes: Routes | None = None
 
     # Duration during which the runtime forced the ego to follow the recorded
     # ground truth trajectory.  Pulled from RolloutMetadata.force_gt_duration.
     # Used by the aggregation pipeline to skip prerun + force-gt timesteps
     # when computing the first "driven" timestamp.  ``None`` for ground-truth
     # baseline runs where this filtering should not apply.
-    force_gt_duration_us: Optional[int] = None
+    force_gt_duration_us: int | None = None
 
 
 @dataclasses.dataclass
@@ -1786,10 +1785,10 @@ class SimulationResult:
     cameras: Cameras
     routes: Routes
     # See ScenarioEvalInput.force_gt_duration_us.
-    force_gt_duration_us: Optional[int] = None
+    force_gt_duration_us: int | None = None
 
     @property
-    def first_driven_timestamp_us(self) -> Optional[int]:
+    def first_driven_timestamp_us(self) -> int | None:
         """Earliest timestamp at which the ego is under policy control.
 
         Computed as ``start_timestamp_us + force_gt_duration_us +
@@ -2005,11 +2004,9 @@ class MetricReturn:
 def create_metrics_dataframe(
     metric_results: list["MetricReturn"],
     clipgt_id: str,
-    batch_id: str,
     rollout_id: str,
     run_uuid: str,
     run_name: str,
-    first_driven_timestamp_us: Optional[int] = None,
 ) -> pl.DataFrame:
     """
     Create a polars DataFrame from metric results with run metadata.
@@ -2020,20 +2017,13 @@ def create_metrics_dataframe(
     Args:
         metric_results: List of MetricReturn objects with per-timestep metrics.
         clipgt_id: Clip/ground truth identifier (typically scene_id).
-        batch_id: Batch identifier.
         rollout_id: Rollout/session identifier.
         run_uuid: Unique identifier for the evaluation run.
         run_name: Human-readable name for the evaluation run.
-        first_driven_timestamp_us: Earliest timestamp at which the ego is
-            considered to be under policy control.  If provided, stored as a
-            constant column so aggregation modifiers can filter out prerun
-            / warmup timesteps.  Leave as ``None`` for ground-truth baseline
-            runs where no such filtering is desired.
 
     Returns:
         DataFrame with columns: name, timestamps_us, values, valid,
-        time_aggregation, clipgt_id, batch_id, rollout_id, run_uuid, run_name,
-        and (optionally) first_driven_timestamp_us.
+        time_aggregation, clipgt_id, rollout_id, run_uuid, run_name.
     """
     dictionaries = []
     for mr in metric_results:
@@ -2049,14 +2039,11 @@ def create_metrics_dataframe(
         mr_dict.update(
             {
                 "clipgt_id": clipgt_id,
-                "batch_id": batch_id,
                 "rollout_id": rollout_id,
                 "run_uuid": run_uuid,
                 "run_name": run_name,
             }
         )
-        if first_driven_timestamp_us is not None:
-            mr_dict["first_driven_timestamp_us"] = int(first_driven_timestamp_us)
         dictionaries.append(mr_dict)
 
     if not dictionaries:

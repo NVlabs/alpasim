@@ -166,7 +166,11 @@ class DaemonScheduler:
         release_all(pools, acquired)
         self._request_store.record_result(result)
 
-        reaped = self._request_store.reap_abandoned()
+        try:
+            reaped = self._request_store.reap_abandoned()
+        except Exception:
+            logger.exception("Failed to reap abandoned requests")
+            reaped = 0
         if reaped:
             logger.info("Reaped %d abandoned request(s)", reaped)
 

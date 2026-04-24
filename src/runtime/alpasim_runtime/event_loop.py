@@ -15,7 +15,6 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import LogEntry, RolloutMetadata
@@ -101,7 +100,7 @@ class EventBasedRollout:
 
     broadcaster: MessageBroadcaster = field(init=False)
     planner_delay_buffer: DelayBuffer = field(init=False)
-    route_generator: Optional[RouteGenerator] = field(init=False)
+    route_generator: RouteGenerator | None = field(init=False)
     runtime_cameras: list[RuntimeCamera] = field(init=False, default_factory=list)
 
     _runtime_evaluator: RuntimeEvaluator = field(init=False)
@@ -371,7 +370,7 @@ class EventBasedRollout:
 
         return queue
 
-    async def run(self) -> Optional[ScenarioEvalResult]:
+    async def run(self) -> ScenarioEvalResult | None:
         """Run the event-based simulation loop.
 
         Returns:

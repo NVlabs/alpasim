@@ -3,7 +3,6 @@
 
 import argparse
 import asyncio
-from typing import Optional
 
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_utils.logs import async_read_pb_log
@@ -12,7 +11,7 @@ from alpasim_utils.logs import async_read_pb_log
 async def print_asl(
     file_path: str,
     start: int,
-    end: Optional[int],
+    end: int | None,
     message_types: set[str],
     just_types: bool,
 ) -> None:

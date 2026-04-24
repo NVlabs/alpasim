@@ -11,7 +11,6 @@ trajectory into the context for downstream pipeline events.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 from alpasim_runtime.events.base import EventPriority, EventQueue, RecurringEvent
@@ -38,7 +37,7 @@ class PolicyEvent(RecurringEvent):
         policy_timestep_us: int,
         services: ServiceBundle,
         camera_ids: list[str],
-        route_generator: Optional[RouteGenerator],
+        route_generator: RouteGenerator | None,
         send_recording_ground_truth: bool,
     ):
         super().__init__(timestamp_us=timestamp_us)

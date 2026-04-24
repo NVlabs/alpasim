@@ -62,7 +62,6 @@ def minimal_eval_input(
         session_metadata=session_metadata,
         run_uuid="test-run-uuid",
         run_name="test-run",
-        batch_id="0",
         ego_coords_rig_to_aabb_center=Pose.identity(),
         ego_aabb_x_m=4.5,
         ego_aabb_y_m=2.0,
@@ -267,7 +266,6 @@ class TestCollisionDetection:
             session_metadata=session_metadata,
             run_uuid="test-run-uuid",
             run_name="test-run",
-            batch_id="0",
             ego_coords_rig_to_aabb_center=Pose.identity(),
             ego_aabb_x_m=4.5,
             ego_aabb_y_m=2.0,
@@ -499,7 +497,6 @@ class TestRuntimeVsPostEvalEquivalence:
         runtime_input = accumulator.build_scenario_eval_input(
             run_uuid=simulation_data["run_uuid"],
             run_name=simulation_data["run_name"],
-            batch_id="0",
             vec_map=None,
         )
 
@@ -568,7 +565,6 @@ class TestRuntimeVsPostEvalEquivalence:
         runtime_input = accumulator.build_scenario_eval_input(
             run_uuid=simulation_data["run_uuid"],
             run_name=simulation_data["run_name"],
-            batch_id="0",
         )
 
         # ========== Post-eval path ==========

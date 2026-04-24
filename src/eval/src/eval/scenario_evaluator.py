@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Optional
 
 import polars as pl
 
 from eval.data import (
+    AggregationType,
     MetricReturn,
     ScenarioEvalInput,
     SimulationResult,
@@ -41,7 +41,7 @@ class ScenarioEvalResult:
     aggregated_metrics: dict[str, float]
 
     # Raw polars dataframe with all metric data (for further processing)
-    metrics_df: Optional[pl.DataFrame] = None
+    metrics_df: pl.DataFrame | None = None
 
 
 class ScenarioEvaluator:
@@ -104,20 +104,39 @@ class ScenarioEvaluator:
         clipgt_id = simulation_result.session_metadata.scene_id
         rollout_id = simulation_result.session_metadata.session_uuid
 
-        # Earliest timestamp at which the ego is under policy control (prerun
-        # + force-gt steps excluded).  Used by the aggregation pipeline to
-        # filter out spurious metric events on warmup frames; ``None`` for
-        # ground-truth baseline runs (see GitHub #59).
-        first_driven_timestamp_us = simulation_result.first_driven_timestamp_us
+        # Per-timestep ``eval_relevant`` flag: marks whether each timestep
+        # should be considered for metric aggregation.  False during the
+        # prerun / force-GT warmup phase, True afterward.  Used by
+        # RemoveTimestepsBeforeEvent in the aggregation pipeline to discard
+        # warmup frames that produce spurious metric events (see GitHub #59).
+        # When ``remove_preengagement_timesteps`` is disabled, all values are
+        # True so the modifier becomes a no-op.
+        timestamps = simulation_result.timestamps_us.tolist()
+        first_driven = simulation_result.first_driven_timestamp_us
+        if (
+            self.cfg.aggregation_modifiers.remove_preengagement_timesteps
+            and first_driven is not None
+        ):
+            eval_relevant_values = [float(ts >= first_driven) for ts in timestamps]
+        else:
+            eval_relevant_values = [1.0] * len(timestamps)
+
+        timestep_metrics.append(
+            MetricReturn(
+                name="eval_relevant",
+                timestamps_us=timestamps,
+                values=eval_relevant_values,
+                valid=[True] * len(timestamps),
+                time_aggregation=AggregationType.MAX,
+            )
+        )
 
         metrics_df = create_metrics_dataframe(
             metric_results=timestep_metrics,
             clipgt_id=clipgt_id,
-            batch_id=scenario_input.batch_id,
             rollout_id=rollout_id,
             run_uuid=scenario_input.run_uuid,
             run_name=scenario_input.run_name,
-            first_driven_timestamp_us=first_driven_timestamp_us,
         )
 
         return ScenarioEvalResult(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional, Tuple
+from typing import Tuple
 
 import cv2
 import numpy as np
@@ -265,8 +265,8 @@ class FthetaToPinholeRectifier:
         self._map_x, self._map_y = self._build_maps(
             source_intrinsics, self._rectify_intrinsics
         )
-        self._distort_map_x: Optional[np.ndarray] = None
-        self._distort_map_y: Optional[np.ndarray] = None
+        self._distort_map_x: np.ndarray | None = None
+        self._distort_map_y: np.ndarray | None = None
         if _has_distortion(self._rectify_intrinsics):
             (
                 self._distort_map_x,
@@ -504,13 +504,13 @@ def build_ftheta_rectifier_for_resolution(
 
 
 def build_rectifier_map(
-    rectification_cfg: Optional[dict[str, RectificationTargetConfig]],
+    rectification_cfg: dict[str, RectificationTargetConfig] | None,
     desired_cameras: set[str],
     camera_lookup: dict[str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera],
-) -> dict[str, Optional[FthetaToPinholeRectifier]]:
+) -> dict[str, FthetaToPinholeRectifier | None]:
     """Instantiate per-camera rectifiers as requested in the Hydra config."""
 
-    rectifiers: dict[str, Optional[FthetaToPinholeRectifier]] = {
+    rectifiers: dict[str, FthetaToPinholeRectifier | None] = {
         logical_id: None for logical_id in desired_cameras
     }
     if rectification_cfg is None:

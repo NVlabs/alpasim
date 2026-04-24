@@ -11,7 +11,7 @@ replacing the many individual constructor parameters with a single reference.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Coroutine, Optional
+from typing import Any, Coroutine
 
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.broadcaster import MessageBroadcaster
@@ -61,21 +61,21 @@ class StepContext:
 
     # PolicyEvent → ControllerEvent
     # Driver output transformed to the true local frame.
-    driver_trajectory: Optional[geometry.Trajectory] = None
+    driver_trajectory: geometry.Trajectory | None = None
 
     # ControllerEvent → PhysicsEvent(EGO) + StepEvent
     # True ego state from controller (poses + dynamics).
-    ego_true: Optional[geometry.DynamicTrajectory] = None
+    ego_true: geometry.DynamicTrajectory | None = None
     # Estimated ego state from controller (poses + dynamics).
-    ego_estimated: Optional[geometry.DynamicTrajectory] = None
+    ego_estimated: geometry.DynamicTrajectory | None = None
 
     # PhysicsEvent(EGO) → TrafficEvent + PhysicsEvent(TRAFFIC) + StepEvent
     # Physics-corrected ego poses (poses only — dynamics are unchanged).
-    corrected_ego_trajectory: Optional[geometry.Trajectory] = None
+    corrected_ego_trajectory: geometry.Trajectory | None = None
 
     # TrafficEvent → PhysicsEvent(TRAFFIC) (transient, overwritten each round)
     # Raw response from the traffic simulation service for the current round.
-    traffic_response: Optional[TrafficReturn] = None
+    traffic_response: TrafficReturn | None = None
 
     # PhysicsEvent(TRAFFIC) → StepEvent (accumulated across rounds)
     # Per-object trajectory of physics-corrected poses, grown each traffic round.
@@ -119,10 +119,10 @@ class RolloutState:
     last_camera_frame_us: dict[str, int] = field(default_factory=dict)
 
     # === Inter-event data ===
-    data_sensorsim_to_driver: Optional[bytes] = None
+    data_sensorsim_to_driver: bytes | None = None
 
     # === Step timing (for step_duration telemetry) ===
     step_wall_start: float = 0.0
 
     # === Step context (pipeline inter-event data) ===
-    step_context: Optional[StepContext] = None
+    step_context: StepContext | None = None

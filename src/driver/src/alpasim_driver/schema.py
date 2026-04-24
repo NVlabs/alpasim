@@ -4,7 +4,6 @@
 """Configuration schema for driver service supporting multiple model backends."""
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from omegaconf import MISSING
 
@@ -25,7 +24,7 @@ class ModelConfig:
     model_type: str = MISSING  # Entry-point name in the alpasim.models registry
     checkpoint_path: str = MISSING  # Path to model checkpoint (.pt/.pth)
     device: str = MISSING  # Device to run inference on (cuda/cpu)
-    tokenizer_path: Optional[str] = None  # Only required for VAM
+    tokenizer_path: str | None = None  # Only required for VAM
     use_classifier_free_guidance_nav: bool = False  # A1.5 only
 
 
@@ -36,7 +35,7 @@ class InferenceConfig:
     use_cameras: list[str] = MISSING
     max_batch_size: int = MISSING  # Maximum batch size for inference
     subsample_factor: int = 1
-    context_length: Optional[int] = None  # Override model's default context length
+    context_length: int | None = None  # Override model's default context length
     output_frequency_hz: int = 10  # Frequency of trajectory decisions (Hz)
 
 
@@ -132,4 +131,4 @@ class DriverConfig:
     plot_debug_images: bool = False
 
     # Optional per-camera rectification definitions
-    rectification: Optional[dict[str, RectificationTargetConfig]] = None
+    rectification: dict[str, RectificationTargetConfig] | None = None

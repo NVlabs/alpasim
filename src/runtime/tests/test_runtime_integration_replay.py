@@ -101,7 +101,7 @@ import logging
 import subprocess
 from concurrent import futures
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional, Tuple, Type
+from typing import Any, Dict, Generator, Tuple, Type
 
 import pytest
 import yaml
@@ -210,7 +210,7 @@ def test_data_dir() -> Path:
 
 
 @pytest.fixture(scope="function")
-async def asl_reader(test_data_dir: Path) -> Optional[ASLReader]:
+async def asl_reader(test_data_dir: Path) -> ASLReader | None:
     """Provide ASL reader for all services."""
     asl_file = test_data_dir / REQUIRED_TEST_FILES["asl"]
     reader = ASLReader(str(asl_file))
@@ -269,7 +269,7 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
 
 @pytest.fixture(scope="function")
 def all_services(
-    asl_reader: Optional[ASLReader], runtime_configs: Dict[str, str]
+    asl_reader: ASLReader | None, runtime_configs: Dict[str, str]
 ) -> Generator[None, None, None]:
     """Create and start all service servers."""
     # Load network config to get service ports

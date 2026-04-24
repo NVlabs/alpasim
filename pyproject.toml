@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.57.0"
+version = "0.66.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -66,7 +66,6 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-
 
 [tool.uv]
 python-preference = "only-managed"

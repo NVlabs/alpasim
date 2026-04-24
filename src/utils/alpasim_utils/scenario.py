@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, replace
-from typing import Optional, Self
+from typing import Self
 
 import csaps
 import numpy as np
@@ -79,9 +79,9 @@ class Rig:
     world_to_nre: (
         np.ndarray
     )  # needed as long as cuboid tracks are exported in NRE coords
-    vehicle_config: Optional[
-        VehicleConfig
-    ]  # ego configuration if available in usdz checkpoint
+    vehicle_config: (
+        VehicleConfig | None
+    )  # ego configuration if available in usdz checkpoint
 
     @classmethod
     def load_from_json(cls, json_str: str) -> list[Self]:

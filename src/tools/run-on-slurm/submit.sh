@@ -11,13 +11,13 @@
 # Examples:
 #   sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam
 #   sbatch submit.sh deploy=ord topology=8gpu_12rollouts driver=alpamayo1 controller=ndas trafficsim=internal
-#   sbatch --account=wlew --partition=gtc_demo --gpus=4 submit.sh deploy=ipp5 topology=1gpu driver=alpamayo1
+#   sbatch --account=<account> --partition=gtc_demo --gpus-per-node=4 submit.sh deploy=ipp5 topology=1gpu driver=alpamayo1
 
 #SBATCH --account av_alpamayo_sim
 #SBATCH --partition polar,polar3,polar4,grizzly
 #SBATCH --time 03:59:00
 #SBATCH --nodes=1
-#SBATCH --gpus=8
+#SBATCH --gpus-per-node=8
 #SBATCH --exclusive
 #SBATCH --job-name alpasim
 #SBATCH --output=./runs/slurm_output/%j.log

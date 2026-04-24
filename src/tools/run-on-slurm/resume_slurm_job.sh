@@ -6,7 +6,7 @@
 #   sbatch --account=<account> --partition=<partition> resume_slurm_job.sh <JOB_DIR>
 #SBATCH --time 03:59:00
 #SBATCH --nodes=1
-#SBATCH --gpus=8
+#SBATCH --gpus-per-node=8
 #SBATCH --exclusive
 #SBATCH --job-name resume-alpasim
 #SBATCH --output=./runs/slurm_output/%j.log

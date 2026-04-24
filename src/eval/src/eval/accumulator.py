@@ -16,7 +16,6 @@ eliminating code duplication between asl_loader.py and runtime_evaluator.py.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB
@@ -60,22 +59,20 @@ class EvalDataAccumulator:
 
         # Build final output
         scenario_input = accumulator.build_scenario_eval_input(
-            run_uuid=..., run_name=..., batch_id=..., vec_map=...
+            run_uuid=..., run_name=..., vec_map=...
         )
     """
 
     cfg: EvalConfig
 
     # Internal state - populated from rollout_metadata message
-    _session_metadata: Optional[RolloutMetadata.SessionMetadata] = field(
+    _session_metadata: RolloutMetadata.SessionMetadata | None = field(
         default=None, init=False
     )
-    _ego_coords_rig_to_aabb_center: Optional[Pose] = field(default=None, init=False)
-    _ego_aabb_dims: Optional[tuple[float, float, float]] = field(
-        default=None, init=False
-    )
-    _gt_ego_trajectory: Optional[Trajectory] = field(default=None, init=False)
-    _force_gt_duration_us: Optional[int] = field(default=None, init=False)
+    _ego_coords_rig_to_aabb_center: Pose | None = field(default=None, init=False)
+    _ego_aabb_dims: tuple[float, float, float] | None = field(default=None, init=False)
+    _gt_ego_trajectory: Trajectory | None = field(default=None, init=False)
+    _force_gt_duration_us: int | None = field(default=None, init=False)
 
     # Actor data from rollout_metadata + actor_poses
     _actor_aabb_dims: dict[str, tuple[float, float, float]] = field(
@@ -86,7 +83,7 @@ class EvalDataAccumulator:
     )
 
     # Driver request/response pairing
-    _pending_request: Optional[tuple[int, int]] = field(default=None, init=False)
+    _pending_request: tuple[int, int] | None = field(default=None, init=False)
     _driver_responses: list[tuple[int, int, DriveResponse]] = field(
         default_factory=list, init=False
     )
@@ -96,7 +93,7 @@ class EvalDataAccumulator:
     _routes: Routes = field(default_factory=Routes, init=False)
 
     @property
-    def session_metadata(self) -> Optional[RolloutMetadata.SessionMetadata]:
+    def session_metadata(self) -> RolloutMetadata.SessionMetadata | None:
         """Access session metadata after accumulation."""
         return self._session_metadata
 
@@ -147,7 +144,11 @@ class EvalDataAccumulator:
             metadata: The RolloutMetadata protobuf message.
         """
         self._session_metadata = metadata.session_metadata
-        self._force_gt_duration_us = int(metadata.force_gt_duration)
+        if metadata.force_gt_duration is not None:
+            force_gt = int(metadata.force_gt_duration)
+            if force_gt < 0:
+                raise ValueError(f"force_gt_duration must be >= 0, got {force_gt}")
+            self._force_gt_duration_us = force_gt
 
         # Extract actor AABB dimensions and initialize trajectory data
         for actor_aabb in metadata.actor_definitions.actor_aabb:
@@ -226,7 +227,7 @@ class EvalDataAccumulator:
     def _build_ego_renderable_trajectory(
         self,
         actor_trajectories: dict[str, tuple[Trajectory, tuple[float, float, float]]],
-    ) -> Optional[RenderableTrajectory]:
+    ) -> RenderableTrajectory | None:
         """Build ego RenderableTrajectory from actor trajectories.
 
         Args:
@@ -250,7 +251,7 @@ class EvalDataAccumulator:
         return RenderableTrajectory.from_trajectory(ego_traj, ego_raabb)
 
     def _build_driver_responses(
-        self, ego_renderable: Optional[RenderableTrajectory]
+        self, ego_renderable: RenderableTrajectory | None
     ) -> DriverResponses:
         """Build DriverResponses from accumulated data.
 
@@ -293,8 +294,7 @@ class EvalDataAccumulator:
         self,
         run_uuid: str,
         run_name: str,
-        batch_id: str,
-        vec_map: Optional[VectorMap] = None,
+        vec_map: VectorMap | None = None,
     ) -> ScenarioEvalInput:
         """Build ScenarioEvalInput from all accumulated data.
 
@@ -305,7 +305,6 @@ class EvalDataAccumulator:
         Args:
             run_uuid: Unique identifier for the evaluation run.
             run_name: Human-readable name for the evaluation run.
-            batch_id: Batch identifier (typically "0" for single-batch runs).
             vec_map: Optional vector map for offroad detection.
 
         Returns:
@@ -370,6 +369,5 @@ class EvalDataAccumulator:
             routes=self._routes if self._routes.routes_in_rig_frame else None,
             run_uuid=run_uuid,
             run_name=run_name,
-            batch_id=batch_id,
             force_gt_duration_us=self._force_gt_duration_us,
         )

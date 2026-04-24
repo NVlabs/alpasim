@@ -10,25 +10,16 @@ for both post-eval (from ASL files) and runtime-eval (from memory).
 """
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.logs import async_read_pb_log
-from alpasim_utils.paths import extract_ids_from_path
 
 from eval.accumulator import EvalDataAccumulator
 from eval.data import ScenarioEvalInput
 from eval.schema import EvalConfig
 
 logger = logging.getLogger("alpasim_eval.asl_loader")
-
-
-def _normalize_batch_id(asl_file_path: str, batch_id: str, session_uuid: str) -> str:
-    path = Path(asl_file_path)
-    if path.stem == "rollout" and path.parent.name == session_uuid:
-        return "0"
-    return batch_id
 
 
 async def load_scenario_eval_input_from_asl(
@@ -59,16 +50,6 @@ async def load_scenario_eval_input_from_asl(
     async for message in async_read_pb_log(asl_file_path):
         accumulator.handle_message(message)
 
-    # Extract batch_id from file path
-    _clipgt_id, batch_id, _rollout_id = extract_ids_from_path(asl_file_path)
-
-    if accumulator.session_metadata is not None:
-        batch_id = _normalize_batch_id(
-            asl_file_path=asl_file_path,
-            batch_id=batch_id,
-            session_uuid=accumulator.session_metadata.session_uuid,
-        )
-
     # Get vec_map from artifacts using scene_id from accumulated metadata
     vec_map = None
     if accumulator.session_metadata is not None:
@@ -80,6 +61,5 @@ async def load_scenario_eval_input_from_asl(
     return accumulator.build_scenario_eval_input(
         run_uuid=run_metadata["run_uuid"],
         run_name=run_metadata["run_name"],
-        batch_id=batch_id,
         vec_map=vec_map,
     )

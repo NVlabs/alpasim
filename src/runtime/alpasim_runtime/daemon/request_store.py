@@ -69,7 +69,7 @@ class RequestStore:
                 f"Too many results recorded for request: {result.request_id}"
             )
 
-        if state.pending_jobs == 0:
+        if state.pending_jobs == 0 and not state.completion.done():
             state.completion.set_result(state.results)
 
     async def wait_for_completion(self, request_id: str) -> list[JobResult]:
@@ -93,7 +93,7 @@ class RequestStore:
             state.abandoned = True
             raise
         finally:
-            if state.completion.done():
+            if state.completion.done() and not state.abandoned:
                 self._requests.pop(request_id, None)
 
     def fail_request(self, request_id: str, message: str) -> None:
@@ -104,13 +104,13 @@ class RequestStore:
             state.completion.set_exception(RuntimeError(message))
 
     def reap_abandoned(self) -> int:
-        """Remove completed requests whose waiters were cancelled.
+        """Remove abandoned requests whose jobs have all completed.
 
         Only entries explicitly marked ``abandoned`` by a cancelled
-        ``wait_for_completion`` are reaped.  Requests whose future is merely
-        ``done()`` are left alone: the waiter may still be scheduled to
-        resume on the event loop, or the caller may not have called
-        ``wait_for_completion`` yet.
+        ``wait_for_completion`` **and** whose ``pending_jobs`` have reached
+        zero are reaped.  This avoids premature cleanup: the cancelled
+        future is ``done()`` immediately after cancellation, but results
+        may still be arriving from in-flight workers.
 
         Returns the number of reaped entries.  Safe to call periodically
         (e.g. after each simulation step) to bound memory growth from
@@ -119,7 +119,7 @@ class RequestStore:
         abandoned = [
             rid
             for rid, state in self._requests.items()
-            if state.abandoned and state.completion.done()
+            if state.abandoned and state.pending_jobs == 0
         ]
         for rid in abandoned:
             del self._requests[rid]

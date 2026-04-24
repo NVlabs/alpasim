@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar
+from typing import Generic, Type, TypeVar
 
 from alpasim_runtime.broadcaster import MessageBroadcaster
 
@@ -50,9 +50,9 @@ class ServiceBase(ABC, Generic[StubType]):
     ):
         self.address = address
         self.skip = skip
-        self.channel: Optional[grpc.aio.Channel] = None
-        self.stub: Optional[StubType] = None
-        self.session_info: Optional[SessionInfo] = None
+        self.channel: grpc.aio.Channel | None = None
+        self.stub: StubType | None = None
+        self.session_info: SessionInfo | None = None
 
     @property
     @abstractmethod

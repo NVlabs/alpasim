@@ -356,7 +356,7 @@ def _aggregate_eval_videos(
         video_files.sort()
         for video_file in video_files:
             # Use the basename as the symlink name. By design, video_file.name is
-            # "{clipgt_id}_{batch_id}_{rollout_id}.mp4" (VIDEO_FILE_NAME_FORMAT),
+            # "{clipgt_id}_{rollout_id}_{camera_id}_{layout_id}.mp4" (VIDEO_FILE_NAME_FORMAT),
             # which ensures global uniqueness across jobs; collisions are not expected.
             symlink_path = all_videos_dir / video_file.name
             symlink_path.unlink(missing_ok=True)
@@ -395,7 +395,6 @@ def _aggregate_eval_videos(
             for layout_id in layouts_to_link:
                 video_file_name = VIDEO_FILE_NAME_FORMAT.format(
                     clipgt_id=row["clipgt_id"],
-                    batch_id=row["batch_id"],
                     rollout_id=row["rollout_id"],
                     camera_id=cfg.video.camera_id_to_render,
                     layout_id=layout_id,

@@ -80,14 +80,13 @@ def process_asl_file(
 
     # Video rendering (if enabled) - save next to ASL file (unified path structure)
     if cfg.video.render_video:
-        clipgt_id, batch_id, rollout_id = extract_ids_from_path(asl_file_path)
+        clipgt_id, rollout_id = extract_ids_from_path(asl_file_path)
         render_video_from_eval_result(
             scenario_input=scenario_input,
             metrics_df=result.metrics_df,
             cfg=cfg,
             output_dir=rollout_dir,
             clipgt_id=clipgt_id,
-            batch_id=batch_id,
             rollout_id=rollout_id,
         )
     else:

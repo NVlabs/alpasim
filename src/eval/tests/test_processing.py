@@ -104,6 +104,7 @@ def unified_metrics_df() -> pl.DataFrame:
     # All metrics required by DEFAULT_MODIFIERS plus some test metrics
     # Base values that will be modified per run/clip/rollout
     metrics_config = [
+        ("eval_relevant", "max", [1.0, 1.0, 1.0]),  # all relevant (no prerun filtering)
         ("collision_any", "max", [0.0, 1.0, 0.0]),
         ("collision_front", "max", [0.0, 0.0, 1.0]),
         ("collision_lateral", "max", [0.0, 0.0, 0.0]),
@@ -142,7 +143,6 @@ def unified_metrics_df() -> pl.DataFrame:
                                 "name": metric_name,
                                 "time_aggregation": time_agg,
                                 "clipgt_id": clip["clip_id"],
-                                "batch_id": "batch1",
                                 "rollout_id": rollout["rollout_id"],
                                 "run_uuid": run["run_uuid"],
                                 "run_name": run["run_name"],
@@ -162,7 +162,6 @@ def trajectory_uid_df() -> pl.DataFrame:
             "run_name": ["test_run_1", "test_run_1", "test_run_2", "test_run_2"],
             "run_uuid": ["uuid1", "uuid1", "uuid2", "uuid2"],
             "clipgt_id": ["clip1", "clip2", "clip1", "clip2"],
-            "batch_id": ["batch1", "batch1", "batch1", "batch1"],
             "rollout_id": ["rollout1", "rollout1", "rollout1", "rollout1"],
         }
     )
@@ -726,7 +725,6 @@ class TestProcessedMetricDFs:
             "run_uuid",
             "run_name",
             "clipgt_id",
-            "batch_id",
             "rollout_id",
         }
         assert set(removed_trajectories_modified.columns).issuperset(expected_columns)

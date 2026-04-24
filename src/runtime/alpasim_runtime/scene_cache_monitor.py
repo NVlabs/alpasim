@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 import logging
 from collections import defaultdict
-from typing import Optional
 
 from alpasim_runtime.services.service_base import ServiceBase
 
@@ -8,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class SceneCacheMonitor:
-    def __init__(self, service_cache_size: Optional[int] = None) -> None:
+    def __init__(self, service_cache_size: int | None = None) -> None:
         self._address_to_scene_ids_in_use: dict[str, dict[str, int]] = defaultdict(
             lambda: defaultdict(lambda: 0)
         )

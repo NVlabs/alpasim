@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from io import BytesIO
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, cast
 
 import hydra
 import matplotlib.pyplot as plt
@@ -148,7 +148,7 @@ class DriveJob:
     session_id: str
     session: "Session"
     command: DriveCommand
-    pose: Optional[PoseAtTime]
+    pose: PoseAtTime | None
     timestamp_us: int
     result: asyncio.Future[DriveResponse]
 
@@ -165,10 +165,8 @@ class Session:
     available_cameras_logical_ids: set[str]
     desired_cameras_logical_ids: set[str]
     camera_specs: dict[str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera]
-    rectification_cfg: Optional[dict[str, RectificationTargetConfig]] = None
-    rectifiers: dict[str, Optional[FthetaToPinholeRectifier]] = field(
-        default_factory=dict
-    )
+    rectification_cfg: dict[str, RectificationTargetConfig] | None = None
+    rectifiers: dict[str, FthetaToPinholeRectifier | None] = field(default_factory=dict)
     poses: list[PoseAtTime] = field(default_factory=list)
     dynamic_states: list[tuple[int, DynamicState]] = field(default_factory=list)
     current_command: DriveCommand = DriveCommand.STRAIGHT  # Default to straight
@@ -239,7 +237,7 @@ class Session:
                     f"{sorted(missing_rect)} in driver configuration"
                 )
 
-        rectifiers: dict[str, Optional[FthetaToPinholeRectifier]] = {
+        rectifiers: dict[str, FthetaToPinholeRectifier | None] = {
             logical_id: None for logical_id in desired_cameras_logical_ids
         }
 
@@ -288,7 +286,7 @@ class Session:
 
     def _maybe_build_rectifier(
         self, logical_id: str, source_resolution_hw: tuple[int, int]
-    ) -> Optional[FthetaToPinholeRectifier]:
+    ) -> FthetaToPinholeRectifier | None:
         """Instantiate and cache a rectifier once the true source resolution is known."""
 
         # Check if there's a rectifier for target camera in the config
@@ -334,7 +332,7 @@ class Session:
         logger.debug(f"poses: {self.poses}")
 
     def add_dynamic_state(
-        self, timestamp_us: int, dynamic_state: Optional[DynamicState]
+        self, timestamp_us: int, dynamic_state: DynamicState | None
     ) -> None:
         """Add a dynamic state observation at the given timestamp.
 
@@ -358,8 +356,8 @@ class Session:
         self,
         route: Route,
         use_waypoint_commands: bool,
-        command_distance_threshold: Optional[float] = None,
-        min_lookahead_distance: Optional[float] = None,
+        command_distance_threshold: float | None = None,
+        min_lookahead_distance: float | None = None,
     ) -> None:
         """Derive command from waypoints using route geometry.
 
@@ -513,8 +511,8 @@ class EgoDriverService(EgodriverServiceServicer):
         self._sessions: dict[str, Session] = {}
 
         # Initialize trajectory optimizer if enabled
-        self._trajectory_optimizer: Optional[TrajectoryOptimizer] = None
-        self._vehicle_constraints: Optional[VehicleConstraints] = None
+        self._trajectory_optimizer: TrajectoryOptimizer | None = None
+        self._vehicle_constraints: VehicleConstraints | None = None
         if cfg.trajectory_optimizer.enabled:
             opt_cfg = cfg.trajectory_optimizer
             self._trajectory_optimizer = TrajectoryOptimizer(
