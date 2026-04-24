@@ -40,7 +40,7 @@ class GenericSourceConfig:
     """
 
     enabled: bool = True
-    data_dir: str = MISSING
+    data_dir: Optional[str] = None
     extra_params: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -86,6 +86,10 @@ class DataSourceConfig:
 
         for dataset_name, source in self.sources.items():
             if source.enabled:
+                if source.data_dir is None:
+                    raise ValueError(
+                        f"data_source.sources.{dataset_name}.data_dir is required when enabled"
+                    )
                 desired_data.append(dataset_name)
                 data_dirs[dataset_name] = source.data_dir
                 if source.extra_params:

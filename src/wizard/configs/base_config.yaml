@@ -33,6 +33,7 @@ defines:
   trajdata_cache: "${defines.filesystem}/trajdata_cache"  # Trajdata unified cache location
 
   sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
+  nre_cache_size: 4  # Default; topology configs override based on concurrent rollouts
   helper: scripts
   vscode: sources/remote-vscode-server
   physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
@@ -230,58 +231,40 @@ runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
   # Unified data source configuration using trajdata
-  # Hierarchical structure separates common settings from source-specific config
+  # Common settings apply to all sources; source-specific config lives under sources:
   data_source:
     # Common configuration (applies to all data sources)
     cache_location: "${defines.trajdata_cache}"  # Shared trajdata cache
+    desired_dt: 0.1        # 10 Hz sampling rate for trajectories
+    incl_vector_map: true  # Include vector map data (roads, lanes, etc.)
     rebuild_cache: false   # Set to true to force rebuild cache
     rebuild_maps: false    # Set to true to force rebuild maps
     num_workers: 4         # Parallel workers for cache creation
 
-    # USDZ data source configuration (NuRec artifacts)
-    usdz:
-      enabled: true
-      # Use wizard's dynamic sceneset path. The wizard creates a sceneset directory
-      # based on selected scenes and sets sceneset_path at runtime.
-      # For manual runtime usage without wizard, set sceneset_path in scenes config.
-      data_dir: "${scenes.scene_cache}/${scenes.sceneset_path}"
-      desired_dt: 0.1        # 10 Hz sampling rate for trajectories
-      incl_vector_map: true  # Include vector map data (roads, lanes, etc.)
-      asset_base_path: null  # Optional: Base path for MTGS rendering assets
+    sources:
+      # USDZ data source configuration (NuRec artifacts)
+      usdz:
+        enabled: true
+        # Use wizard's dynamic sceneset path. The wizard creates a sceneset directory
+        # based on selected scenes and sets sceneset_path at runtime.
+        # For manual runtime usage without wizard, set sceneset_path in scenes config.
+        data_dir: "${scenes.scene_cache}/${scenes.sceneset_path}"
+        extra_params:
+          asset_base_path: null  # Optional: Base path for MTGS rendering assets
 
-    # NuPlan data source configuration (disabled by default)
-    nuplan:
-      enabled: false
-      data_dir: null
-      config_dir: null       # Set to enable YAML batch preprocessing mode
-      num_timesteps_before: 30  # Timesteps before central token
-      num_timesteps_after: 80   # Timesteps after central token
-      desired_dt: 0.1
-      incl_vector_map: true
+      # NuPlan data source configuration (disabled by default)
+      nuplan:
+        enabled: false
+        data_dir: null
+        extra_params:
+          config_dir: null       # Set to enable YAML batch preprocessing mode
+          num_timesteps_before: 30  # Timesteps before central token
+          num_timesteps_after: 80   # Timesteps after central token
 
   # Enable cubic spline smoothing for trajectories
   smooth_trajectories: true
 
   endpoints:
-    sensorsim:
-      # how many rollouts can run on a single worker at once
-      n_concurrent_rollouts: 2
-
-    driver:
-      n_concurrent_rollouts: 14
-
-    physics:
-      n_concurrent_rollouts: 14
-      skip: false # physics supports skipping
-
-    controller:
-      n_concurrent_rollouts: 14
-      skip: false # controller supports skipping
-
-    trafficsim:
-      n_concurrent_rollouts: 14
-      skip: true # trafficsim is not included yet
-
     # shut down the system after simulation is finished. without this flag the microservice servers
     # will remain on forever requring a manual interrupt (useful for debugging)
     do_shutdown: true

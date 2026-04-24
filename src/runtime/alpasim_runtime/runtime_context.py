@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import logging
 import copy
+import logging
 import math
 from dataclasses import dataclass
 
@@ -193,6 +193,9 @@ async def build_runtime_context(
     logger.info("Creating UnifiedDataset from config")
     data_source_config = OmegaConf.to_object(config.user.data_source)
     trajdata_params = data_source_config.to_trajdata_params()
+    dataset_kwargs = trajdata_params.pop("dataset_kwargs", None)
+    if dataset_kwargs:
+        trajdata_params["dataset_kwargs"] = dataset_kwargs
     dataset = UnifiedDataset(**trajdata_params)
     logger.info(
         f"Created UnifiedDataset with {dataset.num_scenes()} scenes, "

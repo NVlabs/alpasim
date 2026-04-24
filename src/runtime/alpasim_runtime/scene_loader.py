@@ -53,14 +53,13 @@ class SceneLoader:
         # Build dataset_name -> asset_base_path mapping
         self._asset_base_path_map: dict[str, str] = {}
         data_source_config = OmegaConf.to_object(config.user.data_source)
+
         for dataset_name, source in data_source_config.sources.items():
-            if "asset_base_path" in source.extra_params:
-                self._asset_base_path_map[dataset_name] = source.extra_params[
-                    "asset_base_path"
-                ]
+            asset_base_path = source.extra_params.get("asset_base_path")
+            if asset_base_path is not None:
+                self._asset_base_path_map[dataset_name] = asset_base_path
                 logger.info(
-                    f"Registered asset_base_path for {dataset_name}: "
-                    f"{source.extra_params['asset_base_path']}"
+                    f"Registered asset_base_path for {dataset_name}: {asset_base_path}"
                 )
 
     def get_data_source(self, scene_id: str) -> SceneDataSource:
