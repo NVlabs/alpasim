@@ -57,8 +57,38 @@ appreciated.
 
 ## Getting Started
 
-To run simulations locally (Docker Compose, single machine), see the [Tutorial](docs/TUTORIAL.md).
-For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
+### Quick Start
+
+1. **Setup Environment**
+   Follow the [Onboarding Guide](docs/ONBOARDING.md) to install dependencies and configure your
+   environment.
+
+2. **Prepare Scene Data**
+   AlpaSim uses [trajdata](https://github.com/NVlabs/trajdata/tree/alpasim) (custom `alpasim`
+   branch) for unified data loading. This dependency is automatically installed via `uv`. The wizard
+   automatically prepares scene caches, but you can also do it manually:
+
+   ```bash
+   # For USDZ scenes (after downloading from Hugging Face)
+   uv run python -m alpasim_runtime.prepare_data \
+       --desired-data=usdz \
+       --data-dir=./data/nre-artifacts/all-usdzs \
+       --cache-location=./cache/trajdata_usdz
+   ```
+
+   See the [Tutorial](docs/TUTORIAL.md#data-preparation) for more details on data preparation
+   options.
+
+3. **Run Your First Simulation**
+   ```bash
+   source setup_local_env.sh
+   uv run alpasim_wizard +deploy=local wizard.log_dir=$PWD/my_first_run
+   ```
+
+   Results will be in `my_first_run/` including videos and metrics.
+
+For detailed instructions, see the [Tutorial](docs/TUTORIAL.md). For cluster or SLURM deployment, see
+`src/tools/run-on-slurm`.
 
 ## Documentation & Resources
 

@@ -8,13 +8,112 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Type, TypeVar, cast
+from typing import Any, Dict, Optional, Type, TypeVar, cast
 
 from alpasim_utils.scenario import VehicleConfig
 from alpasim_utils.yaml_utils import load_yaml_dict
 from omegaconf import MISSING, OmegaConf
 
 C = TypeVar("C")
+
+
+@dataclass
+class GenericSourceConfig:
+    """Generic configuration for any trajdata-supported dataset.
+
+    This unified config supports all trajdata datasets (USDZ, NuPlan, Waymo,
+    nuScenes, Lyft, Argoverse, etc.) with a flexible extra_params field for
+    dataset-specific options.
+
+    Attributes:
+        enabled: Whether this data source is enabled
+        data_dir: Path to dataset directory
+        desired_dt: Desired time delta between trajectory frames in seconds
+        incl_vector_map: Whether to load vector maps (roads, lanes, etc.)
+        extra_params: Dataset-specific parameters (e.g., NuPlan's config_dir,
+                      USDZ's asset_base_path, etc.)
+
+    Example extra_params:
+        - NuPlan: {"config_dir": "/path", "num_timesteps_before": 30, "num_timesteps_after": 80}
+        - USDZ: {"asset_base_path": "/assets"}
+        - Waymo: {} (no extra params needed)
+    """
+
+    enabled: bool = True
+    data_dir: Optional[str] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DataSourceConfig:
+    """Configuration for unified data loading through trajdata.
+
+    Supports dynamic registration of any trajdata dataset (USDZ, NuPlan, Waymo,
+    nuScenes, Lyft, Argoverse, etc.) through the 'sources' dictionary.
+
+    Attributes:
+        cache_location: Path to shared trajdata cache directory
+        rebuild_cache: Whether to force rebuild the cache for all sources
+        rebuild_maps: Whether to force rebuild maps for all sources
+        num_workers: Number of parallel workers for cache creation
+        sources: Dictionary mapping dataset names to their configurations
+                 (e.g., {"usdz": GenericSourceConfig(...), "waymo": ...})
+    """
+
+    # Common configuration (applies to all data sources)
+    cache_location: str = MISSING
+    desired_dt: float = 0.1  # 10 Hz sampling
+    incl_vector_map: bool = True
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    num_workers: int = 1  # Conservative default for stability; increase for production
+
+    # New extensible source configuration (preferred)
+    sources: Dict[str, GenericSourceConfig] = field(default_factory=dict)
+
+    def to_trajdata_params(self) -> dict:
+        """Convert hierarchical config to flat parameters for trajdata's UnifiedDataset.
+
+        Returns:
+            Dictionary with keys expected by UnifiedDataset constructor
+
+        Raises:
+            ValueError: If no data sources are enabled
+        """
+        desired_data = []
+        data_dirs = {}
+        dataset_kwargs = {}
+
+        for dataset_name, source in self.sources.items():
+            if source.enabled:
+                if source.data_dir is None:
+                    raise ValueError(
+                        f"data_source.sources.{dataset_name}.data_dir is required when enabled"
+                    )
+                desired_data.append(dataset_name)
+                data_dirs[dataset_name] = source.data_dir
+                if source.extra_params:
+                    dataset_kwargs[dataset_name] = source.extra_params
+
+        if not desired_data:
+            raise ValueError("No data sources enabled in configuration")
+
+        params = {
+            "desired_data": desired_data,
+            "data_dirs": data_dirs,
+            "cache_location": self.cache_location,
+            "incl_vector_map": self.incl_vector_map,
+            "rebuild_cache": self.rebuild_cache,
+            "rebuild_maps": self.rebuild_maps,
+            "num_workers": self.num_workers,
+            "desired_dt": self.desired_dt,
+        }
+
+        # Add dataset-specific kwargs if any source has extra_params
+        if dataset_kwargs:
+            params["dataset_kwargs"] = dataset_kwargs
+
+        return params
 
 
 def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
@@ -243,15 +342,16 @@ class UserSimulatorConfig:
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
-    # Max worker-local artifact cache size.
-    # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: Optional[int] = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.
     # 1 = inline mode, all in one process, good for debugging
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
+
+    # Unified data source configuration (required)
+    # Data loading goes through trajdata's UnifiedDataset
+    data_source: DataSourceConfig = MISSING
 
 
 @dataclass

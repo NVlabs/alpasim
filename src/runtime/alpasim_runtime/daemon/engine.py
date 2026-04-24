@@ -5,17 +5,21 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import Callable
 from uuid import uuid4
 
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
+from alpasim_runtime.daemon.exceptions import InvalidRequestError
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
 from alpasim_runtime.runtime_context import (
     build_runtime_context,
     compute_num_consumers_per_worker,
 )
+from alpasim_runtime.scene_loader import SceneLoader
 from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
 from alpasim_runtime.worker.runtime import WorkerRuntime, start_worker_runtime
+from alpasim_utils.scene_data_source import SceneDataSource
 
 from eval.data import AggregationType
 
@@ -97,37 +101,27 @@ def build_simulation_return(
     )
 
 
-class InvalidRequestError(ValueError):
-    """Raised when a simulation request contains invalid parameters."""
-
-    pass
-
-
-class UnknownSceneError(InvalidRequestError):
-    """Raised when a simulation request references a scene_id with no known artifact."""
-
-    def __init__(self, scene_id: str):
-        super().__init__(f"No artifact found for scene_id: {scene_id}")
-        self.scene_id = scene_id
-
-
 def build_pending_jobs_from_request(
     request: runtime_pb2.SimulationRequest,
-    scene_id_to_artifact_path: dict[str, str],
+    get_data_source: Callable[[str], SceneDataSource],
 ) -> list[PendingRolloutJob]:
     """Expand a SimulationRequest into individual PendingRolloutJob entries.
 
     Each RolloutSpec is expanded by its ``nr_rollouts`` count.  Specs with
     ``nr_rollouts=0`` are silently dropped with a warning.
 
+    Args:
+        request: The simulation request to expand.
+        get_data_source: Callable that returns a SceneDataSource for a given scene_id.
+            Should raise UnknownSceneError if the scene_id is not found.
+
     Raises:
-        UnknownSceneError: If a spec references a scene_id not present in
-            *scene_id_to_artifact_path*.
+        UnknownSceneError: If a spec references an unknown scene_id.
     """
     jobs: list[PendingRolloutJob] = []
     for spec_index, spec in enumerate(request.rollout_specs):
-        if spec.scenario_id not in scene_id_to_artifact_path:
-            raise UnknownSceneError(spec.scenario_id)
+        # This will raise UnknownSceneError if scene_id is not found
+        data_source = get_data_source(spec.scenario_id)
 
         if spec.nr_rollouts == 0:
             logger.warning(
@@ -142,7 +136,7 @@ def build_pending_jobs_from_request(
                     job_id=uuid4().hex,
                     scene_id=spec.scenario_id,
                     rollout_spec_index=spec_index,
-                    artifact_path=scene_id_to_artifact_path[spec.scenario_id],
+                    data_source=data_source,
                 )
             )
     return jobs
@@ -166,19 +160,18 @@ class DaemonEngine:
         user_config: str,
         network_config: str,
         eval_config: str,
-        usdz_glob: str,
         log_dir: str,
         validate_config_scenes: bool = True,
     ) -> None:
         self._user_config_path = user_config
         self._network_config_path = network_config
         self._eval_config_path = eval_config
-        self._usdz_glob = usdz_glob
         self._log_dir = log_dir
         self._validate_config_scenes = validate_config_scenes
 
         self._version_ids: logging_pb2.RolloutMetadata.VersionIds | None = None
-        self._scene_id_to_artifact_path: dict[str, str] = {}
+        self._config = None  # Will be set during startup
+        self._scene_loader: SceneLoader | None = None
         self._scheduler: DaemonScheduler | None = None
         self._worker_runtime: WorkerRuntime | None = None
         self._started = False
@@ -189,12 +182,30 @@ class DaemonEngine:
             raise RuntimeError("daemon is not started")
         return self._version_ids
 
+    def _get_data_source(self, scene_id: str) -> SceneDataSource:
+        """Get or create a data source for the given scene_id.
+
+        Delegates to SceneLoader for lazy loading and caching.
+
+        Args:
+            scene_id: Scene identifier to load
+
+        Returns:
+            SceneDataSource for the requested scene
+
+        Raises:
+            RuntimeError: If SceneLoader not initialized
+        """
+        if self._scene_loader is None:
+            raise RuntimeError("SceneLoader not initialized")
+        return self._scene_loader.get_data_source(scene_id)
+
     async def startup(self) -> None:
         """Initialize the runtime context, start workers, and begin scheduling.
 
         Builds the RuntimeContext (parses configs, probes service versions,
-        validates scenarios, discovers scene artifacts), then creates the
-        worker runtime and daemon scheduler.  Idempotent: subsequent calls
+        validates scenarios, creates scene mapping from trajdata), then creates
+        the worker runtime and daemon scheduler.  Idempotent: subsequent calls
         after the first are no-ops.
         """
         if self._started:
@@ -204,9 +215,16 @@ class DaemonEngine:
             user_config_path=self._user_config_path,
             network_config_path=self._network_config_path,
             eval_config_path=self._eval_config_path,
-            usdz_glob=self._usdz_glob,
             validate_config_scenes=self._validate_config_scenes,
         )
+
+        # Create SceneLoader from RuntimeContext
+        self._scene_loader = SceneLoader(
+            dataset=runtime_context.dataset,
+            scene_id_to_idx=runtime_context.scene_id_to_idx,
+            config=runtime_context.config,
+        )
+        self._config = runtime_context.config
 
         num_consumers_per_worker = compute_num_consumers_per_worker(
             max_in_flight=runtime_context.max_in_flight,
@@ -228,7 +246,6 @@ class DaemonEngine:
         )
 
         self._version_ids = runtime_context.version_ids
-        self._scene_id_to_artifact_path = runtime_context.scene_id_to_artifact_path
         self._worker_runtime = worker_runtime
         self._scheduler = scheduler
         self._started = True
@@ -252,7 +269,9 @@ class DaemonEngine:
         assert self._scheduler is not None
 
         request_id = uuid4().hex
-        jobs = build_pending_jobs_from_request(request, self._scene_id_to_artifact_path)
+
+        # Use instance method for getting data sources
+        jobs = build_pending_jobs_from_request(request, self._get_data_source)
 
         driver_pool: AddressPool | None = None
         if request.available_drivers:
