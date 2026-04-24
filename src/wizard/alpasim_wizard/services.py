@@ -10,7 +10,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
-from typing import Any, Iterator, List, Literal, Optional
+from typing import Any, Iterator, List, Literal
 
 from .context import WizardContext
 from .schema import ServiceConfig
@@ -63,11 +63,11 @@ class ContainerDefinition:
 
         replica_idx: int
         command: str
-        address: Optional[Address]
-        parent_container_definition: Optional[ContainerDefinition] = field(default=None)
+        address: Address | None
+        parent_container_definition: ContainerDefinition | None = field(default=None)
 
         @property
-        def port(self) -> Optional[int]:
+        def port(self) -> int | None:
             """Get port from address if available, otherwise None."""
             return self.address.port if self.address is not None else None
 
@@ -82,9 +82,9 @@ class ContainerDefinition:
     name: str  # Name of the service
     service_config: ServiceConfig
     service_instances: list[ServiceInstance]
-    gpu: Optional[int]
+    gpu: int | None
     context: WizardContext
-    workdir: Optional[str]
+    workdir: str | None
     environments: list[str]
     volumes: list[VolumeMount]
 
@@ -140,7 +140,7 @@ class ContainerDefinition:
     def create(
         name: str,
         service_instances: list[ServiceInstance],
-        gpu: Optional[int],
+        gpu: int | None,
         service_config: ServiceConfig,
         context: WizardContext,
     ) -> ContainerDefinition:
@@ -199,7 +199,7 @@ class ContainerDefinition:
     @staticmethod
     def _build_command(
         service_config: ServiceConfig,
-        port: Optional[int],
+        port: int | None,
         context: WizardContext,
         service_name: str,
     ) -> str:
@@ -221,10 +221,10 @@ class ContainerDefinition:
 
     @staticmethod
     def _build_address(
-        port: Optional[int],
+        port: int | None,
         uuid: str,
         use_address_string: Literal["localhost", "0.0.0.0", "uuid"],
-    ) -> Optional[Address]:
+    ) -> Address | None:
         """Get the address of the container.
 
         Args:
@@ -255,10 +255,10 @@ class ContainerSet:
     runtime: list[ContainerDefinition] = field(default_factory=list)
 
 
-def create_gpu_assigner(gpu_ids: Optional[List[int]]) -> Iterator[Optional[int]]:
+def create_gpu_assigner(gpu_ids: List[int] | None) -> Iterator[int | None]:
     """Create an iterator for GPU assignment."""
 
-    def gpu_assigner() -> Iterator[Optional[int]]:
+    def gpu_assigner() -> Iterator[int | None]:
         if gpu_ids is None:
             yield from itertools.repeat(None)
         else:
@@ -291,7 +291,7 @@ def build_container_set(
     def build_service_containers(
         service_name: str,
         service_config: ServiceConfig,
-        runtime_cfg: Optional[Any] = None,
+        runtime_cfg: Any | None = None,
     ) -> List[ContainerDefinition]:
         """Build containers for a single service."""
 

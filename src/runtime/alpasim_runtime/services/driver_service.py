@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
-from typing import Optional, Type
+from typing import Type
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import DynamicState
@@ -204,7 +204,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         )
 
     async def drive(
-        self, time_now_us: int, time_query_us: int, renderer_data: Optional[bytes]
+        self, time_now_us: int, time_query_us: int, renderer_data: bytes | None
     ) -> Trajectory:
         """Request a drive decision for the current session.
 

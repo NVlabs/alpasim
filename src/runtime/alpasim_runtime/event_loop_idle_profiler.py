@@ -4,7 +4,6 @@
 import asyncio
 import logging
 from time import perf_counter
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ EVENT_LOOP_POLL_SECONDS = 0.0
 EVENT_LOOP_WORK_SECONDS = 0.0
 
 # Track the end time of the last select() call to measure work time
-_LAST_SELECT_END: Optional[float] = None
+_LAST_SELECT_END: float | None = None
 
 
 def install_event_loop_idle_profiler(
@@ -56,7 +55,7 @@ def install_event_loop_idle_profiler(
 
     original_select = selector.select
 
-    def profiling_select(timeout: Optional[float] = None) -> list:
+    def profiling_select(timeout: float | None = None) -> list:
         global EVENT_LOOP_IDLE_SECONDS
         global EVENT_LOOP_SELECT_CALLS
         global EVENT_LOOP_POLL_SECONDS

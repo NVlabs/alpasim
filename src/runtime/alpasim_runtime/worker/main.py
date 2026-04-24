@@ -31,6 +31,7 @@ from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import UserSimulatorConfig, typed_parse_config
 from alpasim_runtime.event_loop import EventBasedRollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
+from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
@@ -204,6 +205,10 @@ async def run_worker_loop(
 
     # Install event loop idle profiler
     install_event_loop_idle_profiler(loop)
+
+    # Freeze long-lived objects, install GC profiler, and reset counters so
+    # telemetry excludes the startup sweep.
+    setup_gc_pressure_profiler()
 
     load_artifact = make_artifact_loader(
         smooth_trajectories=smooth_trajectories,

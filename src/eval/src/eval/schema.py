@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any
 
 from omegaconf import MISSING
 
@@ -14,10 +14,10 @@ class DatabaseConfig:
     upload_leaderboard: bool = MISSING
     upload_full_metrics: bool = MISSING
     # Name of the table to store the unaggregated metrics.
-    metrics_table_name: Optional[str] = None
+    metrics_table_name: str | None = None
     # Name of the table to store the simulation execution metadata.
-    sim_execution_table_name: Optional[str] = None
-    leaderboard_table_name: Optional[str] = None
+    sim_execution_table_name: str | None = None
+    leaderboard_table_name: str | None = None
 
 
 class EgoLoc(StrEnum):
@@ -150,6 +150,11 @@ class MetricVehicleConfig:
 class MetricAggregationModifiersConfig:
     # Maximum distance to the ground truth trajectory to consider for metrics.
     max_dist_to_gt_trajectory: float = MISSING
+    # Whether to remove timesteps before the ego is under policy control
+    # (prerun / force-GT warmup phase).  Set to false for ground-truth
+    # baseline runs where the entire trajectory is GT and no timesteps
+    # should be discarded.
+    remove_preengagement_timesteps: bool = True
 
 
 @dataclass

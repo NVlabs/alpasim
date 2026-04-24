@@ -61,10 +61,15 @@ def dispatch_command(
         log_file.write(f"{'='*60}\n")
         # Run the command and capture output
         try:
+            # Blocking: pipe stdout so we can read it line-by-line.
+            # Non-blocking: write directly to log file so srun/pyxis
+            # errors aren't silently lost (the child inherits its own
+            # fd, so closing log_file in the parent is safe).
+            stdout_dest = subprocess.PIPE if blocking else log_file
             process = subprocess.Popen(
                 cmd,
                 shell=True,
-                stdout=subprocess.PIPE,
+                stdout=stdout_dest,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
@@ -88,8 +93,9 @@ def dispatch_command(
 
                 return "".join(output_lines)
             else:
-                # Non-blocking: start process and return immediately
-                logger.info(f"Started non-blocking process: {cmd}")
+                logger.info(
+                    f"Started non-blocking process (output → {output_log_file}): {cmd}"
+                )
                 return ""
 
         except subprocess.SubprocessError as e:

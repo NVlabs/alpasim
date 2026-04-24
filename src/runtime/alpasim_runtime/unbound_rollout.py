@@ -9,7 +9,6 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, replace
-from typing import Optional
 
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
@@ -94,12 +93,12 @@ class UnboundRollout:
     nre_uuid: str
     vehicle_config: VehicleConfig
 
-    vector_map: Optional[VectorMap] = None
-    follow_log: Optional[str] = None
+    vector_map: VectorMap | None = None
+    follow_log: str | None = None
 
     # Actors filtered out from simulation but still present in USDZ; we keep
     # a lowered-to-ground trajectory so we can override their rendering.
-    hidden_traffic_objs: Optional[TrafficObjects] = None
+    hidden_traffic_objs: TrafficObjects | None = None
 
     group_render_requests: bool = False
 

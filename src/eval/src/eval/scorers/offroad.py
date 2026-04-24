@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 import shapely
@@ -52,7 +52,7 @@ def _get_lane_polygon(
 def _compute_off_lane(
     simulation_result: SimulationResult,
     ts: int,
-    ego_pose: Optional[geometry.Pose] = None,
+    ego_pose: geometry.Pose | None = None,
 ) -> dict[
     str,
     float | list[vec_map_elements.RoadLane] | list[shapely.LineString] | list[float],
@@ -153,10 +153,7 @@ class OffRoadScorer(Scorer):
             # covers it instead (see GitHub issue #61).
             if len(res["possible_current_lanes"]) > 1:
                 lane_union = shapely.ops.unary_union(
-                    [
-                        _get_lane_polygon(lane)
-                        for lane in res["possible_current_lanes"]
-                    ]
+                    [_get_lane_polygon(lane) for lane in res["possible_current_lanes"]]
                 )
                 if lane_union.contains(ego_polygon):
                     offroad.append(False)

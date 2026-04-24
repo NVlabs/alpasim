@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from asyncio import Lock
-from typing import Dict, Optional, Type
+from typing import Dict, Type
 
 from alpasim_grpc.v0.common_pb2 import Empty
 from alpasim_grpc.v0.logging_pb2 import LogEntry
@@ -50,7 +50,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         camera_catalog: CameraCatalog,
     ):
         super().__init__(address, skip)
-        self._available_ego_masks: Optional[AvailableEgoMasksReturn] = None
+        self._available_ego_masks: AvailableEgoMasksReturn | None = None
         self._available_ego_masks_lock = Lock()
         self._camera_catalog = camera_catalog
         self._available_cameras: Dict[
@@ -157,8 +157,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
     def determine_ego_mask_id(
         available_ego_masks: AvailableEgoMasksReturn,
         camera_logical_id: str,
-        ego_mask_rig_config_id: Optional[str],
-    ) -> Optional[str]:
+        ego_mask_rig_config_id: str | None,
+    ) -> str | None:
         """
         Determine the ego mask ID for a given camera and rig configuration.
         Returns the ego mask ID if found, otherwise None.
@@ -186,7 +186,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         trigger: Clock.Trigger,
         scene_id: str,
         image_format: ImageFormat,
-        ego_mask_id: Optional[str] = None,
+        ego_mask_id: str | None = None,
     ) -> RGBRenderRequest:
         """Construct an RGBRenderRequest for a single camera trigger.
 
@@ -207,7 +207,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         end_us = trigger.time_range_us.stop - 1
 
         def trajectory_to_pose_pair(
-            trajectory: Trajectory, delta: Optional[Pose]
+            trajectory: Trajectory, delta: Pose | None
         ) -> PosePair:
             """
             Interpolate pose between trigger start and end and package as PosePair.
@@ -267,8 +267,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         traffic_trajectories: Dict[str, Trajectory],
         scene_id: str,
         image_format: ImageFormat,
-        ego_mask_rig_config_id: Optional[str] = None,
-    ) -> (list[ImageWithMetadata], Optional[bytes]):
+        ego_mask_rig_config_id: str | None = None,
+    ) -> (list[ImageWithMetadata], bytes | None):
         """
         Render multiple RGB images from the given scene and trajectories.
         Returns a tuple containing a list of ImageWithMetadata containing the rendered images
@@ -325,7 +325,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         trigger: Clock.Trigger,
         scene_id: str,
         image_format: ImageFormat,
-        ego_mask_rig_config_id: Optional[str] = None,
+        ego_mask_rig_config_id: str | None = None,
     ) -> ImageWithMetadata:
         """
         Render an RGB image from the given scene and trajectories.

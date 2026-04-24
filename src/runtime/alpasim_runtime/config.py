@@ -8,7 +8,7 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Type, TypeVar, cast
+from typing import Type, TypeVar, cast
 
 from alpasim_utils.scenario import VehicleConfig
 from alpasim_utils.yaml_utils import load_yaml_dict
@@ -34,7 +34,7 @@ class SingleUserEndpointConfig:
     """
 
     skip: bool = False
-    n_concurrent_rollouts: int = MISSING
+    n_concurrent_rollouts: int = 0
 
 
 @dataclass
@@ -92,7 +92,7 @@ class OpenCVFisheyeConfig:
     focal_length: tuple[float, float]
     principal_point: tuple[float, float]
     radial: tuple[float, ...] = ()  # k1..k4
-    max_angle: Optional[float] = None
+    max_angle: float | None = None
 
 
 @dataclass
@@ -108,16 +108,16 @@ class FthetaConfig:
     reference_poly: str  # Literal["pixel_to_angle", "angle_to_pixel"]
     pixeldist_to_angle: list[float] = field(default_factory=list)
     angle_to_pixeldist: list[float] = field(default_factory=list)
-    max_angle: Optional[float] = None
-    linear_cde: Optional[LinearCdeConfig] = None
+    max_angle: float | None = None
+    linear_cde: LinearCdeConfig | None = None
 
 
 @dataclass
 class CameraIntrinsicsConfig:
     model: str  # Literal["opencv_pinhole", "opencv_fisheye", "ftheta"]
-    opencv_pinhole: Optional[OpenCVPinholeConfig] = None
-    opencv_fisheye: Optional[OpenCVFisheyeConfig] = None
-    ftheta: Optional[FthetaConfig] = None
+    opencv_pinhole: OpenCVPinholeConfig | None = None
+    opencv_fisheye: OpenCVFisheyeConfig | None = None
+    ftheta: FthetaConfig | None = None
 
 
 @dataclass
@@ -135,9 +135,9 @@ class CameraDefinitionConfig:
     #     - 'camera_cross_right_120fov'
     #     - 'camera_front_tele_30fov'
     #     - 'camera_front_wide_120fov'
-    rig_to_camera: Optional[PoseConfig] = None
-    intrinsics: Optional[CameraIntrinsicsConfig] = None
-    resolution_hw: Optional[tuple[int, int]] = None
+    rig_to_camera: PoseConfig | None = None
+    intrinsics: CameraIntrinsicsConfig | None = None
+    resolution_hw: tuple[int, int] | None = None
     # ShutterType is one of: [
     #     "ROLLING_TOP_TO_BOTTOM",
     #     "ROLLING_LEFT_TO_RIGHT",
@@ -145,7 +145,7 @@ class CameraDefinitionConfig:
     #     "ROLLING_RIGHT_TO_LEFT",
     #     "GLOBAL"
     # ]
-    shutter_type: Optional[str] = None
+    shutter_type: str | None = None
 
 
 class PhysicsUpdateMode(Enum):
@@ -186,13 +186,13 @@ class SimulationConfig:
     )
 
     # if None, the data will be pulled from the .usdz file
-    vehicle: Optional[VehicleConfig] = None
+    vehicle: VehicleConfig | None = None
 
     physics_update_mode: PhysicsUpdateMode = PhysicsUpdateMode.NONE
 
     image_format: str = "jpeg"  # Literal["jpeg", "png"]
     # Rig/directory in ego-hoods to use for ego masking. If None, no ego masking will be done.
-    ego_mask_rig_config_id: Optional[str] = None
+    ego_mask_rig_config_id: str | None = None
     planner_delay_us: int = (
         0  # models time delays from image capture to planner output to controller
     )
@@ -215,7 +215,7 @@ class SceneConfig:
     """Scene to simulate and number of rollouts to run for it."""
 
     scene_id: str = MISSING
-    n_rollouts: Optional[int] = None  # None = use SimulationConfig.n_rollouts
+    n_rollouts: int | None = None  # None = use SimulationConfig.n_rollouts
 
 
 @dataclass
@@ -228,7 +228,7 @@ class UserEndpointConfig:
     trafficsim: SingleUserEndpointConfig = MISSING
     controller: SingleUserEndpointConfig = MISSING
 
-    sensorsim_cache_size: Optional[int] = None  # Scene cache size for sensorsim
+    sensorsim_cache_size: int | None = None  # Scene cache size for sensorsim
     startup_timeout_s: int = 2 * 60  # 2 minutes by default
     do_shutdown: bool = True
 
@@ -245,7 +245,7 @@ class UserSimulatorConfig:
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
     # Max worker-local artifact cache size.
     # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: Optional[int] = None
+    artifact_cache_size: int | None = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """
 Background resource sampling with summary statistics.
@@ -16,7 +16,6 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import psutil
@@ -46,7 +45,7 @@ class GPUMetrics:
     gpu_id: int
     utilization: list[float] = field(default_factory=list)
     memory_used_bytes: list[float] = field(default_factory=list)
-    memory_total_bytes: Optional[float] = None  # Constant per GPU, set once
+    memory_total_bytes: float | None = None  # Constant per GPU, set once
 
 
 class ResourceSampler:
@@ -62,7 +61,7 @@ class ResourceSampler:
     """
 
     def __init__(self) -> None:
-        self._task: Optional[asyncio.Task[None]] = None
+        self._task: asyncio.Task[None] | None = None
         self._nvml_initialized: bool = False
 
         # Process tracking: name -> list of CPU% samples
@@ -223,7 +222,7 @@ class ResourceSampler:
             self._nvml_initialized = False
 
     @staticmethod
-    def _compute_summary_stats(samples: list[float]) -> Optional[dict[str, float]]:
+    def _compute_summary_stats(samples: list[float]) -> dict[str, float] | None:
         """Compute summary statistics. Returns None if samples is empty."""
         if not samples:
             return None

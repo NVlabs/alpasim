@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Navigation utilities for determining driving commands from route geometry."""
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import Vec3
@@ -42,7 +41,7 @@ def determine_command_from_route(
         return DriveCommand.UNKNOWN
 
     # Find the first waypoint that is at least min_lookahead_distance ahead
-    target_waypoint: Optional["Vec3"] = None
+    target_waypoint: "Vec3" | None = None
     for wp in route.waypoints:
         distance = np.hypot(wp.x, wp.y)
         if distance >= min_lookahead_distance:

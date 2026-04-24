@@ -12,7 +12,7 @@ import logging
 import os
 import struct
 from dataclasses import dataclass
-from typing import AsyncGenerator, Optional, Self, Type, TypeVar
+from typing import AsyncGenerator, Self, Type, TypeVar
 
 import aiofiles
 import aiofiles.os
@@ -34,7 +34,7 @@ class LogWriter:
     """
 
     file_path: str
-    file_handle: Optional[aiofiles.threadpool.binary.AsyncBufferedIOBase] = None
+    file_handle: aiofiles.threadpool.binary.AsyncBufferedIOBase | None = None
 
     def __init__(self, file_path: str) -> None:
         self.file_path = file_path
@@ -104,7 +104,7 @@ async def async_read_pb_log(
         yield log_entry
 
 
-async def read_trajectory(fname: str) -> Optional[tuple[str, Trajectory]]:
+async def read_trajectory(fname: str) -> tuple[str, Trajectory] | None:
     """
     Read a log stream, select actor poses and combine in a trajectory object.
     Return scene name + trajectory
@@ -112,7 +112,7 @@ async def read_trajectory(fname: str) -> Optional[tuple[str, Trajectory]]:
     timestamps_us = []
     poses = []
 
-    name: Optional[str] = None
+    name: str | None = None
 
     async for message in async_read_pb_log(fname):
         if message.WhichOneof("log_entry") == "rollout_metadata":

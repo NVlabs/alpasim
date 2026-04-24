@@ -10,7 +10,6 @@ import tempfile
 import threading
 import zipfile
 from dataclasses import dataclass, field
-from typing import Optional
 
 import dataclasses_json
 import numpy as np
@@ -213,7 +212,7 @@ class Artifact:
         return self.metadata.scene_id
 
     @property
-    def map(self) -> Optional[VectorMap]:
+    def map(self) -> VectorMap | None:
         """Load and return the map data from the USDZ file.
 
         Attempts to load map data in the following order:
@@ -327,7 +326,7 @@ class Artifact:
 
     def _extract_map_directories(
         self, zip_file: zipfile.ZipFile, temp_dir: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Extract map_data or clipgt directories from the zip file.
 
         Args:
@@ -347,7 +346,7 @@ class Artifact:
 
     def _get_xodr_transform(
         self, zip_file: zipfile.ZipFile, xodr_xml: str
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """Get coordinate transformation matrix for XODR map.
 
         Transforms map from OpenDRIVE ENU to Simulation space for trajectory alignment.

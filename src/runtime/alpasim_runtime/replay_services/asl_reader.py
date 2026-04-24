@@ -20,7 +20,7 @@ import math
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Deque, Dict, List, Tuple, Type, Union
 
 from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage
@@ -66,7 +66,7 @@ class ExchangeConfig:
     response: Union[
         str, Type, None
     ]  # Entry type name for paired response, or Type for direct response
-    processor: Optional[Callable] = None  # Optional special processing
+    processor: Callable | None = None  # Optional special processing
     response_matcher: Callable[[Deque[Any], Any], Any] = _pair_response_fifo
 
     @property
@@ -77,7 +77,7 @@ class ExchangeConfig:
 
 def _find_config_for_entry(
     entry_type: str,
-) -> Tuple[Optional[str], Optional[ExchangeConfig]]:
+) -> Tuple[str | None, ExchangeConfig | None]:
     """Find the service and config for a given entry type."""
     for service, exchanges in SERVICE_EXCHANGES.items():
         for config in exchanges:
@@ -118,7 +118,7 @@ def _pair_physics_response_by_closest_pose(
 ) -> Any:
     """Pair a physics response with the closest pending request future position."""
     best_index = 0
-    best_distance: Optional[float] = None
+    best_distance: float | None = None
 
     for idx, request in enumerate(pending_requests):
         distance = _physics_request_response_distance(request, response)
@@ -223,7 +223,7 @@ class ASLReader:
     ) -> None:
         self.asl_file_path = asl_file_path
         # Store request/response pairs for each service.method combination
-        self._exchanges: dict[str, list[tuple[Message, Optional[Message]]]] = {}
+        self._exchanges: dict[str, list[tuple[Message, Message | None]]] = {}
         # Track which exchanges have been consumed during replay
         self._consumed_indices: dict[str, set[int]] = {}
         # Store ASL metadata like configuration and rollout info
@@ -332,7 +332,7 @@ class ASLReader:
 
     def get_exchanges(
         self, service: str, method: str
-    ) -> list[tuple[Message, Optional[Message]]]:
+    ) -> list[tuple[Message, Message | None]]:
         """Return recorded exchanges for a service.method pair."""
         return self._exchanges.get(f"{service}.{method}", [])
 
@@ -369,7 +369,7 @@ class ASLReader:
 
     def find_and_consume_matching_request(
         self, request: Any, service: str, method: str
-    ) -> Optional[Tuple[int, Any]]:
+    ) -> Tuple[int, Any] | None:
         """Find a matching request and mark it as consumed.
 
         Args:
@@ -400,7 +400,7 @@ class ASLReader:
 
     def _find_matching_request(
         self, request: Any, key: str, exchanges: list, max_lookahead: int = 50
-    ) -> Optional[Tuple[int, Any]]:
+    ) -> Tuple[int, Any] | None:
         """Find a matching request in the exchanges list, skipping consumed ones."""
         consumed = self._consumed_indices.get(key, set())
 
@@ -456,7 +456,7 @@ class ASLReader:
         self,
         camera_id: str,
         timestamp_us: int = 0,
-    ) -> Optional[bytes]:
+    ) -> bytes | None:
         """Get driver camera image data that corresponds to a render request.
 
         This is needed because we read in the camera images from the logged
@@ -606,7 +606,7 @@ class ASLReader:
                 return False
         return True
 
-    def get_service_version(self, service_name: str) -> Optional[Message]:
+    def get_service_version(self, service_name: str) -> Message | None:
         """Get the version information for a specific service from ASL metadata.
 
         Args:

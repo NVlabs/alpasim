@@ -200,7 +200,7 @@ def _build_sbatch_script(
         f"#SBATCH --account={account}\n"
         f"#SBATCH --partition={partition}\n"
         f"#SBATCH --time={time_limit}\n"
-        f"#SBATCH --gpus={gpus}\n"
+        f"#SBATCH --gpus-per-node={gpus}\n"
         f"#SBATCH --nodes=1\n"
         f"#SBATCH --cpus-per-task={cpus}\n"
         f"#SBATCH --mem={mem}\n"

@@ -10,7 +10,7 @@ import os
 import socket
 import time
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 
 from ..context import WizardContext
 from ..schema import RunMode
@@ -47,7 +47,7 @@ class SlurmDeployment:
     def deploy(
         self,
         containers: List[Any],
-        containers_to_start_last: Optional[List[Any]] = None,
+        containers_to_start_last: List[Any] | None = None,
     ) -> None:
         """Deploy containers using SLURM."""
         if containers_to_start_last:
@@ -181,6 +181,8 @@ class SlurmDeployment:
 
         cmd = r"srun --verbose --overlap "
         cmd += f"--nodes=1 --ntasks=1 --nodelist={current_node} "
+        if container.context.cfg.wizard.slurm_cpu_bind_none:
+            cmd += "--cpu-bind=none "
         cmd += f" --container-image={sqsh} "
         cmd += " --container-writable "
         cmd += f" --container-mounts={s_mnt} "
@@ -227,7 +229,7 @@ class SlurmDeployment:
     def wait_for_containers(
         self,
         containers: List[ContainerDefinition],
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
         raise_on_timeout: bool = True,
     ) -> bool:
         """Wait for containers to be ready."""

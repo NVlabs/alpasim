@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2025-2026 NVIDIA Corporation
 # Copyright (c) 2025 Brayden Zhang
-# Copyright (c) 2025 NVIDIA Corporation
 
 """
 Trajectory Optimization for VAM Driver.
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from scipy.optimize import minimize
@@ -30,8 +30,8 @@ class OptimizationResult:
 
     trajectory: np.ndarray  # Optimized trajectory [N, 3] (x, y, heading)
     success: bool
-    iterations: Optional[int] = None
-    final_cost: Optional[float] = None
+    iterations: int | None = None
+    final_cost: float | None = None
     message: str = ""
 
 
@@ -92,9 +92,9 @@ class TrajectoryOptimizer:
         self,
         trajectory: np.ndarray,
         time_step: float = 0.5,
-        vehicle_constraints: Optional[VehicleConstraints] = None,
-        retime_in_frenet: Optional[bool] = None,
-        retime_alpha: Optional[float] = None,
+        vehicle_constraints: VehicleConstraints | None = None,
+        retime_in_frenet: bool | None = None,
+        retime_alpha: float | None = None,
     ) -> OptimizationResult:
         """
         Optimize trajectory for smoothness and comfort.

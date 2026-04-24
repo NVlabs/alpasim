@@ -18,7 +18,6 @@ import functools
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
-from typing import Optional
 
 import yaml
 from alpasim_grpc.v0.logging_pb2 import LogEntry
@@ -60,8 +59,7 @@ def _evaluate_in_subprocess(
             metrics_df=eval_result.metrics_df,
             cfg=eval_config,
             output_dir=video_output_dir,
-            clipgt_id=f"clipgt-{scene_id}",
-            batch_id="0",
+            clipgt_id=scene_id,
             rollout_id=rollout_uuid,
         )
 
@@ -105,7 +103,7 @@ class RuntimeEvaluator:
         rollout_uuid: str,
         scene_id: str,
         save_path_root: str,
-        vector_map: Optional[VectorMap],
+        vector_map: VectorMap | None,
     ) -> None:
         """
         Initialize the RuntimeEvaluator.
@@ -125,7 +123,7 @@ class RuntimeEvaluator:
         self.vector_map = vector_map
 
         # Initialize accumulator (accumulates info for eval) if evaluation is enabled
-        self._accumulator: Optional[EvalDataAccumulator] = (
+        self._accumulator: EvalDataAccumulator | None = (
             EvalDataAccumulator(cfg=eval_config) if self._enabled else None
         )
 
@@ -200,7 +198,7 @@ class RuntimeEvaluator:
         """Path to per-rollout metrics parquet file."""
         return os.path.join(self._rollout_dir(), "metrics.parquet")
 
-    def build_eval_input(self) -> Optional[ScenarioEvalInput]:
+    def build_eval_input(self) -> ScenarioEvalInput | None:
         """Build ScenarioEvalInput from accumulated message data.
 
         This runs in the main process and extracts all accumulated data
@@ -216,14 +214,13 @@ class RuntimeEvaluator:
         return self._accumulator.build_scenario_eval_input(
             run_uuid=run_uuid,
             run_name=run_name,
-            batch_id="0",  # Single batch for in-runtime eval
             vec_map=self.vector_map,
         )
 
     async def run_evaluation(
         self,
         executor: ProcessPoolExecutor,
-    ) -> Optional[ScenarioEvalResult]:
+    ) -> ScenarioEvalResult | None:
         """Run evaluation in a ProcessPoolExecutor.
 
         Builds the eval input in the main process, then submits the

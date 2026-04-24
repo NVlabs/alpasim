@@ -46,6 +46,8 @@ AlpaSim currently supports the following driver policies:
 
 - [Alpamayo-R1](https://github.com/NVlabs/alpamayo) - NVIDIA Alpamayo, a VLA driving policy with
   chain-of-causation reasoning
+- [Alpamayo 1.5](https://github.com/NVlabs/alpamayo1.5) - Public Alpamayo 1.5 checkpoint support
+  is also available
 - [VaVAM](https://github.com/valeoai/VideoActionModel) - an autoregressive video-action driving
   policy
 - [Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
@@ -170,5 +172,3 @@ Laura Leal-Taixe, Nicole Yang
   <strong>Built for researchers, by researchers</strong><br>
   <em>Accelerating autonomous vehicle development through realistic simulation</em>
 </div>
-
-Remove after testing: Sync CI test marker: GitHub-to-GitLab workflow validation.

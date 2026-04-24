@@ -7,7 +7,6 @@ import os
 import pathlib
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import polars as pl
@@ -20,7 +19,7 @@ from eval.aggregation.modifiers import (
     AddCombinedEvent,
     MetricAggregationModifiers,
     RemoveTimestepsAfterEvent,
-    RemoveTimestepsBeforeFirstDriven,
+    RemoveTimestepsBeforeEvent,
     RemoveTrajectoryWithEvent,
     get_removed_rows,
 )
@@ -29,10 +28,7 @@ from eval.data import AggregationType
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODIFIERS = [
-    # Drop prerun timesteps before any event combining / filtering so that
-    # spurious offroad / collision events on the prerun frame do not
-    # short-circuit the rest of the pipeline (e.g. RemoveTimestepsAfterEvent).
-    RemoveTimestepsBeforeFirstDriven(),
+    RemoveTimestepsBeforeEvent(pl.col("eval_relevant") > 0.0),
     AddCombinedEvent(
         event=(pl.col("collision_any") > 0.0) | (pl.col("offroad") > 0.0),
         name="offroad_or_collision",
@@ -92,13 +88,11 @@ def add_rollout_and_trajectory_uids(
     df = df.with_columns(
         # Different scenes share the same rollout_uid within a run.
         # Allows for computing the std across rollouts, averaging over clips.
-        # Note: batch_id is excluded because it varies across jobs and doesn't
-        # indicate a different rollout - only rollout_id determines rollout identity.
         pl.concat_str(["run_uuid", "rollout_id"], separator="_").alias("rollout_uid"),
-        # Unique even across scenes, i.e. truely unique per rollout.
-        pl.concat_str(
-            ["run_uuid", "clipgt_id", "batch_id", "rollout_id"], separator="_"
-        ).alias("trajectory_uid"),
+        # Unique even across scenes, i.e. truly unique per rollout.
+        pl.concat_str(["run_uuid", "clipgt_id", "rollout_id"], separator="_").alias(
+            "trajectory_uid"
+        ),
     ).with_columns(
         pl.col("rollout_uid").rank("dense").over("clipgt_id").alias("rollout_uid"),
     )
@@ -109,13 +103,10 @@ def add_rollout_and_trajectory_uids(
         pl.col("run_name"),
         pl.col("run_uuid"),
         pl.col("clipgt_id"),
-        pl.col("batch_id"),
         pl.col("rollout_id"),
     ).unique()
 
-    df = df.drop(
-        ["run_name", "run_uuid", "clipgt_id", "batch_id", "rollout_id", "rollout_uid"]
-    )
+    df = df.drop(["run_name", "run_uuid", "clipgt_id", "rollout_id", "rollout_uid"])
 
     return df, trajectory_uid_df
 
@@ -322,14 +313,14 @@ class UnprocessedMetricsDFs:
                 how="left",
             ).drop("trajectory_uid", "rollout_uid")
 
-        # Merge in: run_name, run_uuid, clipgt_id, batch_id, rollout_id
+        # Merge in: run_name, run_uuid, clipgt_id, rollout_id
         # return aggregate_and_write_metrics_results_txt(df)
         return UnprocessedMetricsDFs(df)
 
     @staticmethod
     def concat(
         pdfs: list["UnprocessedMetricsDFs"],
-        rename_run_names: Optional[dict[str, str]] = None,
+        rename_run_names: dict[str, str] | None = None,
     ) -> "UnprocessedMetricsDFs":
         """Concatenate a list of unprocessed metrics dataframes."""
         columns = pdfs[0].unprocessed_df.columns
@@ -343,8 +334,8 @@ class UnprocessedMetricsDFs:
     def process(
         self,
         force_same_run: bool = False,
-        output_path: Optional[str] = None,
-        additional_modifiers: Optional[list[MetricAggregationModifiers]] = None,
+        output_path: str | None = None,
+        additional_modifiers: list[MetricAggregationModifiers] | None = None,
     ) -> "ProcessedMetricDFs":
         """Process the unprocessed metrics dataframe."""
         return aggregate_and_write_metrics_results_txt(
@@ -372,7 +363,6 @@ class UnprocessedMetricsDFs:
                 "run_uuid",
                 "run_name",
                 "clipgt_id",
-                "batch_id",
                 "rollout_id",
                 "timestamps_us",
             )
@@ -397,9 +387,7 @@ class UnprocessedMetricsDFs:
 
     def __repr__(self) -> str:
         nr_trajectories = (
-            self.unprocessed_df.select(
-                "run_uuid", "clipgt_id", "batch_id", "rollout_id"
-            )
+            self.unprocessed_df.select("run_uuid", "clipgt_id", "rollout_id")
             .unique()
             .shape[0]
         )
@@ -462,18 +450,18 @@ class ProcessedMetricDFs(UnprocessedMetricsDFs):
         """Get the trajectories that are removed by the modifiers.
 
         Returns:
-            df with `run_uuid`, `run_name`, `clipgt_id`, `batch_id`, `rollout_id` of the
+            df with `run_uuid`, `run_name`, `clipgt_id`, `rollout_id` of the
             trajectories that are removed by the modifiers.
         """
         touched_trajectories = (
             self.get_removed_rows()
-            .select(["run_uuid", "run_name", "clipgt_id", "batch_id", "rollout_id"])
+            .select(["run_uuid", "run_name", "clipgt_id", "rollout_id"])
             .unique()
         )
         # Remove the ones that are still in the df_wide_avg_t
         return touched_trajectories.join(
             self.df_wide_avg_t,
-            on=["run_uuid", "run_name", "clipgt_id", "batch_id", "rollout_id"],
+            on=["run_uuid", "run_name", "clipgt_id", "rollout_id"],
             how="anti",
         )
 
@@ -496,7 +484,7 @@ class ProcessedMetricDFs(UnprocessedMetricsDFs):
         def _get_n_rollouts_per_clip(df: pl.DataFrame) -> pl.DataFrame:
             """Returns df with `run_uuid`, `run_name`, `clipgt_id`, and `n_rollouts`."""
             return (
-                df.select("run_uuid", "run_name", "clipgt_id", "batch_id", "rollout_id")
+                df.select("run_uuid", "run_name", "clipgt_id", "rollout_id")
                 .unique()
                 .group_by("run_uuid", "run_name", "clipgt_id")
                 .agg(pl.col("rollout_id").count().alias("n_rollouts"))
@@ -556,8 +544,8 @@ def get_avg_dist_between_incidents(df_wide_avg_t: pl.DataFrame) -> pl.DataFrame:
 def aggregate_and_write_metrics_results_txt(
     metrics_df: pl.DataFrame,
     force_same_run: bool = False,
-    output_path: Optional[str] = None,
-    additional_modifiers: Optional[list[MetricAggregationModifiers]] = None,
+    output_path: str | None = None,
+    additional_modifiers: list[MetricAggregationModifiers] | None = None,
 ) -> ProcessedMetricDFs:
     """
     Evaluate the eval parquet file.
@@ -569,7 +557,6 @@ def aggregate_and_write_metrics_results_txt(
             valid[bool]: Whether the metric is valid at that timestamp.
             metric_name[str]: The name of the metric.
             clipgt_id[str]: The clipgt id of the rollout.
-            batch_id[str]: The batch id of the rollout.
             rollout_id[str]: The rollout id of the rollout.
             run_uuid[str]: The run uuid of the simulation run (unique).
             run_name[str]: The name of the simulation run (not necessarily unique).
@@ -660,6 +647,9 @@ def aggregate_and_write_metrics_results_txt(
             additional_modifiers,
             processing_warnings,
         )
+        df_wide_avg_t_clip_rollout.write_parquet(
+            pathlib.Path(output_path) / "metrics_results.parquet"
+        )
         plot_metrics_results(df_wide_avg_t_clip, trajectory_uid_df, output_path)
 
     df_wide_avg_t = df_wide_avg_t.join(
@@ -669,7 +659,6 @@ def aggregate_and_write_metrics_results_txt(
             pl.col("run_name"),
             pl.col("run_uuid"),
             pl.col("clipgt_id"),
-            pl.col("batch_id"),
             pl.col("rollout_id"),
         ).unique(),
         on="trajectory_uid",

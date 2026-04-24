@@ -13,7 +13,7 @@ import argparse
 import asyncio
 import glob
 import logging
-from typing import Literal, Optional, TypeAlias
+from typing import Literal, TypeAlias
 
 import aiofiles
 import numpy as np
@@ -77,8 +77,8 @@ async def convert_single_log(
 ) -> None:
     frames_by_camera: dict[str, list[RolloutCameraImage.CameraImage]] = {}
 
-    rollout_metadata: Optional[RolloutMetadata] = None
-    drive_session_request: Optional[DriveSessionRequest] = None
+    rollout_metadata: RolloutMetadata | None = None
+    drive_session_request: DriveSessionRequest | None = None
 
     async for message in async_read_pb_log(log_path):
         if message.WhichOneof("log_entry") == "driver_session_request":
@@ -168,7 +168,7 @@ async def save_frames_as_files(
     )
 
 
-def determine_save_dir(log_path: str, log_save_dir: Optional[str]) -> str:
+def determine_save_dir(log_path: str, log_save_dir: str | None) -> str:
     if log_save_dir is None:
         log_save_name = log_path.removesuffix(".asl")
         return f"{log_save_name}_asl_frames"
@@ -183,7 +183,7 @@ def determine_save_dir(log_path: str, log_save_dir: Optional[str]) -> str:
 async def convert_multiple_logs(
     asl_glob: str,
     format: SaveFormat,
-    log_save_dir: Optional[str] = None,
+    log_save_dir: str | None = None,
 ) -> None:
     assert asl_glob.endswith(".asl"), asl_glob
 

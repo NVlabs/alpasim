@@ -14,7 +14,6 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from alpasim_controller.mpc_controller import MPCImplementation
 from alpasim_controller.system_manager import SystemManager
@@ -183,7 +182,7 @@ class BenchmarkRunner:
 
     def __init__(
         self,
-        log_dir: Optional[Path] = None,
+        log_dir: Path | None = None,
         mpc_implementation: MPCImplementation | None = None,
     ):
         """

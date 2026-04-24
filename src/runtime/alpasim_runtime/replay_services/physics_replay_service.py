@@ -14,7 +14,7 @@ and merges the responses.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Tuple
+from typing import Any, Tuple
 
 from alpasim_grpc.v0 import common_pb2, physics_pb2, physics_pb2_grpc
 from alpasim_runtime.replay_services.asl_reader import ASLReader
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def _decompose_multi_pose_request(
     request: physics_pb2.PhysicsGroundIntersectionRequest,
-) -> Optional[list[physics_pb2.PhysicsGroundIntersectionRequest]]:
+) -> list[physics_pb2.PhysicsGroundIntersectionRequest] | None:
     """Decompose a multi-pose request into per-pose sub-requests.
 
     Mirrors the old loop's ``apply_physics_to_trajectory`` pattern where
@@ -135,7 +135,7 @@ class PhysicsReplayService(BaseReplayServicer, physics_pb2_grpc.PhysicsServiceSe
         self,
         sub_requests: list[physics_pb2.PhysicsGroundIntersectionRequest],
         context: grpc.ServicerContext,
-    ) -> Optional[physics_pb2.PhysicsGroundIntersectionReturn]:
+    ) -> physics_pb2.PhysicsGroundIntersectionReturn | None:
         """Match each per-pose sub-request and merge responses.
 
         Returns the merged response on success, or None if any

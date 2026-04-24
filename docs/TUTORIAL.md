@@ -31,6 +31,8 @@ Let's start by executing a run with default settings.
 1. Follow [onboarding](ONBOARDING.md) to ensure necessary dependencies have
    been installed
 1. Set up your environment with:
+   - If you are on a slurm cluster, this step may need to be done on a compute node rather than a
+     login node, depending on how your cluster is set up.
    - `source setup_local_env.sh`
    - This will compile protos, download an example driver model, ensure you have a valid Hugging
      Face token, and install the `alpasim_wizard` command line tool.

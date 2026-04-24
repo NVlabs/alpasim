@@ -27,9 +27,7 @@ logger = logging.getLogger("alpasim.eval.video")
 mpl.use("Agg")
 mplstyle.use("fast")
 
-VIDEO_FILE_NAME_FORMAT = (
-    "{clipgt_id}_{batch_id}_{rollout_id}_{camera_id}_{layout_id}.mp4"
-)
+VIDEO_FILE_NAME_FORMAT = "{clipgt_id}_{rollout_id}_{camera_id}_{layout_id}.mp4"
 
 
 def render_and_save_video(
@@ -38,7 +36,6 @@ def render_and_save_video(
     output_dir: str,
     cfg: EvalConfig,
     clipgt_id: str,
-    batch_id: str,
     rollout_id: str,
 ) -> None:
     """
@@ -52,13 +49,11 @@ def render_and_save_video(
         output_dir: Output directory for the video.
         cfg: Evaluation configuration.
         clipgt_id: Clip/ground truth identifier.
-        batch_id: Batch identifier.
         rollout_id: Rollout identifier.
     """
     logger.info(
-        "Rendering video for %s/%s/%s",
+        "Rendering video for %s/%s",
         clipgt_id,
-        batch_id,
         rollout_id,
     )
 
@@ -69,7 +64,6 @@ def render_and_save_video(
             output_dir,
             VIDEO_FILE_NAME_FORMAT.format(
                 clipgt_id=clipgt_id,
-                batch_id=batch_id,
                 rollout_id=rollout_id,
                 camera_id=cfg.video.camera_id_to_render,
                 layout_id=video_layout,
@@ -99,7 +93,6 @@ def render_and_save_video(
                 simulation_result,
                 cfg,
                 clipgt_id=clipgt_id,
-                batch_id=batch_id,
                 rollout_id=rollout_id,
             )
             anim.save(
@@ -119,7 +112,6 @@ def render_video_from_eval_result(
     cfg: EvalConfig,
     output_dir: str,
     clipgt_id: str,
-    batch_id: str,
     rollout_id: str,
 ) -> bool:
     """
@@ -136,14 +128,13 @@ def render_video_from_eval_result(
         cfg: Evaluation configuration.
         output_dir: Directory to save the video.
         clipgt_id: Clip/ground truth identifier.
-        batch_id: Batch identifier.
         rollout_id: Rollout identifier.
 
     Returns:
         True if video was rendered successfully, False otherwise.
     """
     try:
-        logger.info("Rendering video for %s/%s/%s", clipgt_id, batch_id, rollout_id)
+        logger.info("Rendering video for %s/%s", clipgt_id, rollout_id)
 
         # Get SimulationResult for video rendering
         simulation_result = SimulationResult.from_scenario_input(scenario_input, cfg)
@@ -158,7 +149,6 @@ def render_video_from_eval_result(
             output_dir=output_dir,
             cfg=cfg,
             clipgt_id=clipgt_id,
-            batch_id=batch_id,
             rollout_id=rollout_id,
         )
 
@@ -257,7 +247,6 @@ def render_table(
     ax: plt.Axes,
     processed_metric_dfs: ProcessedMetricDFs,
     clipgt_id: str,
-    batch_id: str,
     rollout_id: str,
     time: int,
     metrics_table_entries: list[str] | None = None,
@@ -267,7 +256,6 @@ def render_table(
     # Prepare aggregated data
     df_long_avg_t = (
         processed_metric_dfs.df_wide_avg_t.drop(
-            "batch_id",
             "rollout_id",
             "clipgt_id",
             "run_name",
@@ -364,7 +352,7 @@ def render_table(
     ax.text(
         0.0,
         1.0,
-        f"Run: {run_name}\nClip: {clipgt_id}\nBatch: {batch_id}:{rollout_id}",
+        f"Run: {run_name}\nClip: {clipgt_id}\nRollout: {rollout_id}",
         ha="left",
         va="top",
         fontsize=6,
@@ -421,7 +409,6 @@ def create_video_animation(
     sim_result: SimulationResult,
     cfg: EvalConfig,
     clipgt_id: str = "unknown",
-    batch_id: str = "0",
     rollout_id: str = "unknown",
 ) -> tuple[animation.FuncAnimation, float]:
     """
@@ -432,7 +419,6 @@ def create_video_animation(
         sim_result: The simulation result to visualize.
         cfg: Evaluation configuration.
         clipgt_id: Clip/ground truth identifier (for table display).
-        batch_id: Batch identifier (for table display).
         rollout_id: Rollout identifier (for table display).
 
     Returns:
@@ -500,7 +486,6 @@ def create_video_animation(
             axs["table"],
             processed_metrics_dfs,
             clipgt_id,
-            batch_id,
             rollout_id,
             timestamps_us[0],
             cfg.video.metrics_table_entries,

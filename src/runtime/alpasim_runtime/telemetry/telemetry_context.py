@@ -14,9 +14,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Generator, Optional, Type
+from typing import Generator, Type
 
 from alpasim_runtime.event_loop_idle_profiler import get_event_loop_idle_stats
+from alpasim_runtime.gc_pressure_profiler import get_gc_pressure_stats
 from prometheus_client import CollectorRegistry, Gauge, Histogram, write_to_textfile
 
 from .resources import ResourceSampler
@@ -74,8 +75,13 @@ class TelemetryContext:
     event_loop_poll_seconds: Gauge = field(init=False)
     event_loop_work_seconds: Gauge = field(init=False)
 
+    # GC pressure gauges
+    gc_total_duration_seconds: Gauge = field(init=False)
+    gc_max_duration_seconds: Gauge = field(init=False)
+    gc_collection_count: Gauge = field(init=False)
+
     # Resource sampler (owned by context)
-    _resource_sampler: Optional[ResourceSampler] = field(init=False, default=None)
+    _resource_sampler: ResourceSampler | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
@@ -154,6 +160,23 @@ class TelemetryContext:
             registry=self.registry,
         )
 
+        # GC pressure gauges
+        self.gc_total_duration_seconds = Gauge(
+            "gc_total_duration_seconds",
+            "Total time spent in garbage collection",
+            registry=self.registry,
+        )
+        self.gc_max_duration_seconds = Gauge(
+            "gc_max_duration_seconds",
+            "Longest single garbage collection pause",
+            registry=self.registry,
+        )
+        self.gc_collection_count = Gauge(
+            "gc_collection_count_total",
+            "Total number of GC collections",
+            registry=self.registry,
+        )
+
     def record_simulation_summary(
         self, total_seconds: float, rollout_count: int
     ) -> None:
@@ -178,9 +201,9 @@ class TelemetryContext:
 
     async def __aexit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: Type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self._resource_sampler:
             await self._resource_sampler.stop()
@@ -192,12 +215,18 @@ class TelemetryContext:
         self.event_loop_poll_seconds.set(idle_stats["poll_seconds"])
         self.event_loop_work_seconds.set(idle_stats["work_seconds"])
 
+        # Record GC pressure stats
+        gc_stats = get_gc_pressure_stats()
+        self.gc_total_duration_seconds.set(gc_stats["total_duration_s"])
+        self.gc_max_duration_seconds.set(gc_stats["max_duration_s"])
+        self.gc_collection_count.set(gc_stats["collection_count"])
+
         self.shutdown()
         _current_context.set(None)
 
 
 # Task-local context using ContextVar (async-safe)
-_current_context: ContextVar[Optional[TelemetryContext]] = ContextVar(
+_current_context: ContextVar[TelemetryContext | None] = ContextVar(
     "telemetry_context", default=None
 )
 
@@ -212,7 +241,7 @@ def get_context() -> TelemetryContext:
     return ctx
 
 
-def try_get_context() -> Optional[TelemetryContext]:
+def try_get_context() -> TelemetryContext | None:
     """Get current telemetry context, or None if not inside one.
 
     Use when telemetry is optional, e.g. for functions that might be in tests.

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from alpasim_wizard.context import WizardContext
 from alpasim_wizard.schema import AlpasimConfig
@@ -63,7 +63,7 @@ class ConfigurationManager:
 
     def _generate_runtime_config(
         self, cfg: Any, artifact_list: List[Any]
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate runtime configuration."""
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)

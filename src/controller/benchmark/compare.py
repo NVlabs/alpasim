@@ -8,7 +8,6 @@ Generates plots and reports comparing two benchmark runs.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -116,7 +115,7 @@ class BenchmarkComparator:
 
         print("=" * 70)
 
-    def plot_timing_comparison(self, output_path: Optional[Path] = None) -> None:
+    def plot_timing_comparison(self, output_path: Path | None = None) -> None:
         """Generate timing comparison plots."""
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle(
@@ -214,7 +213,7 @@ class BenchmarkComparator:
     def plot_trajectory_comparison(
         self,
         trajectory_name: str,
-        output_path: Optional[Path] = None,
+        output_path: Path | None = None,
     ) -> None:
         """Plot position traces for a single trajectory comparison."""
         if trajectory_name not in self.common_names:
