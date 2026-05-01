@@ -185,7 +185,6 @@ def _make_assigned_job(request_id: str, job_id: str) -> AssignedRolloutJob:
         job_id=job_id,
         scene_id="scene-A",
         rollout_spec_index=0,
-        artifact_path="/tmp/scene-A.usdz",
         endpoints=_make_endpoints(),
     )
 

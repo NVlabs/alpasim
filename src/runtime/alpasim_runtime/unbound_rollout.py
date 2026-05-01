@@ -20,9 +20,9 @@ from alpasim_runtime.config import (
     VehicleConfig,
 )
 from alpasim_runtime.services.sensorsim_service import ImageFormat
-from alpasim_utils.artifact import Artifact
 from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import AABB, TrafficObjects
+from alpasim_utils.scene_data_source import SceneDataSource
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -107,15 +107,15 @@ class UnboundRollout:
         simulation_config: SimulationConfig,
         scene_id: str,
         version_ids: RolloutMetadata.VersionIds,
-        available_artifacts: dict[str, Artifact],
+        data_source: SceneDataSource,
         rollouts_dir: str,
     ) -> UnboundRollout:
-        artifact = available_artifacts[scene_id]
+        """Create UnboundRollout from SceneDataSource."""
 
         camera_configs = list(simulation_config.cameras)
 
         control_timestamps_us_arr: np.ndarray = (
-            artifact.rig.trajectory.time_range_us.start
+            data_source.rig.trajectory.time_range_us.start
             + simulation_config.time_start_offset_us
             + np.arange(
                 simulation_config.n_sim_steps + 2
@@ -124,19 +124,19 @@ class UnboundRollout:
         )
 
         control_timestamps_us = [
-            int(min(t, artifact.rig.trajectory.time_range_us.stop - 1))
+            int(min(t, data_source.rig.trajectory.time_range_us.stop - 1))
             for t in control_timestamps_us_arr
             if t
-            < artifact.rig.trajectory.time_range_us.stop
+            < data_source.rig.trajectory.time_range_us.stop
             + ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US
         ]
 
         start_us = control_timestamps_us[0]
         end_us = control_timestamps_us[-1]
-        gt_ego_trajectory = artifact.rig.trajectory
+        gt_ego_trajectory = data_source.rig.trajectory
 
         # Filter out objects that are not in the time window
-        all_objs_in_window = artifact.traffic_objects.clip_trajectories(
+        all_objs_in_window = data_source.traffic_objects.clip_trajectories(
             start_us, end_us + 1, exclude_empty=True
         )
 
@@ -190,8 +190,8 @@ class UnboundRollout:
 
         if simulation_config.vehicle is not None:
             vehicle = simulation_config.vehicle
-        elif artifact.rig.vehicle_config is not None:
-            vehicle = artifact.rig.vehicle_config
+        elif data_source.rig.vehicle_config is not None:
+            vehicle = data_source.rig.vehicle_config
         else:
             raise ValueError("No vehicle config provided/found.")
 
@@ -207,7 +207,7 @@ class UnboundRollout:
             gt_ego_trajectory=gt_ego_trajectory,
             traffic_objs=traffic_objects,
             n_sim_steps=simulation_config.n_sim_steps,
-            start_timestamp_us=artifact.rig.trajectory.time_range_us.start,
+            start_timestamp_us=data_source.rig.trajectory.time_range_us.start,
             force_gt_duration_us=simulation_config.force_gt_duration_us,
             control_timestep_us=simulation_config.control_timestep_us,
             follow_log=None,
@@ -227,15 +227,15 @@ class UnboundRollout:
                 vehicle
             ),
             ego_aabb=ego_aabb,
-            nre_runid=str(artifact.metadata.logger.run_id),
-            nre_version=artifact.metadata.version_string,
-            nre_uuid=str(artifact.metadata.uuid),
+            nre_runid=str(data_source.metadata.logger.run_id),
+            nre_version=data_source.metadata.version_string,
+            nre_uuid=str(data_source.metadata.uuid),
             planner_delay_us=simulation_config.planner_delay_us,
             pose_reporting_interval_us=simulation_config.pose_reporting_interval_us,
             route_generator_type=simulation_config.route_generator_type,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
             vehicle_config=vehicle,
-            vector_map=artifact.map,
+            vector_map=data_source.map,
             hidden_traffic_objs=hidden_traffic_objs,
             group_render_requests=simulation_config.group_render_requests,
         )

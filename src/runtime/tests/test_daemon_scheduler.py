@@ -34,7 +34,6 @@ def _pending(
         job_id=job_id,
         scene_id=scene_id,
         rollout_spec_index=rollout_spec_index,
-        artifact_path=f"/tmp/{scene_id}.usdz",
     )
 
 

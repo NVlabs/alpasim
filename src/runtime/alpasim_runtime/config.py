@@ -8,7 +8,7 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Type, TypeVar, cast
+from typing import Any, Dict, Optional, Type, TypeVar, cast
 
 from alpasim_utils.scenario import VehicleConfig
 from alpasim_utils.yaml_utils import load_yaml_dict
@@ -24,6 +24,47 @@ def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
     schema = OmegaConf.structured(config_type)
     config: C = cast(C, OmegaConf.merge(schema, yaml_config))
     return config
+
+
+@dataclass
+class UsdzProviderConfig:
+    """Configuration for the USDZ artifact-backed scene provider."""
+
+    data_dir: Optional[str] = None
+    # Max worker-local USDZ artifact cache size.
+    # None = unlimited, 0 = disable cache and always reload artifacts.
+    artifact_cache_size: int | None = None
+
+
+@dataclass
+class TrajdataDatasetConfig:
+    """Configuration for a single trajdata dataset source."""
+
+    name: str | None = None
+    data_dir: Optional[str] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TrajdataProviderConfig:
+    """Configuration for a trajdata-backed scene provider."""
+
+    cache_location: str = MISSING
+    desired_dt: float = 0.1
+    load_vector_map: bool = True
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    num_workers: int = 1
+    dataset: TrajdataDatasetConfig | None = None
+
+
+@dataclass
+class SceneProviderConfig:
+    """Runtime scene provider configuration for one backend family."""
+
+    kind: str = "usdz"  # Literal["usdz", "trajdata"]
+    usdz: UsdzProviderConfig | None = field(default_factory=UsdzProviderConfig)
+    trajdata: TrajdataProviderConfig | None = None
 
 
 @dataclass
@@ -243,15 +284,15 @@ class UserSimulatorConfig:
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
-    # Max worker-local artifact cache size.
-    # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: int | None = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.
     # 1 = inline mode, all in one process, good for debugging
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
+
+    # Runtime scene provider configuration.
+    scene_provider: SceneProviderConfig = MISSING
 
 
 @dataclass

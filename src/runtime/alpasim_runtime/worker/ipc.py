@@ -42,8 +42,6 @@ class PendingRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
 
 
 @dataclass
@@ -58,8 +56,6 @@ class AssignedRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
     # Concrete service addresses assigned by the parent dispatch loop.
     endpoints: ServiceEndpoints
 

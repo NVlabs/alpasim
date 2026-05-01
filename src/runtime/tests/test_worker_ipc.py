@@ -42,13 +42,11 @@ class TestPendingRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=2,
-            artifact_path="/tmp/test-scene.usdz",
         )
 
         assert job.job_id == "test-123"
         assert job.scene_id == "test-scene"
         assert job.rollout_spec_index == 2
-        assert job.artifact_path == "/tmp/test-scene.usdz"
 
     def test_pickling(self):
         """PendingRolloutJob should be picklable."""
@@ -56,7 +54,6 @@ class TestPendingRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=1,
-            artifact_path="/tmp/test-scene.usdz",
         )
         pickled = pickle.dumps(job)
         unpickled = pickle.loads(pickled)
@@ -64,24 +61,21 @@ class TestPendingRolloutJob:
         assert unpickled.job_id == job.job_id
         assert unpickled.scene_id == job.scene_id
         assert unpickled.rollout_spec_index == job.rollout_spec_index
-        assert unpickled.artifact_path == job.artifact_path
 
 
 class TestAssignedRolloutJob:
     """Tests for AssignedRolloutJob dataclass."""
 
     def test_creation(self):
-        """Assigned jobs include artifact path and service endpoints."""
+        """Assigned jobs include identity and service endpoints."""
         ep = _make_endpoints()
         job = AssignedRolloutJob(
             request_id="req-1",
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=0,
-            artifact_path="/tmp/test-scene.usdz",
             endpoints=ep,
         )
-        assert job.artifact_path == "/tmp/test-scene.usdz"
         assert job.endpoints.driver.address == "driver:50051"
 
     def test_pickling(self):
@@ -92,7 +86,6 @@ class TestAssignedRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=0,
-            artifact_path="/tmp/test-scene.usdz",
             endpoints=ep,
         )
 
@@ -100,7 +93,6 @@ class TestAssignedRolloutJob:
         unpickled = pickle.loads(pickled)
 
         assert unpickled.job_id == job.job_id
-        assert unpickled.artifact_path == "/tmp/test-scene.usdz"
         assert unpickled.endpoints.driver.address == "driver:50051"
         assert unpickled.endpoints.physics.skip is False
 

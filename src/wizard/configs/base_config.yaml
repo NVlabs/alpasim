@@ -31,6 +31,10 @@ defines:
   sensordata: "${defines.filesystem}/nre-artifacts"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
+  # TODO(mwatson): can these trajdata_cache points be optional?
+  trajdata_cache: "${defines.filesystem}/trajdata_cache"  # Trajdata unified cache location
+  trajdata_cache_mount: "/mnt/trajdata_cache"  # In-container mount for trajdata cache
+
   sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
   helper: scripts
   vscode: sources/remote-vscode-server
@@ -205,6 +209,7 @@ services:
       - controller
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
+      - "${defines.trajdata_cache}:${defines.trajdata_cache_mount}"
       - "${wizard.log_dir}:/mnt/log_dir"
       - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
       - "${repo-relative:'src'}:/repo/src"
@@ -212,7 +217,6 @@ services:
     gpus: null # uses no GPUs
     command:
       - "uv run python -m alpasim_runtime.simulate"
-      - "--usdz-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
       - "--user-config=/mnt/log_dir/{runtime_config_name}"
       - "--network-config=/mnt/log_dir/generated-network-config.yaml"
       - "--log-dir=/mnt/log_dir"
@@ -224,6 +228,35 @@ services:
 runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
+  # Scene provider configuration for a single backend family.
+  scene_provider:
+    kind: usdz
+    # USDZ artifact-backed scene provider (NuRec artifacts)
+    usdz:
+      # Set automatically by the wizard for artifact-backed runs.
+      # Example generated value: "/mnt/nre-data/scenesets/abc123" or "/mnt/nre-data"
+      data_dir: null
+      # Max worker-local USDZ artifact cache size.
+      # null = unlimited, 0 = disable cache and always reload artifacts.
+      artifact_cache_size: 10
+
+    trajdata:
+      cache_location: "${defines.trajdata_cache_mount}"  # Shared trajdata cache inside runtime container
+      desired_dt: 0.1        # 10 Hz sampling rate for trajectories
+      load_vector_map: true  # Request vector map support from trajdata
+      rebuild_cache: false   # Set to true to force rebuild cache
+      rebuild_maps: false    # Set to true to force rebuild maps
+      num_workers: 4         # Parallel workers for cache creation
+      dataset:
+        name: null
+        data_dir: null
+        extra_params:
+          config_dir: null       # Set to enable YAML batch preprocessing mode
+          num_timesteps_before: 30  # Timesteps before central token
+          num_timesteps_after: 80   # Timesteps after central token
+
+  # Enable cubic spline smoothing for trajectories
+  smooth_trajectories: true
   endpoints:
     # shut down the system after simulation is finished. without this flag the microservice servers
     # will remain on forever requring a manual interrupt (useful for debugging)
@@ -232,8 +265,6 @@ runtime:
     sensorsim_cache_size: ${defines.nre_cache_size}
 
   enable_autoresume: false
-  # How many scenes (in particular maps) to cache in the worker local artifact cache.
-  artifact_cache_size: 10
 
   simulation_config:
     n_sim_steps: 200 # how many steps to simulate in a rollout

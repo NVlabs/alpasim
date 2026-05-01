@@ -1,52 +1,91 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-import omegaconf
 import pytest
-import yaml
 from alpasim_runtime import config
+from alpasim_runtime.scene_loader import trajdata_provider_config_to_params
 
 
-def test_typed_parse_config_valid():
-    user_cfg = config.typed_parse_config(
-        "tests/data/valid_user_config.yaml", config.UserSimulatorConfig
+def test_usdz_provider_config_defaults() -> None:
+    cfg = config.UsdzProviderConfig(data_dir="/data/usdz")
+
+    assert cfg.data_dir == "/data/usdz"
+    assert cfg.artifact_cache_size is None
+
+
+def test_trajdata_provider_config_to_trajdata_params() -> None:
+    cfg = config.TrajdataProviderConfig(
+        cache_location="/tmp/cache",
+        rebuild_cache=True,
+        num_workers=8,
+        desired_dt=0.05,
+        load_vector_map=True,
+        dataset=config.TrajdataDatasetConfig(
+            name="nuplan",
+            data_dir="/data/nuplan",
+            extra_params={"config_dir": "/configs"},
+        ),
     )
-    assert user_cfg.simulation_config.force_gt_duration_us == 1700000
 
-    default = config.SimulationConfig()
-    assert user_cfg.simulation_config.control_timestep_us == default.control_timestep_us
+    params = trajdata_provider_config_to_params(cfg)
 
-    assert len(user_cfg.scenes) == 1
-    assert user_cfg.scenes[0].scene_id == "clipgt-f94a6ae5-019e-4467-840f-5376b5255828"
+    assert params["desired_data"] == ["nuplan"]
+    assert params["data_dirs"] == {"nuplan": "/data/nuplan"}
+    assert params["cache_location"] == "/tmp/cache"
+    assert params["rebuild_cache"] is True
+    assert params["num_workers"] == 8
+    assert params["desired_dt"] == 0.05
+    assert params["incl_vector_map"] is True
+    assert params["dataset_kwargs"] == {"nuplan": {"config_dir": "/configs"}}
 
-    network_cfg = config.typed_parse_config(
-        "tests/data/valid_network_config.yaml", config.NetworkSimulatorConfig
+
+def test_trajdata_provider_config_includes_dataset_extra_params() -> None:
+    cfg = config.TrajdataProviderConfig(
+        cache_location="/tmp/cache",
+        dataset=config.TrajdataDatasetConfig(
+            name="nuplan",
+            data_dir="/data/nuplan",
+            extra_params={
+                "config_dir": "/configs",
+                "num_timesteps_before": 30,
+                "num_timesteps_after": 80,
+            },
+        ),
     )
-    assert network_cfg.sensorsim.addresses[0] == "nre:6000"
-    assert network_cfg.trafficsim.addresses[0] == "trafficsim:6200"
+
+    params = trajdata_provider_config_to_params(cfg)
+
+    assert params["desired_data"] == ["nuplan"]
+    assert params["data_dirs"]["nuplan"] == "/data/nuplan"
+    assert params["dataset_kwargs"]["nuplan"]["config_dir"] == "/configs"
+    assert params["dataset_kwargs"]["nuplan"]["num_timesteps_before"] == 30
+    assert params["dataset_kwargs"]["nuplan"]["num_timesteps_after"] == 80
 
 
-def test_typed_parse_config_invalid_config_type():
-    # attempt to create a user config from a network config file
-    with pytest.raises(omegaconf.errors.ConfigKeyError):
-        config.typed_parse_config(
-            "tests/data/valid_network_config.yaml", config.UserSimulatorConfig
-        )
+def test_trajdata_provider_config_requires_dataset_name() -> None:
+    cfg = config.TrajdataProviderConfig(
+        cache_location="/tmp/cache",
+        dataset=config.TrajdataDatasetConfig(data_dir="/data/nuplan"),
+    )
+
+    with pytest.raises(ValueError, match="dataset.name"):
+        trajdata_provider_config_to_params(cfg)
 
 
-def test_typed_parse_config_file_not_found():
-    # attempt to create a user config from a non-existent file
-    with pytest.raises(FileNotFoundError):
-        config.typed_parse_config("non_existent_file.yaml", config.UserSimulatorConfig)
+def test_trajdata_provider_config_requires_dataset_data_dir() -> None:
+    cfg = config.TrajdataProviderConfig(
+        cache_location="/tmp/cache",
+        dataset=config.TrajdataDatasetConfig(name="nuplan"),
+    )
+
+    with pytest.raises(ValueError, match="dataset.data_dir"):
+        trajdata_provider_config_to_params(cfg)
 
 
-def test_typed_parse_config_invalid_yaml(tmp_path):
-    not_yaml = tmp_path / "not_yaml.txt"
-    not_yaml.write_text("&&&this is not a yaml file\n")
+def test_trajdata_provider_config_requires_dataset() -> None:
+    cfg = config.TrajdataProviderConfig(
+        cache_location="/tmp/cache",
+    )
 
-    with pytest.raises(yaml.YAMLError):
-        config.typed_parse_config(not_yaml, config.UserSimulatorConfig)
-
-
-# TODO(mwatson, mtyszkiewicz): What should happen when the config is empty? Currently,
-# no error is raised, and we return an empty config object. Is this the desired behavior?
+    with pytest.raises(ValueError, match="scene_provider.trajdata.dataset"):
+        trajdata_provider_config_to_params(cfg)

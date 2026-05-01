@@ -68,6 +68,18 @@ class ConfigurationManager:
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)
 
+        sceneset_path = getattr(getattr(cfg, "scenes", None), "sceneset_path", None)
+        if sceneset_path is not None:
+            scene_provider = runtime_config.get("scene_provider")
+            if (
+                isinstance(scene_provider, dict)
+                and scene_provider.get("kind") == "usdz"
+                and isinstance(scene_provider.get("usdz"), dict)
+            ):
+                scene_provider["usdz"]["data_dir"] = self._build_runtime_usdz_data_dir(
+                    sceneset_path
+                )
+
         # Write simulation params directly (was: fan out per scene)
         simulation_config = runtime_config.pop("simulation_config", {})
         runtime_config["simulation_config"] = simulation_config
@@ -83,6 +95,13 @@ class ConfigurationManager:
 
         logger.debug(f"Generated runtime config: {filename}")
         return filename
+
+    @staticmethod
+    def _build_runtime_usdz_data_dir(sceneset_path: str) -> str:
+        """Convert wizard sceneset path to the runtime container-visible USDZ path."""
+        if sceneset_path == ".":
+            return "/mnt/nre-data"
+        return f"/mnt/nre-data/{sceneset_path}"
 
     def _generate_network_config(
         self,

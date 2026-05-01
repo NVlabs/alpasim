@@ -19,7 +19,7 @@ from .schema import AlpasimConfig
 logger = logging.getLogger(__name__)
 
 
-def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
+def fetch_artifacts(cfg: AlpasimConfig) -> list[SceneIdAndUuid]:
     """Fetch artifacts using the scene manager."""
 
     Path(cfg.scenes.scene_cache).mkdir(parents=True, exist_ok=True)
@@ -92,7 +92,7 @@ def fetch_artifacts(cfg: AlpasimConfig) -> tuple[list[SceneIdAndUuid], str]:
         logger.info(f"Relative sceneset path: {sceneset_dir_relative_path}")
 
     cfg.scenes.sceneset_path = sceneset_dir_relative_path
-    return artifacts, sceneset_dir_relative_path
+    return artifacts
 
 
 def detect_gpus() -> int:
@@ -141,7 +141,6 @@ class WizardContext:
     # Expensive operations (only loaded when needed for actual execution)
     artifact_list: list[SceneIdAndUuid] = field(default_factory=list)
     num_gpus: int = 0
-    sceneset_path: str | None = None
 
     def get_num_gpus(self) -> int:
         """Get GPU count with fallback to 0."""
@@ -161,13 +160,12 @@ class WizardContext:
         """Build context."""
 
         # Always set these basic attributes
-        artifact_list, sceneset_path = fetch_artifacts(cfg)
+        artifact_list = fetch_artifacts(cfg)
         context = WizardContext(
             cfg=cfg,
             port_assigner=create_port_assigner(cfg.wizard.baseport),
             artifact_list=artifact_list,
             num_gpus=detect_gpus(),
-            sceneset_path=sceneset_path,
         )
 
         setup_directories(cfg)

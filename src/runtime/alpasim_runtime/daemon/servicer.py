@@ -16,7 +16,7 @@ class RuntimeDaemonServicer(runtime_pb2_grpc.RuntimeServiceServicer):
     """gRPC servicer that maps RPC methods to DaemonEngine operations.
 
     Maps domain exceptions to appropriate gRPC status codes:
-    ``InvalidRequestError`` (including ``UnknownSceneError``) -> ``INVALID_ARGUMENT``,
+    ``ValueError``-derived request validation errors -> ``INVALID_ARGUMENT``,
     ``DaemonUnavailableError`` -> ``UNAVAILABLE``.
     """
 
