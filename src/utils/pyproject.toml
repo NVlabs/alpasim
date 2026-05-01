@@ -16,6 +16,7 @@ dependencies = [
   "aiofiles",
   "csaps",
   "imageio[ffmpeg]",
+  "omegaconf",
   "pandas",
   "pytest",
   "pytest-asyncio",

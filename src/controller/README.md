@@ -16,11 +16,11 @@ uv run pytest
 Compare controller performance:
 
 ```bash
-# Run benchmark with linear controller
-uv run -m benchmark run --output results/linear.json --backend=linear
+# Run benchmark with default ControllerConfig (linear MPC)
+uv run -m benchmark run --output results/linear.json
 
-# Run benchmark with nonlinear controller
-uv run -m benchmark run --output results/nonlinear.json --backend=nonlinear
+# Run benchmark with a custom config (write a small YAML that sets ControllerConfig fields; see benchmark/README.md)
+uv run -m benchmark run --output results/nonlinear.json --config path/to/controller.yaml
 
 # Compare results
 uv run -m benchmark compare results/nonlinear.json results/linear.json
@@ -80,16 +80,17 @@ differ. The trade-off between the two implementations is speed vs. accuracy--the
 similar for most normal driving scenarios, but the nonlinear MPC is more accurate for aggressive
 maneuvers or tight turns.
 
-The desired implementation can be selected via the `--mpc-implementation` flag when running the
-service or the benchmark, with choices of `nonlinear` or `linear`.
+The desired implementation can be selected via the wizard controller config group
+(e.g. `controller=nonlinear`) or by passing a YAML config via `--config` when running the server standalone.
 
 ### MPC Penalty Design
 
 The MPC uses a quadratic penalty on the longitudinal position error, lateral position error, heading
 error, and acceleration, as well as regularization terms on the relative changes of steering angle
-commands and acceleration commands. The time horizon for the controller is 2 sec (20 steps at 0.1s),
-and there is a term that specifies at which index along the horizon costs should start accumulating
-(to avoid over-penalizing initial transients).
+commands and acceleration commands. The default time horizon is 2 sec (20 steps at 0.1s),
+configurable via `controller.n_horizon` and `controller.dt_mpc`. There is a term that specifies at
+which index along the horizon costs should start accumulating (to avoid over-penalizing initial
+transients).
 
 $$
 J = \sum_{i=i_0}^{N} (w_{lon} e_{lon,i}^2 + w_{lat} e_{lat,i}^2 + w_{head} e_{head,i}^2 + w_{accel} a_i^2) + \sum_{i=1}^{N} (w_{\Delta steer} \Delta \delta_i^2 + w_{\Delta accel} \Delta a_i^2)

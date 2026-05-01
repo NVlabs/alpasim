@@ -8,21 +8,28 @@ Benchmark suite for measuring and comparing controller performance.
 # From src/controller directory:
 cd src/controller
 
-# Run quick benchmark (14 trajectories, ~2-3 minutes)
+# Run quick benchmark (14 trajectories, ~2-3 minutes) with default ControllerConfig
 uv run python -m benchmark run --quick -o results/baseline.json -d "Baseline MPC"
 
 # Run full benchmark (120 trajectories, ~20-30 minutes)
 uv run python -m benchmark run -o results/baseline.json -d "Baseline MPC"
 
-# After making changes, run another benchmark
-uv run python -m benchmark run --quick -o results/optimized.json -d "Reduced horizon"
+# Run benchmark with a custom controller config
+uv run python -m benchmark run --quick --config path/to/controller.yaml \
+    -o results/optimized.json -d "Custom MPC"
 
-# Compare different implementations
-uv run python -m benchmark run --quick -m nonlinear -o results/nonlinear.json -d "Nonlinear MPC"
-uv run python -m benchmark run --quick -m linear -o results/linear.json -d "Linear MPC (OSQP)"
+# Compare two runs
+uv run python -m benchmark compare results/baseline.json results/optimized.json \
+    -o comparison_report/
+```
 
-# Compare the two runs
-uv run python -m benchmark compare results/nonlinear.json results/linear.json -o comparison_report/
+The `--config` YAML is parsed directly against the `ControllerConfig` dataclass in
+`alpasim_controller/mpc_controller.py`. Any subset of its fields can be set; unset
+fields fall back to the dataclass defaults. A minimal override looks like:
+
+```yaml
+mpc_implementation: nonlinear
+n_horizon: 15
 ```
 
 ## Commands
@@ -36,7 +43,7 @@ Options:
   --quick, -q              Run 14 trajectories instead of 120 (faster iteration)
   --output, -o FILE        Output JSON file path
   --description, -d        Description of this benchmark run
-  --mpc-implementation, -m MPC implementation: "linear" (default) or "nonlinear"
+  --config FILE            Path to controller YAML config (default: ControllerConfig defaults)
 ```
 
 ### `compare` - Compare Two Runs

@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.66.0"
+version = "0.68.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -86,6 +86,13 @@ override-dependencies = [
   # vam pins torchmetrics==1.4.3, alpamayo-r1 pins torchmetrics==1.8.2.
   # Override to the newer version; vam works fine with 1.8.2.
   "torchmetrics>=1.8.2",
+  # `lightning` (transitive via vam==2.4.0) is quarantined on PyPI after the
+  # April 30 2026 supply-chain compromise of versions 2.6.2/2.6.3 (TeamPCP
+  # campaign). Project-wide quarantine blocks fresh installs of every version,
+  # including 2.4.0, breaking AlpaSim wizard daemon launches. Override to the
+  # upstream git tag (pinned by SHA, immune to tag retargeting) to bypass PyPI
+  # until the project is unquarantined.
+  "lightning @ git+https://github.com/Lightning-AI/pytorch-lightning.git@2129fdf3622e39ba46be4e1139af408e7e951cf3",
 ]
 constraint-dependencies = [
   # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.

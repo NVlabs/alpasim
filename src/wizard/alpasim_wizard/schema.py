@@ -34,6 +34,7 @@ class AlpasimConfig:
     trafficsim: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
     eval: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
     driver: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
+    controller: DictConfig = field(default_factory=lambda: OmegaConf.create({}))
 
 
 @dataclass
@@ -73,10 +74,15 @@ class RunMethod(Enum):
 
 
 class RunMode(Enum):
-    # TODO: delete in favor of hydra overrides for debugging
-    BATCH = "batch"
-    ATTACH_BASH = "attach_bash"
-    ATTACH_VSCODE = "attach_vscode"
+    """Runtime lifecycle mode.
+
+    ONESHOT starts the runtime to execute the generated simulation once and
+    then exit. SERVER starts a long-running runtime daemon that serves
+    simulation requests over gRPC.
+    """
+
+    ONESHOT = "oneshot"
+    SERVER = "server"
 
 
 @dataclass
@@ -96,6 +102,7 @@ class WizardConfig:
     array_job_dir: str | None = None
     dry_run: bool = MISSING
     baseport: int = MISSING
+    runtime_server_port: int | None = None
     validate_mount_points: bool = MISSING
 
     # If set, the wizard will pull the driver code from the specified hash into

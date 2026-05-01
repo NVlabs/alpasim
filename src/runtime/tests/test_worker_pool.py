@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_runtime.address_pool import AddressPool, ServiceAddress
+from alpasim_runtime.config import ServiceEndpoint
 from alpasim_runtime.runtime_context import (
     ALL_SKIP_PER_WORKER_CONCURRENCY,
     compute_max_in_flight,
@@ -67,11 +68,11 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config.user.endpoints.controller.skip = False
     config.user.endpoints.controller.n_concurrent_rollouts = 2
 
-    config.network.driver.addresses = ["driver:50051"]
-    config.network.sensorsim.addresses = ["sensorsim:50052"]
-    config.network.physics.addresses = ["physics:50053"]
-    config.network.trafficsim.addresses = ["trafficsim:50054"]
-    config.network.controller.addresses = ["controller:50055"]
+    config.network.driver.endpoints = [ServiceEndpoint("driver:50051")]
+    config.network.sensorsim.endpoints = [ServiceEndpoint("sensorsim:50052")]
+    config.network.physics.endpoints = [ServiceEndpoint("physics:50053")]
+    config.network.trafficsim.endpoints = [ServiceEndpoint("trafficsim:50054")]
+    config.network.controller.endpoints = [ServiceEndpoint("controller:50055")]
 
     return config
 

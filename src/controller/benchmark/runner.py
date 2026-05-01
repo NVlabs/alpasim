@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig
 from alpasim_controller.system_manager import SystemManager
 from alpasim_grpc.v0 import common_pb2, controller_pb2
 
@@ -182,19 +182,19 @@ class BenchmarkRunner:
 
     def __init__(
         self,
+        controller_config: ControllerConfig,
         log_dir: Path | None = None,
-        mpc_implementation: MPCImplementation | None = None,
     ):
         """
         Initialize the benchmark runner.
 
         Args:
+            controller_config: Full controller configuration.
             log_dir: Directory for controller logs (default: temp directory)
-            mpc_implementation: MPC implementation to use (default: LINEAR)
         """
         self.log_dir = log_dir or Path(tempfile.mkdtemp())
         self.trajectory_generator = TrajectoryGenerator()
-        self.mpc_implementation = mpc_implementation or MPCImplementation.LINEAR
+        self.controller_config = controller_config
 
     def run(
         self,
@@ -237,7 +237,7 @@ class BenchmarkRunner:
     def _run_simulation(self, trajectory: ReferenceTrajectory) -> SimulationResult:
         """Run a single closed-loop simulation."""
         system_manager = SystemManager(
-            str(self.log_dir), mpc_implementation=self.mpc_implementation
+            str(self.log_dir), controller_config=self.controller_config
         )
         system_manager.start_session(self.SESSION_UUID)
 
@@ -272,10 +272,11 @@ class BenchmarkRunner:
             response = system_manager.run_controller_and_vehicle_model(request)
             iter_time_ms = (time.perf_counter() - iter_start) * 1000.0
 
-            # Extract result
-            result_pose = response.pose_local_to_rig.pose
+            # Extract result — use the final propagated state
+            final = response.states[-1]
+            result_pose = final.pose_local_to_rig
             result_yaw = 2.0 * math.atan2(result_pose.quat.z, result_pose.quat.w)
-            result_vx = response.dynamic_state.linear_velocity.x
+            result_vx = final.dynamic_state.linear_velocity.x
 
             iterations.append(
                 IterationResult(
@@ -293,9 +294,9 @@ class BenchmarkRunner:
 
             # Update state for next iteration
             state = common_pb2.StateAtTime()
-            state.timestamp_us = response.pose_local_to_rig.timestamp_us
-            state.pose.CopyFrom(response.pose_local_to_rig.pose)
-            state.state.CopyFrom(response.dynamic_state)
+            state.timestamp_us = final.timestamp_us
+            state.pose.CopyFrom(final.pose_local_to_rig)
+            state.state.CopyFrom(final.dynamic_state)
 
         # Close session
         close_request = controller_pb2.VDCSessionCloseRequest(

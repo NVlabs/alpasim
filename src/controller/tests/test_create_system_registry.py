@@ -7,7 +7,7 @@ import os
 import tempfile
 
 import pytest
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig, MPCImplementation
 from alpasim_controller.system import create_system
 from alpasim_grpc.v0 import common_pb2
 
@@ -40,7 +40,7 @@ def test_create_system_via_registry(mpc_impl: MPCImplementation) -> None:
         system = create_system(
             log_file=log_file,
             initial_state=initial_state,
-            mpc_implementation=mpc_impl,
+            controller_config=ControllerConfig(mpc_implementation=str(mpc_impl)),
         )
         assert system is not None
         assert hasattr(system, "_controller")

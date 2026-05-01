@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim_controller"
-version = "0.40.0"
+version = "0.41.0"
 description = "A simple, open source controller + vehicle model"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "matplotlib",
     "osqp",
     "scipy",
+    "pyyaml",
     "alpasim_grpc",
     "alpasim_utils[geometry]",
     "alpasim_plugins",

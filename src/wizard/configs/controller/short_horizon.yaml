@@ -1,0 +1,5 @@
+defaults:
+  - default
+  - _self_
+
+n_horizon: 15  # 1.5s horizon at dt=0.1

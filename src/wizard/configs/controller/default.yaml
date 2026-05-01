@@ -1,0 +1,11 @@
+mpc_implementation: linear
+n_horizon: 20
+dt_mpc: 0.1
+gains:
+  long_position_weight: 2.0
+  lat_position_weight: 1.0
+  heading_weight: 1.0
+  acceleration_weight: 0.1
+  rel_front_steering_angle_weight: 5.0
+  rel_acceleration_weight: 1.0
+  idx_start_penalty: 10

@@ -13,13 +13,14 @@ from alpasim_runtime.config import (
     NetworkSimulatorConfig,
     SimulatorConfig,
     UserSimulatorConfig,
-    typed_parse_config,
 )
+from alpasim_runtime.endpoints import get_endpoint_addresses
 from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.schema import EvalConfig
 
@@ -33,27 +34,27 @@ def create_address_pools(config: SimulatorConfig) -> dict[str, AddressPool]:
 
     return {
         "driver": AddressPool(
-            network.driver.addresses,
+            get_endpoint_addresses(network.driver),
             endpoints.driver.n_concurrent_rollouts,
             skip=endpoints.driver.skip,
         ),
         "sensorsim": AddressPool(
-            network.sensorsim.addresses,
+            get_endpoint_addresses(network.sensorsim),
             endpoints.sensorsim.n_concurrent_rollouts,
             skip=endpoints.sensorsim.skip,
         ),
         "physics": AddressPool(
-            network.physics.addresses,
+            get_endpoint_addresses(network.physics),
             endpoints.physics.n_concurrent_rollouts,
             skip=endpoints.physics.skip,
         ),
         "trafficsim": AddressPool(
-            network.trafficsim.addresses,
+            get_endpoint_addresses(network.trafficsim),
             endpoints.trafficsim.n_concurrent_rollouts,
             skip=endpoints.trafficsim.skip,
         ),
         "controller": AddressPool(
-            network.controller.addresses,
+            get_endpoint_addresses(network.controller),
             endpoints.controller.n_concurrent_rollouts,
             skip=endpoints.controller.skip,
         ),

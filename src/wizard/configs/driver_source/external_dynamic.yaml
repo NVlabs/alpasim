@@ -1,0 +1,13 @@
+# @package _global_
+# Driver addresses are supplied per request via SimulationRequest.available_drivers.
+# The driver process is not launched or owned by Wizard.
+
+wizard:
+  run_sim_services:
+    ["sensorsim", "physics", "trafficsim", "controller", "runtime"]
+  external_services: null
+
+runtime:
+  endpoints:
+    driver:
+      skip: true
