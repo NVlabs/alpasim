@@ -49,10 +49,10 @@ class TestNonlinearMPCProperties:
         controller = NonlinearMPC()
         assert controller.name == "nonlinear_mpc"
 
-    def test_horizon_and_timestep(self):
-        """Horizon and timestep should match MPCController."""
-        assert NonlinearMPC.N_HORIZON == 20
-        assert NonlinearMPC.DT_MPC == 0.1
+    def test_timestep_property(self):
+        """Default-constructed controller should expose the MPC timestep."""
+        controller = NonlinearMPC()
+        assert controller.dt_mpc == 0.1
 
 
 class TestNonlinearMPCComputeControl:

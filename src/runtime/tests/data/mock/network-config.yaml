@@ -1,10 +1,10 @@
 controller:
-  addresses : []
+  endpoints: []
 driver:
-  addresses : []
+  endpoints: []
 physics:
-  addresses : []
+  endpoints: []
 sensorsim:
-  addresses : []
+  endpoints: []
 trafficsim:
-  addresses : []
+  endpoints: []

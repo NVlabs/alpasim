@@ -22,7 +22,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig
+from alpasim_utils.yaml_utils import typed_parse_config
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -38,8 +39,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = Path(f"benchmark_results_{timestamp}.json")
 
+    if args.config is None:
+        controller_config = ControllerConfig()
+    else:
+        controller_config = typed_parse_config(Path(args.config), ControllerConfig)
+
     # Run benchmark
-    runner = BenchmarkRunner(mpc_implementation=args.mpc_implementation)
+    runner = BenchmarkRunner(controller_config=controller_config)
     result = runner.run(
         quick=args.quick,
         description=args.description or "",
@@ -167,12 +173,10 @@ def main() -> int:
         help="Description of this benchmark run",
     )
     run_parser.add_argument(
-        "--mpc-implementation",
-        "-m",
-        type=MPCImplementation,
-        choices=list(MPCImplementation),
-        default=MPCImplementation.LINEAR,
-        help="MPC implementation: linear (default, faster) or nonlinear (CasADi)",
+        "--config",
+        type=str,
+        default=None,
+        help="Path to controller YAML config file. If omitted, uses ControllerConfig defaults.",
     )
     run_parser.set_defaults(func=cmd_run)
 

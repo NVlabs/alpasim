@@ -16,7 +16,7 @@ Example usage:
     from alpasim_controller import create_system, System, LinearMPC, MPCGains, MPCImplementation
 
     # Using factory function (recommended for most cases)
-    system = create_system(log_file, initial_state, mpc_implementation=MPCImplementation.LINEAR)
+    system = create_system(log_file, initial_state, ControllerConfig())
 
     # Or with explicit controller injection and custom gains
     gains = MPCGains(heading_weight=2.0)
@@ -25,6 +25,7 @@ Example usage:
 """
 
 from alpasim_controller.mpc_controller import (
+    ControllerConfig,
     ControllerInput,
     ControllerOutput,
     MPCController,
@@ -39,6 +40,7 @@ __all__ = [
     "System",
     "VehicleModel",
     "create_system",
+    "ControllerConfig",
     "MPCController",
     "MPCGains",
     "MPCImplementation",

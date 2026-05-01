@@ -187,9 +187,13 @@ The wizard requires three config groups:
 
 | Group | Purpose | Examples |
 |-------|---------|----------|
-| `deploy=` | Where to run (filesystem paths, SLURM vs Docker) | `local`, `local_external_driver` |
+| `deploy=` | Where to run (filesystem paths, SLURM vs Docker) | `local`, `docker_build_only` |
 | `topology=` | How many GPUs, replicas, and workers | `1gpu`, `2gpu`, `8gpu_64rollouts` |
 | `driver=` | Which driving model to use | `vavam`, `alpamayo1`, `alpamayo1_5`, `manual` |
+| `driver_source=` | Optional non-managed driver source | `external_static`, `external_dynamic` |
+
+By default, the wizard launches and owns the configured driver service. Use
+`driver_source=` only when the driver process is provided externally.
 
 Additionally, service-specific config groups can override the default images and launch behavior,
 for example `physics=disabled`.

@@ -236,9 +236,10 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
 
     # Replace all addresses with localhost instead of the docker bridge address
     for service_name, service_config in network_config.items():
-        for address_idx in range(len(service_config["addresses"])):
-            unused_hostname, port = service_config["addresses"][address_idx].split(":")
-            service_config["addresses"][address_idx] = f"localhost:{port}"
+        del service_name
+        for endpoint in service_config["endpoints"]:
+            unused_hostname, port = endpoint["address"].split(":")
+            endpoint["address"] = f"localhost:{port}"
 
     test_network_config = tmp_path / "test-network-config.yaml"
     test_network_config.write_text(yaml.dump(network_config), encoding="utf-8")
@@ -282,7 +283,7 @@ def all_services(
         server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
         service = service_class(asl_reader)
         add_servicer_func(service, server)
-        address = network_config[service_name]["addresses"][0]
+        address = network_config[service_name]["endpoints"][0]["address"]
         # `unused_hostname` could be something like `physics-0` from the
         # docker network.
         hostname, unused_port = address.split(":")

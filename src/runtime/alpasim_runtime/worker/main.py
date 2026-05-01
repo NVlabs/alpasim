@@ -28,7 +28,7 @@ from queue import Empty as QueueEmpty
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
-from alpasim_runtime.config import UserSimulatorConfig, typed_parse_config
+from alpasim_runtime.config import UserSimulatorConfig
 from alpasim_runtime.event_loop import EventBasedRollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
@@ -48,6 +48,7 @@ from alpasim_runtime.worker.ipc import (
     _ShutdownSentinel,
 )
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.schema import EvalConfig
 
