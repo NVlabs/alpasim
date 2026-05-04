@@ -18,9 +18,9 @@ import logging
 
 import numpy as np
 from alpasim_controller.mpc_controller import (
+    ControllerConfig,
     ControllerInput,
     MPCController,
-    MPCImplementation,
 )
 from alpasim_controller.vehicle_model import VehicleModel
 from alpasim_grpc.v0 import common_pb2, controller_pb2
@@ -170,7 +170,7 @@ class System:
 
         # MPC run times
         start_time_us = self._timestamp_us
-        dt_mpc_us = int(1e6 * self._controller.DT_MPC)
+        dt_mpc_us = int(1e6 * self._controller.dt_mpc)
         if self._last_mpc_time_us is not None:
             first_mpc_time = self._last_mpc_time_us + dt_mpc_us
         else:
@@ -394,9 +394,9 @@ class System:
 def create_system(
     log_file: str,
     initial_state: common_pb2.StateAtTime,
-    mpc_implementation: MPCImplementation = MPCImplementation.LINEAR,
+    controller_config: ControllerConfig,
 ) -> System:
-    """Create a System with the specified MPC implementation.
+    """Create a System with the specified controller configuration.
 
     This is a convenience factory that creates the appropriate controller
     and passes it to System.
@@ -404,13 +404,13 @@ def create_system(
     Args:
         log_file: Path to CSV log file
         initial_state: Initial vehicle state from gRPC
-        mpc_implementation: MPCImplementation.LINEAR (default) or MPCImplementation.NONLINEAR
+        controller_config: Full controller configuration.
 
     Returns:
         System instance with the specified controller
 
     Example:
-        system = create_system("log.csv", initial_state, MPCImplementation.LINEAR)
+        system = create_system("log.csv", initial_state, ControllerConfig())
     """
     # Create vehicle model to get parameters for controller
     vehicle_model = VehicleModel(
@@ -424,7 +424,11 @@ def create_system(
     )
 
     controller = mpc_controllers.create(
-        mpc_implementation, vehicle_params=vehicle_model.parameters
+        controller_config.mpc_implementation,
+        vehicle_params=vehicle_model.parameters,
+        gains=controller_config.gains,
+        n_horizon=controller_config.n_horizon,
+        dt_mpc=controller_config.dt_mpc,
     )
 
     return System(

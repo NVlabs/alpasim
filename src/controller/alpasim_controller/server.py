@@ -10,12 +10,14 @@ import argparse
 import importlib.metadata
 import logging
 from concurrent import futures
+from pathlib import Path
 from threading import Lock
 
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig
 from alpasim_controller.system_manager import SystemManager
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2, controller_pb2, controller_pb2_grpc
+from alpasim_utils.yaml_utils import typed_parse_config
 
 import grpc
 
@@ -38,11 +40,14 @@ class VDCSimService(controller_pb2_grpc.VDCServiceServicer):
     """
 
     def __init__(
-        self, server: grpc.Server, log_dir: str, mpc_implementation: str | None = None
+        self,
+        server: grpc.Server,
+        log_dir: str,
+        controller_config: ControllerConfig,
     ):
         logger.info(f"VDCServicer initialized logging to: {log_dir}")
         self._server = server
-        self._backend = SystemManager(log_dir, mpc_implementation=mpc_implementation)
+        self._backend = SystemManager(log_dir, controller_config=controller_config)
         self._lock = Lock()
 
     def get_version(self, request: common_pb2.Empty, context: grpc.ServicerContext):
@@ -87,10 +92,15 @@ class VDCSimService(controller_pb2_grpc.VDCServiceServicer):
         self._server.stop(0)
 
 
-def serve(host, port: int, log_dir: str, mpc_implementation: str | None = None):
+def serve(
+    host: str,
+    port: int,
+    log_dir: str,
+    controller_config: ControllerConfig,
+):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
     controller_pb2_grpc.add_VDCServiceServicer_to_server(
-        VDCSimService(server, log_dir, mpc_implementation=mpc_implementation), server
+        VDCSimService(server, log_dir, controller_config=controller_config), server
     )
     address = f"{host}:{port}"
     logger.info(f"Starting server on {address}")
@@ -112,11 +122,10 @@ if __name__ == "__main__":
         help="Logging level (DEBUG, INFO, WARNING, ERROR)",
     )
     parser.add_argument(
-        "--mpc-implementation",
-        type=MPCImplementation,
-        choices=list(MPCImplementation),
-        default=MPCImplementation.LINEAR,
-        help="MPC implementation: linear (OSQP, default) or nonlinear (CasADi)",
+        "--config",
+        type=str,
+        default=None,
+        help="Path to controller YAML config file. If omitted, uses ControllerConfig defaults.",
     )
 
     args = parser.parse_args()
@@ -127,4 +136,11 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
 
-    serve(args.host, args.port, args.log_dir, args.mpc_implementation)
+    if args.config is None:
+        controller_config = ControllerConfig()
+        logger.info("No --config provided; using ControllerConfig defaults")
+    else:
+        controller_config = typed_parse_config(Path(args.config), ControllerConfig)
+        logger.info("Loaded controller config from %s", args.config)
+
+    serve(args.host, args.port, args.log_dir, controller_config)

@@ -14,6 +14,7 @@ from typing import Any
 from alpasim_utils.paths import find_repo_root
 
 from ..context import WizardContext
+from ..schema import RunMode
 from ..services import ContainerDefinition, build_container_set
 from ..utils import LiteralStr, write_yaml
 
@@ -122,11 +123,11 @@ class DockerComposeDeployment:
             ret["environment"] = container.environments
 
         addresses = container.get_all_addresses()
-        if addresses and use_host_network:
-            # Only expose ports to host when using host network mode.
-            # With bridge network, containers communicate internally via container
-            # names as DNS hostnames on the shared network, so no port mapping is
-            # needed. Omitting ports avoids conflicts with other workloads.
+        publish_runtime_server_port = (
+            container.name == "runtime"
+            and self.context.cfg.wizard.run_mode == RunMode.SERVER
+        )
+        if addresses and (use_host_network or publish_runtime_server_port):
             ports = [f"{addr.port}:{addr.port}" for addr in addresses]
             ret["ports"] = ports
 

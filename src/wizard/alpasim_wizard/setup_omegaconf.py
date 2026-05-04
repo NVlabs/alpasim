@@ -19,7 +19,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, MissingMandatoryValue, OmegaConf
 
-from .schema import AlpasimConfig, RunMode
+from .schema import AlpasimConfig
 
 logger = logging.getLogger("alpasim_wizard")
 
@@ -82,8 +82,12 @@ def _check_required_config_groups(cfg: AlpasimConfig) -> None:
     required_checks = [
         ("defines.filesystem", "deploy", "deploy=<target>"),
         ("services.sensorsim.replicas_per_container", "topology", "topology=<layout>"),
-        ("driver", "driver", "driver=<model>"),
     ]
+    # Driver config is only required when the driver service is being launched.
+    # In daemon mode (run_sim_services excludes driver), no driver model is needed.
+    run_sim_services = list(cfg.wizard.run_sim_services or [])
+    if "driver" in run_sim_services:
+        required_checks.append(("driver", "driver", "driver=<model>"))
 
     missing = []
     for path, group, arg in required_checks:
@@ -134,13 +138,16 @@ def validate_config(cfg: AlpasimConfig) -> None:
                 f"are not defined in the `services` section."
             )
 
-    if cfg.wizard.run_mode != RunMode.BATCH:
-        total_services = len(cfg.wizard.run_sim_services or [])
-        if total_services != 1:
-            raise AssertionError(
-                "When specifying a run mode other than BATCH, "
-                "only one service may be run in run_sim_services."
-            )
+    driver_in_run_list = "driver" in (cfg.wizard.run_sim_services or [])
+    external_services = cfg.wizard.external_services or {}
+    external_driver_addresses = external_services.get("driver") or []
+
+    if driver_in_run_list and external_driver_addresses:
+        raise RuntimeError(
+            "Driver service is listed in `wizard.run_sim_services`, but "
+            "`wizard.external_services.driver` is also configured. Remove the "
+            "driver service or the external driver addresses."
+        )
 
 
 def update_scene_config(cfg: AlpasimConfig) -> None:

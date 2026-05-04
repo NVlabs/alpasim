@@ -1,0 +1,12 @@
+# @package _global_
+# A fixed external driver address is configured at startup.
+# The driver process is not launched or owned by Wizard.
+
+wizard:
+  run_sim_services:
+    ["sensorsim", "physics", "trafficsim", "controller", "runtime"]
+
+runtime:
+  endpoints:
+    driver:
+      skip: false

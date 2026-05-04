@@ -122,7 +122,7 @@ class SlurmDeployment:
 
         Args:
             container: ContainerDefinition instance
-            mode: RunMode (BATCH, ATTACH_BASH, or ATTACH_VSCODE)
+            mode: RunMode (ONESHOT or SERVER)
 
         Returns:
             SLURM srun command string
@@ -195,13 +195,9 @@ class SlurmDeployment:
 
         escaped_command = container.command.replace("$$", r"\$")
 
-        if mode == RunMode.BATCH:
+        if mode in (RunMode.ONESHOT, RunMode.SERVER):
             cmd += f"--output={s_log} --error={s_log} {s_env_passthrough}"
             cmd += f'bash -c "{s_gpu}{s_env_exports}{escaped_command}"'
-        elif mode == RunMode.ATTACH_BASH:
-            cmd += "--pty bash"
-        elif mode == RunMode.ATTACH_VSCODE:
-            cmd += "/mnt/helper/launch-vscode-auto-port.sh"
         else:
             raise ValueError(f"Unknown run mode: {mode}")
         return cmd

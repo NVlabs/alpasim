@@ -9,11 +9,15 @@ different implementations (LinearMPC, NonlinearMPC) to be chosen at runtime.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 import numpy as np
 from alpasim_utils.geometry import Trajectory
+
+# Module-level defaults — single source of truth for ControllerConfig and MPC subclasses.
+DEFAULT_N_HORIZON: int = 20
+DEFAULT_DT_MPC: float = 0.1
 
 
 class MPCImplementation(StrEnum):
@@ -80,16 +84,29 @@ class ControllerOutput:
     status: str
 
 
+@dataclass
+class ControllerConfig:
+    """Top-level controller configuration loaded from YAML."""
+
+    mpc_implementation: str = "linear"
+    n_horizon: int = DEFAULT_N_HORIZON
+    dt_mpc: float = DEFAULT_DT_MPC
+    gains: MPCGains = field(default_factory=MPCGains)
+
+
 class MPCController(ABC):
     """Abstract interface for MPC controllers.
 
     Implementations:
         - LinearMPC: Uses OSQP QP solver with linearized dynamics
         - NonlinearMPC: Uses do_mpc/CasADi with full nonlinear dynamics
+
+    Subclasses are responsible to populate ``_dt_mpc`` in ``__init__`` implementations
     """
 
-    DT_MPC: float = 0.1  # MPC timestep in seconds
-    N_HORIZON: int = 20  # Prediction horizon
+    @property
+    def dt_mpc(self) -> float:
+        return self._dt_mpc
 
     @abstractmethod
     def compute_control(self, input: ControllerInput) -> ControllerOutput:

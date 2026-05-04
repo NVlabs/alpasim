@@ -21,11 +21,7 @@ from alpasim_runtime.autoresume import (
     find_num_complete_rollouts,
     remove_incomplete_rollouts,
 )
-from alpasim_runtime.config import (
-    SimulatorConfig,
-    UserSimulatorConfig,
-    typed_parse_config,
-)
+from alpasim_runtime.config import SimulatorConfig, UserSimulatorConfig
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
 from alpasim_runtime.daemon.engine import DaemonEngine
 from alpasim_runtime.endpoints import get_service_endpoints
@@ -33,6 +29,7 @@ from alpasim_runtime.runtime_context import parse_simulator_config
 from alpasim_runtime.telemetry.plot_metrics import generate_metrics_plot
 from alpasim_runtime.telemetry.utils import merge_metrics_files
 from alpasim_runtime.validation import validate_array_job_config
+from alpasim_utils.yaml_utils import typed_parse_config
 
 import grpc
 from eval.aggregation.main import run_aggregation_from_runtime
@@ -91,6 +88,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
 
 async def _serve(args: argparse.Namespace) -> None:
     """Start the runtime in daemon (gRPC server) mode."""
+    config = parse_simulator_config(args.user_config, args.network_config)
     engine = DaemonEngine(
         user_config=args.user_config,
         network_config=args.network_config,
@@ -103,7 +101,10 @@ async def _serve(args: argparse.Namespace) -> None:
         engine=engine,
         listen_address=args.listen_address,
     )
-    await app.run()
+    try:
+        await app.run()
+    finally:
+        await shutdown_services(config)
 
 
 def build_simulation_request(
@@ -162,7 +163,7 @@ async def shutdown_services(config: SimulatorConfig) -> None:
 
     logger.info("Shutting down services...")
 
-    service_endpoints = get_service_endpoints(config.network)
+    service_endpoints = get_service_endpoints(config.network, managed_only=True)
 
     for stub_class, addresses in service_endpoints.values():
         for address in addresses:
