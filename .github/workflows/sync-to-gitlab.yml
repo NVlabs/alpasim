@@ -94,8 +94,11 @@ jobs:
           fi
 
           # Exclude GitHub-only CI metadata from GitLab.
+          # Also exclude GitLab-only CI files to prevent deletion.
           EXCLUDE_PATHS=(
             ".github"
+            ".gitlab-ci.yml"
+            "plugins/internal"
           )
 
           should_exclude_path() {
@@ -264,7 +267,7 @@ jobs:
 
           TITLE="sync(github-main): ${AFTER_SHA:0:12}"
 
-          DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
+          DESCRIPTION="$(printf '%s\n\n- GitHub commit: %s\n- GitHub compare: https://github.com/%s/compare/%s...%s\n- Workflow run: https://github.com/%s/actions/runs/%s\n- Excluded paths: `.github/**`, `.gitlab-ci.yml`, `plugins/internal/**`\n\nThis MR branch is force-updated by GitHub Actions:\n`%s`\n' \
             "Automated sync from GitHub \`main\` push into GitLab \`${GITLAB_TARGET_BRANCH}\`." \
             "${AFTER_SHA}" \
             "${GITHUB_REPOSITORY}" \
