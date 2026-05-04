@@ -416,11 +416,12 @@ def _render_single_reasoning_overlay_frame(
     Returns:
         Combined frame as numpy array (H, W, 3)
     """
+    time_us_int = int(time_us)
     camera = sim_result.cameras.camera_by_logical_id[cfg.video.camera_id_to_render]
     driver_responses = sim_result.driver_responses
 
     # Get camera frame
-    camera_frame = _get_camera_frame_numpy(camera, time_us)
+    camera_frame = _get_camera_frame_numpy(camera, time_us_int)
 
     # Create left pane: camera with reasoning overlay
     left_frame = _overlay_reasoning_on_frame(
@@ -429,7 +430,7 @@ def _render_single_reasoning_overlay_frame(
 
     # Get trajectory data at this timestamp
     driver_response_at_time = driver_responses.get_driver_response_for_time(
-        time_us, which_time="now"
+        time_us_int, which_time="now"
     )
 
     # Create right pane: trajectory chart
@@ -443,26 +444,26 @@ def _render_single_reasoning_overlay_frame(
         gt_start_us = gt_timestamps[0] if len(gt_timestamps) > 0 else 0
 
         ego_pose_at_time = ego_traj.interpolate_to_timestamps(
-            np.array([time_us], dtype=np.uint64)
+            np.array([time_us_int], dtype=np.uint64)
         )
-        ego_qvec = ego_pose_at_time.poses[0]
+        ego_qvec = ego_pose_at_time.get_pose(0)
         ego_xyz = ego_qvec.vec3
 
-        pred_xyz_np = driver_response_at_time.selected_trajectory.poses.vec3
-        if np.linalg.norm(pred_xyz_np[0] - ego_xyz) > 0.01:
+        pred_xyz_np = driver_response_at_time.selected_trajectory.positions
+        if np.any(np.abs(pred_xyz_np[0] - ego_xyz) > np.array([0.01, 0.01, 0.05])):
             raise ValueError(
-                f"First predicted point is not close to current ego position: "
-                f"{pred_xyz_np[0]} - {ego_xyz} = {np.linalg.norm(pred_xyz_np[0] - ego_xyz)}"
+                "First predicted point is not close to current ego position: "
+                f"{pred_xyz_np[0]} - {ego_xyz} = {np.abs(pred_xyz_np[0] - ego_xyz)}"
             )
 
         # Get history
-        history_duration_us = 1_600_000
-        history_start_us = max(time_us - history_duration_us, gt_start_us)
+        history_duration_us = 1_600_000  # time window for visualization
+        history_start_us = max(time_us_int - history_duration_us, int(gt_start_us))
         history_timestamps = np.arange(
-            history_start_us, time_us, 100_000, dtype=np.uint64
+            history_start_us, time_us_int, 100_000, dtype=np.uint64
         )
         ego_history = ego_traj.interpolate_to_timestamps(history_timestamps)
-        ego_history_xyz = ego_history.poses.vec3
+        ego_history_xyz = ego_history.positions
 
         # Transform to ego frame
         world_to_ego_transform = ego_qvec.inverse().as_se3()

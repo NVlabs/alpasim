@@ -24,6 +24,8 @@ import numpy as np  # noqa: E402
 logger = logging.getLogger(__name__)
 
 from alpasim_controller.mpc_controller import (  # noqa: E402
+    DEFAULT_DT_MPC,
+    DEFAULT_N_HORIZON,
     ControllerInput,
     ControllerOutput,
     MPCController,
@@ -43,6 +45,8 @@ class NonlinearMPC(MPCController):
         self,
         vehicle_params: VehicleModel.Parameters | None = None,
         gains: MPCGains | None = None,
+        n_horizon: int = DEFAULT_N_HORIZON,
+        dt_mpc: float = DEFAULT_DT_MPC,
     ):
         """Initialize the NonlinearMPC controller.
 
@@ -50,9 +54,13 @@ class NonlinearMPC(MPCController):
             vehicle_params: Vehicle parameters for dynamics model. If None,
                 uses default parameters.
             gains: Cost function weights. If None, uses default gains.
+            n_horizon: Prediction horizon length.
+            dt_mpc: MPC timestep in seconds.
         """
         self._vehicle_params = vehicle_params or VehicleModel.Parameters()
         self._gains = gains or MPCGains()
+        self._n_horizon = n_horizon
+        self._dt_mpc = dt_mpc
         self._model = self._build_model()
         self._mpc = None  # Lazy init on first call
 
@@ -229,8 +237,8 @@ class NonlinearMPC(MPCController):
         self._mpc = do_mpc.controller.MPC(self._model)
 
         # MPC settings
-        self._mpc.settings.n_horizon = self.N_HORIZON
-        self._mpc.settings.t_step = self.DT_MPC
+        self._mpc.settings.n_horizon = self._n_horizon
+        self._mpc.settings.t_step = self._dt_mpc
         self._mpc.settings.n_robust = 0
         self._mpc.settings.open_loop = 0
         self._mpc.settings.state_discretization = "collocation"
@@ -308,7 +316,7 @@ class NonlinearMPC(MPCController):
         timestamp_us = self._current_reference.timestamp_us
         idx_start = self._gains.idx_start_penalty
 
-        dt_us = int(self.DT_MPC * 1e6)
+        dt_us = int(self._dt_mpc * 1e6)
         timestamps = np.array(
             [timestamp_us + k * dt_us for k in range(n_horizon + 1)],
             dtype=np.uint64,

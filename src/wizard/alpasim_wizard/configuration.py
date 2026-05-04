@@ -8,12 +8,13 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import socket
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
 from alpasim_wizard.context import WizardContext
-from alpasim_wizard.schema import AlpasimConfig
+from alpasim_wizard.schema import AlpasimConfig, RunMode
 from omegaconf import OmegaConf
 
 from .services import ContainerDefinition, ContainerSet
@@ -49,11 +50,13 @@ class ConfigurationManager:
         # Get sim containers from service_manager for network config
         sim_containers = container_set.sim
         self._generate_network_config(sim_containers, cfg)
+        self._generate_runtime_server_config(container_set, cfg)
 
         self._generate_trafficsim_config(cfg)
         self._generate_eval_config(cfg)
         self._generate_run_metadata(cfg)
         self._generate_driver_config(cfg)
+        self._generate_controller_config(cfg)
 
         # Save wizard config
         self._save_wizard_config(cfg)
@@ -97,11 +100,11 @@ class ConfigurationManager:
         """
 
         network_config: Dict[str, Any] = {
-            "driver": {"addresses": []},
-            "physics": {"addresses": []},
-            "sensorsim": {"addresses": []},
-            "trafficsim": {"addresses": []},
-            "controller": {"addresses": []},
+            "driver": {"endpoints": []},
+            "physics": {"endpoints": []},
+            "sensorsim": {"endpoints": []},
+            "trafficsim": {"endpoints": []},
+            "controller": {"endpoints": []},
         }
 
         for c in service_containers:
@@ -131,14 +134,19 @@ class ConfigurationManager:
                     continue
 
                 if c.name in network_config:
-                    network_config[c.name]["addresses"].append(str(inst.address))
+                    address = str(inst.address)
+                    network_config[c.name]["endpoints"].append(
+                        {"address": address, "managed": True}
+                    )
 
         # Add external service addresses (for services running outside the deployment)
         external_services = cfg.wizard.external_services
         if external_services is not None:
             for service_name, addresses in external_services.items():
                 if service_name in network_config:
-                    network_config[service_name]["addresses"].extend(addresses)
+                    network_config[service_name]["endpoints"].extend(
+                        {"address": address, "managed": False} for address in addresses
+                    )
                     logger.info(
                         "Added external %s addresses: %s", service_name, addresses
                     )
@@ -149,6 +157,42 @@ class ConfigurationManager:
 
         self._write_config("generated-network-config.yaml", network_config)
         logger.debug("Generated network config")
+
+    def _generate_runtime_server_config(
+        self,
+        container_set: ContainerSet,
+        cfg: AlpasimConfig,
+    ) -> None:
+        """Generate client-facing runtime daemon endpoint metadata.
+
+        A wildcard runtime address means the runtime binds on the deployment
+        node, so this process' hostname is used as the client endpoint. Other
+        current backends store internal service names here and publish the
+        runtime on localhost.
+        """
+        if cfg.wizard.run_mode != RunMode.SERVER:
+            return
+
+        runtime_containers = container_set.runtime or []
+        if not runtime_containers:
+            raise ValueError(
+                "Server mode requires `runtime` in wizard.run_sim_services"
+            )
+
+        runtime_addresses = runtime_containers[0].get_all_addresses()
+        if not runtime_addresses:
+            raise ValueError("Runtime server mode requires a runtime address")
+
+        runtime_address = runtime_addresses[0]
+        client_host = (
+            socket.gethostname() if runtime_address.host == "0.0.0.0" else "localhost"
+        )
+        endpoint = {
+            "host": client_host,
+            "port": runtime_address.port,
+        }
+        self._write_config("generated-runtime-server.yaml", endpoint)
+        logger.debug("Generated runtime server endpoint")
 
     def _generate_trafficsim_config(self, cfg: Any) -> None:
         """Generate traffic simulation configuration."""
@@ -182,6 +226,17 @@ class ConfigurationManager:
 
         self._write_config("driver-config.yaml", driver_config)
         logger.debug("Generated driver config")
+
+    def _generate_controller_config(self, cfg: Any) -> None:
+        """Generate controller configuration."""
+        if not hasattr(cfg, "controller"):
+            return
+
+        controller_config = OmegaConf.to_container(cfg.controller, resolve=True)
+        assert isinstance(controller_config, dict)
+
+        self._write_config("controller-config.yaml", controller_config)
+        logger.debug("Generated controller config")
 
     def _generate_run_metadata(self, cfg: Any) -> None:
         """Generate run metadata."""

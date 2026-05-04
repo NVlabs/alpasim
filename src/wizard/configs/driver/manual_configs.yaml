@@ -4,6 +4,11 @@
 # The manual driver is CPU-only and designed for human-in-the-loop control.
 # These settings optimize for human reaction time and visual feedback.
 
+wizard:
+  external_services:
+    driver:
+      - "localhost:6789"
+
 runtime:
   simulation_config:
     # Longer force_gt to give human time to orient

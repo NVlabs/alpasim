@@ -5,9 +5,10 @@ defaults:
   - _self_
   - deploy: null # Must be overridden (e.g., deploy=local)
   - driver: null # Must be overridden (e.g., driver=vavam, driver=alpamayo1)
+  - driver_source: null # Optional: external_static or external_dynamic. Omit for managed drivers.
   - topology: null # Must be overridden (e.g., topology=1gpu)
   - trafficsim: null # Optional override
-  - controller: null # Optional override
+  - controller: default # Defaults to linear MPC; override with controller=nonlinear etc.
   - sensorsim: null # Optional override
   - optional scenes_catalog: internal # auto-override when internal plugin installed
   - optional image_defaults: internal # auto-override when internal plugin installed
@@ -21,7 +22,6 @@ hydra:
 defines:
   filesystem: ???
   driver_model: ???
-  mpc_implementation: linear # "linear" (OSQP, faster) or "nonlinear" (CasADi)
   image_registry: ""
   base_image: "${defines.image_registry}alpasim-base:${repo-version:}"
   hf_cache: "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}"
@@ -66,6 +66,7 @@ wizard:
   # the different containers will use ports {baseport}, {baseport+1}, ...
   # usually not needed to modify
   baseport: 6000
+  runtime_server_port: null
 
   # Does not need to be touched. For slurm runs (wizard.run_method=SLURM) this will be replaced with the slurm job ID
   slurm_job_id: null
@@ -75,7 +76,7 @@ wizard:
     ["driver", "sensorsim", "physics", "trafficsim", "controller", "runtime"]
 
   # TODO: undocumented options
-  run_mode: "BATCH"
+  run_mode: "ONESHOT"
   timeout: 600
   latest_symlink: false
 
@@ -184,6 +185,7 @@ services:
     image: ${defines.base_image}
     volumes:
       - "${wizard.log_dir}/controller:/mnt/output"
+      - "${wizard.log_dir}:/mnt/config"
       - "${repo-relative:'src'}:/repo/src"
       - "${repo-relative:'plugins'}:/repo/plugins"
     command:
@@ -191,7 +193,7 @@ services:
       - "--port={port}"
       - "--log_dir=/mnt/output"
       - "--log-level=${wizard.log_level}"
-      - "--mpc-implementation=${defines.mpc_implementation}"
+      - "--config=/mnt/config/controller-config.yaml"
 
   # \/ the orchestrating container - only 1 needed irrespectively of however many other there are
   runtime:

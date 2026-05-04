@@ -378,6 +378,44 @@ This 3×3 grid plot includes:
 
 ## Simulation Configuration
 
+### How do I start the runtime as a server?
+
+Use `wizard.run_mode=SERVER` to start the normal backing services and keep the
+runtime alive as a gRPC daemon:
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
+    wizard.run_mode=SERVER \
+    wizard.log_dir=runs/{DATETIME}
+```
+
+The wizard writes the resolved client endpoint to
+`generated-runtime-server.yaml` in the run directory:
+
+```yaml
+host: localhost
+port: 6005
+```
+
+This file is generated before Docker Compose has necessarily finished starting
+the runtime daemon. Clients should treat `host` and `port` as discovery metadata
+and poll until the runtime gRPC port accepts connections.
+
+By default, the runtime server port is allocated from `wizard.baseport` after
+the backing service ports. Pin it with `wizard.runtime_server_port=<port>` when
+client scripts or firewall rules need a stable port.
+
+Static external drivers use `driver_source=external_static` with
+`wizard.external_services.driver`; `driver=manual` provides a default
+`localhost:6789` address for the manual-driver workflow. Server clients can
+also use `driver_source=external_dynamic` and provide drivers per request with
+`SimulationRequest.available_drivers` and `n_concurrent_per_driver`; those
+request addresses override the configured driver pool for that RPC only.
+
+To stop the server, call `RuntimeService.shut_down()`. Runtime shutdown also
+shuts down backing services when `runtime.endpoints.do_shutdown=true`; set it
+to `false` to leave the backing services running.
+
 ### How do I enable/disable specific services?
 
 Use `runtime.endpoints.<service>.skip` to disable services:
