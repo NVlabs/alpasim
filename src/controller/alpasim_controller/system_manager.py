@@ -7,7 +7,7 @@ SystemManager - manages multiple systems, each with vehicle dynamics and control
 
 import logging
 
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig
 from alpasim_controller.system import System, create_system
 from alpasim_grpc.v0 import common_pb2, controller_pb2
 
@@ -17,18 +17,25 @@ class SystemManager:
 
     Args:
         log_dir: Directory for controller log files.
-        mpc_implementation: MPC implementation to use (default: LINEAR)
+        controller_config: Full controller configuration.
     """
 
     def __init__(
-        self, log_dir: str, mpc_implementation: MPCImplementation | None = None
+        self,
+        log_dir: str,
+        controller_config: ControllerConfig,
     ):
         self._log_dir = log_dir
         # Registered sessions (session_uuid -> System or None if not yet initialized)
         self._sessions: dict[str, System | None] = {}
-        self._mpc_implementation = mpc_implementation or MPCImplementation.LINEAR
+        self._controller_config = controller_config
 
-        logging.info(f"SystemManager using {self._mpc_implementation} MPC")
+        logging.info(
+            "SystemManager using %s MPC (n_horizon=%d, dt_mpc=%.4f)",
+            self._controller_config.mpc_implementation,
+            self._controller_config.n_horizon,
+            self._controller_config.dt_mpc,
+        )
 
     def start_session(self, session_uuid: str) -> None:
         """Register a new session.
@@ -65,12 +72,12 @@ class SystemManager:
         """Create a new System for a session."""
         logging.info(
             f"Creating system for session_uuid: {session_uuid} "
-            f"(mpc: {self._mpc_implementation})"
+            f"(mpc: {self._controller_config.mpc_implementation})"
         )
         system = create_system(
             log_file=f"{self._log_dir}/alpasim_controller_{session_uuid}.csv",
             initial_state=state,
-            mpc_implementation=self._mpc_implementation,
+            controller_config=self._controller_config,
         )
         self._sessions[session_uuid] = system
         return system

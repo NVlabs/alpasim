@@ -32,6 +32,22 @@ class DelayBuffer:
             raise ValueError("Timestamps must be in strictly ascending order")
         self.queue.append((timestamp_us, obj))
 
+    def item_at(self, timestamp_us: int) -> tuple[int | None, Any]:
+        """
+        Retrieve the object and its stored timestamp that has completed its delay.
+
+        :param timestamp_us: The current timestamp to check for delayed objects.
+        :return: (stored_timestamp, object) of the oldest item that has met the delay
+                 requirement, or (None, None) if the buffer is empty.
+        """
+        while (
+            len(self.queue) > 1 and (timestamp_us - self.queue[1][0]) >= self.delay_us
+        ):
+            self.queue.popleft()
+        if self.queue:
+            return self.queue[0][0], self.queue[0][1]
+        return None, None
+
     def at(self, timestamp_us: int) -> Any:
         """
         Retrieve the object that has completed its delay at the given timestamp.
@@ -39,10 +55,5 @@ class DelayBuffer:
         :param timestamp_us: The current timestamp to check for delayed objects.
         :return: The oldest object that has met the delay requirement, None if no object is ready.
         """
-        while (
-            len(self.queue) > 1 and (timestamp_us - self.queue[1][0]) >= self.delay_us
-        ):
-            self.queue.popleft()
-        if self.queue:
-            return self.queue[0][1]
-        return None
+        _, obj = self.item_at(timestamp_us)
+        return obj

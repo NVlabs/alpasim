@@ -2,9 +2,12 @@
 # Copyright (c) 2026 NVIDIA Corporation
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Type, TypeVar, cast
 
 import yaml
+from omegaconf import OmegaConf
+
+C = TypeVar("C")
 
 
 def load_yaml_dict(
@@ -37,3 +40,12 @@ def load_yaml_dict(
     if not isinstance(loaded, dict):
         raise TypeError(f"Expected YAML mapping at {path}, got {type(loaded).__name__}")
     return loaded
+
+
+def typed_parse_config(path: str | Path, config_type: Type[C]) -> C:
+    """Reads a yaml file at `path` and parses it into a provided type using omegaconf."""
+    yaml_config = OmegaConf.create(load_yaml_dict(path))
+
+    schema = OmegaConf.structured(config_type)
+    config: C = cast(C, OmegaConf.merge(schema, yaml_config))
+    return config

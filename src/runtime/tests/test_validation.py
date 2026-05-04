@@ -10,6 +10,7 @@ from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
     EndpointAddresses,
     NetworkSimulatorConfig,
+    ServiceEndpoint,
     SingleUserEndpointConfig,
     UserEndpointConfig,
 )
@@ -19,22 +20,27 @@ from alpasim_runtime.validation import gather_versions_from_addresses
 def _make_network_config() -> NetworkSimulatorConfig:
     """Create a minimal NetworkSimulatorConfig with one address per service."""
     return NetworkSimulatorConfig(
-        driver=EndpointAddresses(addresses=["localhost:50051"]),
-        sensorsim=EndpointAddresses(addresses=["localhost:50052"]),
-        physics=EndpointAddresses(addresses=["localhost:50053"]),
-        trafficsim=EndpointAddresses(addresses=["localhost:50054"]),
-        controller=EndpointAddresses(addresses=["localhost:50055"]),
+        driver=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50051")]),
+        sensorsim=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50052")]),
+        physics=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50053")]),
+        trafficsim=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50054")]),
+        controller=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50055")]),
     )
 
 
 def _make_network_config_with_two_driver_addresses() -> NetworkSimulatorConfig:
     """Create a config where driver has two addresses (for mismatch testing)."""
     return NetworkSimulatorConfig(
-        driver=EndpointAddresses(addresses=["localhost:50051", "localhost:50061"]),
-        sensorsim=EndpointAddresses(addresses=["localhost:50052"]),
-        physics=EndpointAddresses(addresses=["localhost:50053"]),
-        trafficsim=EndpointAddresses(addresses=["localhost:50054"]),
-        controller=EndpointAddresses(addresses=["localhost:50055"]),
+        driver=EndpointAddresses(
+            endpoints=[
+                ServiceEndpoint("localhost:50051"),
+                ServiceEndpoint("localhost:50061"),
+            ]
+        ),
+        sensorsim=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50052")]),
+        physics=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50053")]),
+        trafficsim=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50054")]),
+        controller=EndpointAddresses(endpoints=[ServiceEndpoint("localhost:50055")]),
     )
 
 
@@ -241,7 +247,7 @@ async def test_gather_versions_fails_when_non_skipped_service_has_no_addresses(
     )
 
     network_config = _make_network_config()
-    network_config.driver.addresses = []
+    network_config.driver.endpoints = []
 
     with pytest.raises(AssertionError, match="driver"):
         await gather_versions_from_addresses(network_config, _make_user_endpoints())

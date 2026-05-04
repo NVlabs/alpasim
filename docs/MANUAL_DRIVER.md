@@ -39,11 +39,14 @@ The driver will start and display a pygame window showing the camera feed. It bi
 
 ### Step 2: Launch the Simulator
 
-Run the wizard with the `local_external_driver` deploy config:
+Run the wizard with the local deploy target and static external driver source:
 
 ```bash
 uv run --project src/wizard alpasim_wizard \
-  deploy=local_external_driver \
+  deploy=local \
+  driver=manual \
+  driver_source=external_static \
+  topology=1gpu \
   wizard.log_dir=$PWD/manual_run \
   scenes.scene_ids='["your-scene-id"]'
 ```
@@ -56,7 +59,10 @@ If your driver runs on a different host or port, override the address with the d
 
 ```bash
 uv run --project src/wizard alpasim_wizard \
-  deploy=local_external_driver \
+  deploy=local \
+  driver=manual \
+  driver_source=external_static \
+  topology=1gpu \
   wizard.log_dir=$PWD/manual_run \
   scenes.scene_ids='["your-scene-id"]' \
   wizard.external_services.driver='["192.168.1.100:6789"]'
@@ -75,7 +81,8 @@ The manual driver configuration is in `src/driver/configs/manual.yaml`. Key sett
 
 ## Simulation Settings
 
-The `local_external_driver` deploy config includes settings optimized for interactive use:
+The `driver=manual driver_source=external_static` configuration includes
+settings optimized for interactive use:
 
 - **10 Hz control rate** (vs. 2 Hz for batch evaluation) for smoother response
 - **1920x1080 camera resolution** for better visualization

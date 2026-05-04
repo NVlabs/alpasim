@@ -6,7 +6,7 @@ import faulthandler
 import math
 
 import pytest
-from alpasim_controller.mpc_controller import MPCImplementation
+from alpasim_controller.mpc_controller import ControllerConfig, MPCImplementation
 from alpasim_controller.system_manager import SystemManager
 from alpasim_grpc.v0 import common_pb2, controller_pb2
 
@@ -55,7 +55,7 @@ def run_controller_and_vehicle_model_request(
 @pytest.mark.parametrize("dt_propagation_us", [100000, 500000])
 def test_alpasimvdc_one_step(dt_propagation_us) -> None:
     "Run a single step of the controller and vehicle model simulation."
-    system_manager = SystemManager(".")
+    system_manager = SystemManager(".", controller_config=ControllerConfig())
 
     # Must start session before running controller
     system_manager.start_session(SESSION_UUID)
@@ -97,7 +97,7 @@ def test_alpasimvdc_one_step(dt_propagation_us) -> None:
 
 def test_session_lifecycle() -> None:
     """Test the full session lifecycle including edge cases."""
-    system_manager = SystemManager(".")
+    system_manager = SystemManager(".", controller_config=ControllerConfig())
 
     # Can't run controller without starting session
     with pytest.raises(KeyError):
@@ -183,7 +183,9 @@ def run_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
     """
     Simulate multiple steps of the simulation, with a constant velocity trajectory.
     """
-    system_manager = SystemManager(".", mpc_implementation=mpc_impl)
+    system_manager = SystemManager(
+        ".", controller_config=ControllerConfig(mpc_implementation=str(mpc_impl))
+    )
     system_manager.start_session(SESSION_UUID)
 
     timestamp = 0

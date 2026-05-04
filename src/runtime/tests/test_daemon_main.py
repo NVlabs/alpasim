@@ -10,10 +10,21 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from alpasim_grpc.v0 import common_pb2, runtime_pb2
+from alpasim_runtime import endpoints
+from alpasim_runtime.config import (
+    EndpointAddresses,
+    NetworkSimulatorConfig,
+    ServiceEndpoint,
+)
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
 from alpasim_runtime.daemon.engine import UnknownSceneError
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
-from alpasim_runtime.simulate.__main__ import _serve, create_arg_parser, run_simulation
+from alpasim_runtime.simulate.__main__ import (
+    _serve,
+    create_arg_parser,
+    run_simulation,
+    shutdown_services,
+)
 
 import grpc
 
@@ -27,6 +38,86 @@ class _AbortContext:
         self.code = code
         self.details = details
         raise RuntimeError("aborted")
+
+
+class _FakeShutdownStub:
+    calls: list[str] = []
+
+    def __init__(self, channel) -> None:
+        self._channel = channel
+
+    async def shut_down(self, request, timeout: float) -> None:
+        del request, timeout
+        self.calls.append(self._channel.address)
+
+
+class _FakeChannel:
+    def __init__(self, address: str) -> None:
+        self.address = address
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _make_serve_args() -> Namespace:
+    return Namespace(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        usdz_glob="/tmp/*.usdz",
+        log_dir="/tmp/log",
+        listen_address="[::]:50051",
+    )
+
+
+def _patch_serve_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[SimpleNamespace, AsyncMock]:
+    fake_config = SimpleNamespace(
+        user=SimpleNamespace(endpoints=SimpleNamespace(do_shutdown=True)),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.parse_simulator_config",
+        Mock(return_value=fake_config),
+    )
+    shutdown_services = AsyncMock()
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.shutdown_services",
+        shutdown_services,
+    )
+    return fake_config, shutdown_services
+
+
+@pytest.mark.asyncio
+async def test_shutdown_services_only_targets_managed_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeShutdownStub.calls = []
+    config = SimpleNamespace(
+        user=SimpleNamespace(endpoints=SimpleNamespace(do_shutdown=True)),
+        network=NetworkSimulatorConfig(
+            driver=EndpointAddresses(
+                endpoints=[
+                    ServiceEndpoint("managed-driver:50051", managed=True),
+                    ServiceEndpoint("external-driver:50052", managed=False),
+                ]
+            ),
+            sensorsim=EndpointAddresses(endpoints=[]),
+            physics=EndpointAddresses(endpoints=[]),
+            trafficsim=EndpointAddresses(endpoints=[]),
+            controller=EndpointAddresses(endpoints=[]),
+        ),
+    )
+    monkeypatch.setitem(endpoints.SERVICE_STUBS, "driver", _FakeShutdownStub)
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.grpc.aio.insecure_channel",
+        _FakeChannel,
+    )
+
+    await shutdown_services(config)
+
+    assert _FakeShutdownStub.calls == ["managed-driver:50051"]
 
 
 @pytest.mark.asyncio
@@ -110,6 +201,7 @@ async def test_servicer_shutdown_rpc_is_safe_for_repeated_requests() -> None:
 async def test_daemon_main_serve_starts_and_drains(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fake_config, shutdown_services = _patch_serve_config(monkeypatch)
     engine = SimpleNamespace()
     app_instances = []
 
@@ -139,27 +231,20 @@ async def test_daemon_main_serve_starts_and_drains(
         _FakeApp,
     )
 
-    args = Namespace(
-        user_config="u.yaml",
-        network_config="n.yaml",
-        eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
-        log_dir="/tmp/log",
-        listen_address="[::]:50051",
-    )
-
-    await asyncio.wait_for(_serve(args), timeout=0.5)
+    await asyncio.wait_for(_serve(_make_serve_args()), timeout=0.5)
 
     assert len(app_instances) == 1
     app = app_instances[0]
     assert app.engine is engine
     assert app.listen_address == "[::]:50051"
+    shutdown_services.assert_awaited_once_with(fake_config)
 
 
 @pytest.mark.asyncio
 async def test_daemon_main_serve_stops_on_app_shutdown_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fake_config, shutdown_services = _patch_serve_config(monkeypatch)
     engine = SimpleNamespace()
     app_instances = []
 
@@ -190,18 +275,10 @@ async def test_daemon_main_serve_stops_on_app_shutdown_request(
         _FakeApp,
     )
 
-    args = Namespace(
-        user_config="u.yaml",
-        network_config="n.yaml",
-        eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
-        log_dir="/tmp/log",
-        listen_address="[::]:50051",
-    )
-
-    await asyncio.wait_for(_serve(args), timeout=0.5)
+    await asyncio.wait_for(_serve(_make_serve_args()), timeout=0.5)
 
     assert len(app_instances) == 1
+    shutdown_services.assert_awaited_once_with(fake_config)
 
 
 def test_simulate_parser_supports_serve_mode_args() -> None:

@@ -1,0 +1,42 @@
+# @package _global_
+# Daemon topology: minimal defaults for alpasim daemon mode.
+# GPU assignments and concurrent rollout counts are provided by the launch
+# script via CLI overrides; this file supplies only the fields that cannot
+# be set via overrides (replicas_per_container, nre_cache_size).
+
+defines:
+  nre_cache_size: 5
+
+services:
+  sensorsim:
+    replicas_per_container: 1
+
+  driver:
+    replicas_per_container: 1
+
+  physics:
+    replicas_per_container: 1
+
+  controller:
+    replicas_per_container: 1
+    gpus: null
+
+  trafficsim:
+    replicas_per_container: 1
+    gpus: null
+
+runtime:
+  nr_workers: 1
+  endpoints:
+    sensorsim:
+      n_concurrent_rollouts: 1
+    driver:
+      skip: true
+    physics:
+      n_concurrent_rollouts: 1
+      skip: false
+    controller:
+      n_concurrent_rollouts: 1
+      skip: false
+    trafficsim:
+      skip: true

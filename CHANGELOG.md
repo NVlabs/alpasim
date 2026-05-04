@@ -2,6 +2,20 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Wizard runtime server mode and run mode rename (28.04.26)
+Wizard run modes now distinguish one-shot runtime execution from long-running runtime daemon deployment. `wizard.run_mode=BATCH` has been renamed to `wizard.run_mode=ONESHOT`, and `wizard.run_mode=SERVER` starts the runtime as a gRPC server for request-scoped simulations.
+
+**Migration**: If you explicitly set `wizard.run_mode=BATCH`, replace it with `wizard.run_mode=ONESHOT`. The default behavior remains unchanged for standard one-shot execution workflows.
+
+### External driver configuration changes
+
+External driver ownership is now expressed through `driver_source` config groups rather than deployment targets:
+* Default managed driver behavior remains unchanged.
+* `driver_source=external_static` uses configured external driver addresses, replacing the removed `deploy=local_external_driver` deployment target.
+* `driver_source=external_dynamic` supports per-request drivers via `SimulationRequest.available_drivers`.
+
+**Migration**: Replace `deploy=local_external_driver` with `deploy=local driver_source=external_static driver=manual`.
+
 ## Move evaluation to a separate thread (03.04.26)
 Runtime evaluation now runs in its own thread instead of inline in the simulation loop. This decouples eval latency from the simulation step, improving throughput when evaluation is expensive.
 

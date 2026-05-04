@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, List, Literal
 
 from .context import WizardContext
-from .schema import ServiceConfig
+from .schema import RunMode, ServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -390,13 +390,28 @@ def build_container_set(
         if name == "runtime":
             # Runtime handled separately
             runtime_config = cfg.services.runtime
+            runtime_port = None
+            runtime_address = None
+            if cfg.wizard.run_mode == RunMode.SERVER:
+                runtime_port = (
+                    cfg.wizard.runtime_server_port
+                    if cfg.wizard.runtime_server_port is not None
+                    else next(context.port_assigner)
+                )
+                runtime_address = ContainerDefinition._build_address(
+                    runtime_port, "runtime-0", use_address_string
+                )
+
             command = ContainerDefinition._build_command(
-                runtime_config, None, context, "runtime"
+                runtime_config, runtime_port, context, "runtime"
             )
+            if cfg.wizard.run_mode == RunMode.SERVER:
+                command += f" --serve --listen-address=0.0.0.0:{runtime_port}"
+
             runtime_instance = ContainerDefinition.ServiceInstance(
                 replica_idx=0,
                 command=command,
-                address=None,  # Unused for runtime
+                address=runtime_address,
             )
             runtime_containers = [
                 ContainerDefinition.create(

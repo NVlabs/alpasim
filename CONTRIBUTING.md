@@ -4,37 +4,52 @@ This page outlines the guidelines for anybody who wishes to contribute to the Al
 
 ## Release Process
 
-There is no formal release process for the AlpaSim repository. Once CICD pipelines are enabled, we
-will automate the versioning and release process, although there is no plan for formal
-qualification/certification of releases at this time.
+The AlpaSim repository follows a dual-platform workflow between GitHub and GitLab:
 
-### (Future) Automatic Versioning
+### GitHub Contribution Flow
 
-Services automatically receive minor version bumps when their code changes in merge requests. This
-also includes rebuilding the docker container and uploading the corresponding sqash file.
+1. External contributors submit PRs to the GitHub repository
+2. An NVIDIA engineer must approve the PR to trigger CI pipelines
+3. Once CI passes, the NVIDIA engineer approves and merges the PR
+4. Merged PRs automatically create corresponding MRs in the GitLab repository
 
-> :warning: Until this is enabled, please manually bump versions in `pyproject.toml` files when
-> making changes.
+### GitLab Merge Process
 
-### Post-merge release pipeline
+1. The NVIDIA engineer merges the automatically-created MR in GitLab
+2. If merge conflicts occur, the engineer resolves them manually
+3. Upon merge to main in GitLab, the post-merge pipeline runs (see below)
 
-After a merge request is merged, the pipeline on main will check the following, for each package:
+### Automatic Versioning
+
+Services automatically receive **minor** version bumps when their code changes in PR/MRs.
+
+**Major version bumps** must be handled manually when introducing breaking changes. To perform a
+major version bump, manually update the `version` field in the service's `pyproject.toml` file
+and include that change in your PR.
+
+### Post-merge Release Pipeline
+
+After a PR/MR is merged to main in GitLab, the pipeline checks the following for each package:
 
 1. Was the code in this package changed in this commit?
 1. If so, does a git tag already exist for this package with the same version number?
-1. If not, this indicates a new tag will be created and the new version of the package should be
-   published.
+1. If not, a new tag is created and the new version of the package is published.
+
+### GitHub Release Synchronization
+
+Approximately once per month, the GitLab repository is synchronized to GitHub, and a new release
+is created on the GitHub releases page with the latest changes.
 
 ### Common challenges
 
 **I have to rebase all the time! :(**
 
 This repository is configured to require fast-forward merges only. This is to ensure the commit
-history is linear and easy to reason about. This means if you are being main, you will be required
+history is linear and easy to reason about. This means if you are behind main, you will be required
 to rebase. This is easy, follow the steps below:
 
 ```sh
-# Assuming you are checked out to your MR branch.
+# Assuming you are checked out to your PR/MR branch.
 git fetch origin main
 git rebase origin/main
 # Be advised, the following command is a force push.
@@ -46,10 +61,8 @@ can, but it is necessary when rebasing.
 
 ## Coding Standards and Style Guides
 
-Linting is performed using [pre-commit](https://pre-commit.com/) with
-[black](https://black.readthedocs.io/en/stable/). To set up locally, first install `pre-commit`
-(e.g. using `pip`) and then set up with `pre-commit install`. This will install the necessary
-pre-commit hooks, which can be run manually with `pre-commit run --all-files`.
+Linting is automatically enforced in the CI pipeline using [pre-commit](https://pre-commit.com/) with
+[black](https://black.readthedocs.io/en/stable/). All PR/MRs are checked for code style compliance before merging.
 
 ### Variables and Naming Conventions
 
@@ -161,7 +174,7 @@ position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
 
 ```
 
-#### Overview over which coordinate frames are used for communiation with services:
+#### Overview of which coordinate frames are used for communication with services:
 
 - **Driver service**
 
@@ -195,7 +208,7 @@ position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
 
 ## Code Review
 
-Merge/Pull requests are required for all changes to the codebase. Templates are provided to ensure
+Pull requests (PRs) or merge requests (MRs) are required for all changes to the codebase. Templates are provided to ensure
 consistency and completeness.
 
 ## Code of Conduct
