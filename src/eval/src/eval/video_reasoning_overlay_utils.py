@@ -445,14 +445,15 @@ def _render_single_reasoning_overlay_frame(
         ego_pose_at_time = ego_traj.interpolate_to_timestamps(
             np.array([time_us], dtype=np.uint64)
         )
-        ego_qvec = ego_pose_at_time.poses[0]
-        ego_xyz = ego_qvec.vec3
+        ego_pose = ego_pose_at_time.get_pose(0)
+        ego_xyz = ego_pose.vec3
 
-        pred_xyz_np = driver_response_at_time.selected_trajectory.poses.vec3
-        if np.linalg.norm(pred_xyz_np[0] - ego_xyz) > 0.01:
+        pred_xyz_np = driver_response_at_time.selected_trajectory.positions
+        pred_start_to_ego_xy_m = np.linalg.norm(pred_xyz_np[0, :2] - ego_xyz[:2])
+        if pred_start_to_ego_xy_m > 0.01:
             raise ValueError(
-                f"First predicted point is not close to current ego position: "
-                f"{pred_xyz_np[0]} - {ego_xyz} = {np.linalg.norm(pred_xyz_np[0] - ego_xyz)}"
+                "First predicted point is not close to current ego position in XY: "
+                f"{pred_xyz_np[0, :2]} - {ego_xyz[:2]} = {pred_start_to_ego_xy_m}"
             )
 
         # Get history
@@ -462,10 +463,10 @@ def _render_single_reasoning_overlay_frame(
             history_start_us, time_us, 100_000, dtype=np.uint64
         )
         ego_history = ego_traj.interpolate_to_timestamps(history_timestamps)
-        ego_history_xyz = ego_history.poses.vec3
+        ego_history_xyz = ego_history.positions
 
         # Transform to ego frame
-        world_to_ego_transform = ego_qvec.inverse().as_se3()
+        world_to_ego_transform = ego_pose.inverse().as_se3()
         pred_homogeneous = np.hstack([pred_xyz_np, np.ones((pred_xyz_np.shape[0], 1))])
         pred_xyz_np = (world_to_ego_transform @ pred_homogeneous.T).T[:, :3]
         ego_history_homogeneous = np.hstack(
