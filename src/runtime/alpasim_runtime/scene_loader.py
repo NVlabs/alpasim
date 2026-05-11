@@ -21,7 +21,9 @@ from alpasim_runtime.worker.artifact_cache import make_artifact_loader
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.scene_metadata import Metadata
+from alpasim_utils.trajdata_data_source import TrajdataDataSource
 from omegaconf import OmegaConf
+from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +155,58 @@ class ArtifactSceneProvider:
         return self._load_artifact(scene_id, self._artifact_paths[scene_id])
 
 
-# TODO(mwatson, caojun): Add a TrajdataSceneProvider that loads scenes from a UnifiedDataset
+class TrajdataSceneProvider:
+    """Scene provider that loads scenes from trajdata's UnifiedDataset."""
+
+    def __init__(
+        self,
+        dataset: UnifiedDataset,
+        scene_id_to_idx: dict[str, int],
+        *,
+        smooth_trajectories: bool,
+        asset_base_path_map: dict[str, str] | None = None,
+    ) -> None:
+        self._dataset = dataset
+        self._scene_id_to_idx = scene_id_to_idx
+        self._smooth_trajectories = smooth_trajectories
+        self._asset_base_path_map = asset_base_path_map or {}
+        self._cache: dict[str, SceneDataSource] = {}
+
+    @property
+    def scene_ids(self) -> set[str]:
+        return set(self._scene_id_to_idx)
+
+    def get_data_source(self, scene_id: str) -> SceneDataSource:
+        if scene_id in self._cache:
+            return self._cache[scene_id]
+
+        scene_idx = self._scene_id_to_idx.get(scene_id)
+        if scene_idx is None:
+            raise UnknownSceneError(scene_id)
+
+        scene = self._dataset.get_scene(scene_idx)
+        if scene is None:
+            raise UnknownSceneError(scene_id)
+
+        asset_base_path = self._asset_base_path_map.get(scene.env_name)
+        map_api = getattr(self._dataset, "_map_api", None)
+
+        scene_cache = self._dataset.cache_class(
+            self._dataset.cache_path, scene, self._dataset.augmentations
+        )
+        scene_cache.set_obs_format(self._dataset.obs_format)
+
+        data_source = TrajdataDataSource.from_trajdata_scene(
+            scene=scene,
+            dataset=None,
+            map_api=map_api,
+            scene_cache=scene_cache,
+            smooth_trajectories=self._smooth_trajectories,
+            asset_base_path=asset_base_path,
+        )
+
+        self._cache[scene_id] = data_source
+        return data_source
 
 
 class SceneLoader:
@@ -221,7 +274,14 @@ def _build_scene_provider(
             usdz_provider_config=scene_provider_config.usdz,
         )
     if kind == "trajdata":
-        raise NotImplementedError("trajdata scene provider is not yet implemented")
+        if scene_provider_config.trajdata is None:
+            raise ValueError(
+                "scene_provider.trajdata must be configured when kind='trajdata'"
+            )
+        return _build_trajdata_scene_provider(
+            user_config=user_config,
+            trajdata_provider_config=scene_provider_config.trajdata,
+        )
     raise ValueError(f"Unsupported scene_provider.kind: {kind!r}")
 
 
@@ -268,4 +328,44 @@ def _build_artifact_scene_provider(
         sorted(scene_infos, key=lambda scene_info: scene_info.scene_id),
         smooth_trajectories=user_config.smooth_trajectories,
         max_cache_size=usdz_provider_config.artifact_cache_size,
+    )
+
+
+def _build_trajdata_scene_provider(
+    *,
+    user_config: UserSimulatorConfig,
+    trajdata_provider_config: TrajdataProviderConfig,
+) -> TrajdataSceneProvider:
+    params = trajdata_provider_config_to_params(trajdata_provider_config)
+
+    logger.info("Creating UnifiedDataset with desired_data=%s", params["desired_data"])
+    dataset = UnifiedDataset(**params)
+    logger.info("Created UnifiedDataset with %d scenes", dataset.num_scenes())
+
+    scene_id_to_idx: dict[str, int] = {}
+    for idx in range(dataset.num_scenes()):
+        try:
+            scene = dataset.get_scene(idx)
+            scene_id_to_idx[scene.name] = idx
+        except Exception as e:
+            logger.warning("Failed to get scene at index %d: %s", idx, e)
+            continue
+    logger.info("Built scene_id mapping for %d scenes", len(scene_id_to_idx))
+
+    asset_base_path_map: dict[str, str] = {}
+    if (
+        trajdata_provider_config.dataset is not None
+        and trajdata_provider_config.dataset.extra_params
+    ):
+        asset_base_path = trajdata_provider_config.dataset.extra_params.get(
+            "asset_base_path"
+        )
+        if asset_base_path is not None and trajdata_provider_config.dataset.name:
+            asset_base_path_map[trajdata_provider_config.dataset.name] = asset_base_path
+
+    return TrajdataSceneProvider(
+        dataset=dataset,
+        scene_id_to_idx=scene_id_to_idx,
+        smooth_trajectories=user_config.smooth_trajectories,
+        asset_base_path_map=asset_base_path_map,
     )
