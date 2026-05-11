@@ -84,9 +84,18 @@ def _build_planner_context(
     max_actors: int = 64,
 ) -> dict[str, Any]:
     """Build a compact per-frame planning context for the driver."""
+    freshness_thresholds_ms = {
+        "ego": 150.0,
+        "actor": 300.0,
+        "route": 1000.0,
+        "map": 1000.0,
+        "camera": 300.0,
+    }
     ego_pose = state.ego_trajectory_estimate.last_pose
     ego_position, ego_yaw = _pose_to_position_and_yaw(ego_pose)
     ego_xy = np.array(ego_position[:2], dtype=np.float64)
+    ego_pose_latest_us = int(state.ego_trajectory_estimate.timestamps_us[-1])
+    ego_age_ms = max(0.0, (timestamp_us - ego_pose_latest_us) / 1000.0)
 
     actor_rows: list[tuple[float, dict[str, Any]]] = []
     sample_ts = np.array([timestamp_us], dtype=np.uint64)
@@ -203,6 +212,34 @@ def _build_planner_context(
                 )
                 traffic_rules["crosswalks_in_rig"].append(points_in_rig.tolist())
 
+    route_timestamp_us = int(timestamp_us) if route_in_rig is not None else 0
+    route_age_ms = 0.0 if route_in_rig is not None else None
+    actor_snapshot_us = int(timestamp_us)
+    actor_age_ms = 0.0
+    map_context_timestamp_us = int(timestamp_us) if vector_map is not None else 0
+    map_age_ms = 0.0 if vector_map is not None else None
+    camera_latest_us = max(state.last_camera_frame_us.values(), default=0)
+    camera_age_ms = (
+        max(0.0, (timestamp_us - int(camera_latest_us)) / 1000.0)
+        if camera_latest_us
+        else None
+    )
+
+    quality = {
+        "route_available": bool(route_waypoints),
+        "nearby_lane_count": len(nearby_lanes),
+        "actor_count": len(actors),
+        "wait_line_count": len(traffic_rules["wait_lines_in_rig"]),
+        "crosswalk_count": len(traffic_rules["crosswalks_in_rig"]),
+    }
+    stale_flags = {
+        "ego": ego_age_ms > freshness_thresholds_ms["ego"],
+        "actor": actor_age_ms > freshness_thresholds_ms["actor"],
+        "route": route_age_ms is None or route_age_ms > freshness_thresholds_ms["route"],
+        "map": map_age_ms is None or map_age_ms > freshness_thresholds_ms["map"],
+        "camera": camera_age_ms is None or camera_age_ms > freshness_thresholds_ms["camera"],
+    }
+
     return {
         "timestamp_us": int(timestamp_us),
         "ego": {
@@ -214,6 +251,24 @@ def _build_planner_context(
         "nearby_lanes": nearby_lanes,
         "traffic_rules": traffic_rules,
         "map_summary": map_summary,
+        "timing": {
+            "policy_tick_us": int(timestamp_us),
+            "ego_pose_latest_us": ego_pose_latest_us,
+            "route_timestamp_us": route_timestamp_us,
+            "actor_snapshot_us": actor_snapshot_us,
+            "map_context_timestamp_us": map_context_timestamp_us,
+            "camera_latest_us": int(camera_latest_us),
+            "ego_age_ms": ego_age_ms,
+            "route_age_ms": route_age_ms,
+            "actor_age_ms": actor_age_ms,
+            "map_age_ms": map_age_ms,
+            "camera_age_ms": camera_age_ms,
+            "freshness_thresholds_ms": freshness_thresholds_ms,
+        },
+        "quality": {
+            **quality,
+            "stale_flags": stale_flags,
+        },
     }
 
 

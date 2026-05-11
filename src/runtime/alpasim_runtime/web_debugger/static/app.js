@@ -94,6 +94,7 @@ const els = {
   timelineEnd: document.getElementById("timeline-end"),
   sessionStatus: document.getElementById("session-status"),
   statusDot: document.getElementById("status-dot"),
+  decisionPageLink: document.getElementById("decision-page-link"),
   sessionTick: document.getElementById("session-tick"),
   sessionTime: document.getElementById("session-time"),
   egoSpeed: document.getElementById("ego-speed"),
@@ -977,6 +978,12 @@ function renderAll() {
   els.sessionTime.textContent = snapshot ? `时长: ${formatSimTime(snapshot.sim_time_us)}` : "时长: -";
   els.egoSpeed.textContent = snapshot ? formatSpeed(snapshot.ego.speed_mps) : "-";
   els.sceneLabel.textContent = session?.scene_id ?? "未加载场景";
+  if (els.decisionPageLink) {
+    const target = new URL("/decision", window.location.origin);
+    if (state.sessionId) target.searchParams.set("session_id", state.sessionId);
+    if (session?.scene_id) target.searchParams.set("scene_id", session.scene_id);
+    els.decisionPageLink.href = target.toString();
+  }
 
   const history = state.snapshotHistory;
   if (history.length) {

@@ -49,6 +49,7 @@ class CandidateView:
     status: str
     selected: bool
     error: str = ""
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class SessionSnapshotView:
     ego_history: list[dict[str, float]] = field(default_factory=list)
     selected_plan: list[dict[str, float]] = field(default_factory=list)
     candidate_plans: list[CandidatePlanView] = field(default_factory=list)
+    context_diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +189,16 @@ def _speed_mps_from_dynamics(dynamics) -> float:
     return math.sqrt(
         float(velocity.x) ** 2 + float(velocity.y) ** 2 + float(velocity.z) ** 2
     )
+
+
+def _decode_json_field(payload: str) -> dict[str, object]:
+    if not payload:
+        return {}
+    try:
+        decoded = json.loads(payload)
+    except Exception:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 @dataclass
@@ -540,6 +552,24 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
                     ],
                 )
             ],
+            context_diagnostics={
+                "timing": {
+                    "policy_tick_us": session.current_sim_time_us,
+                    "ego_age_ms": 0.0,
+                    "actor_age_ms": 0.0,
+                    "route_age_ms": 0.0,
+                    "map_age_ms": 0.0,
+                    "camera_age_ms": 0.0,
+                },
+                "quality": {
+                    "route_available": True,
+                    "nearby_lane_count": 3,
+                    "actor_count": len(actors),
+                    "wait_line_count": 1,
+                    "crosswalk_count": 1,
+                    "stale_flags": {},
+                },
+            },
         )
 
     def _build_state(self, session: _MockSession) -> SessionStateView:
@@ -569,6 +599,16 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
                     backend_id=backend_id,
                     status=status,
                     selected=is_selected,
+                    diagnostics={
+                        "driver_debug": {
+                            "selected_model_type": backend_id,
+                            "fallback_reason": None if is_selected else "shadow_candidate",
+                            "proposal_count": 2,
+                            "route_available": True,
+                            "nearby_lane_count": 3,
+                            "actor_count": 4,
+                        }
+                    },
                 )
             )
         if not candidates:
@@ -578,6 +618,7 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
                     backend_id="vla_default",
                     status="SELECTED",
                     selected=True,
+                    diagnostics={"driver_debug": {"selected_model_type": "vla_default"}},
                 )
             ]
             selected_backend_id = "vla_default"
@@ -605,6 +646,7 @@ class MockInteractiveApiAdapter(InteractiveApiAdapter):
             ego_history=snapshot.ego_history,
             selected_plan=snapshot.selected_plan,
             candidate_plans=snapshot.candidate_plans,
+            context_diagnostics=snapshot.context_diagnostics,
         )
 
     def _record_checkpoint(self, session: _MockSession) -> None:
@@ -640,10 +682,14 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             return self._serve_static("index.html", "text/html; charset=utf-8")
+        if parsed.path == "/decision":
+            return self._serve_static("decision.html", "text/html; charset=utf-8")
         if parsed.path == "/assets/styles.css":
             return self._serve_static("styles.css", "text/css; charset=utf-8")
         if parsed.path == "/assets/app.js":
             return self._serve_static("app.js", "application/javascript; charset=utf-8")
+        if parsed.path == "/assets/decision.js":
+            return self._serve_static("decision.js", "application/javascript; charset=utf-8")
         if parsed.path == "/api/scenes":
             return self._handle_list_scenes()
         if parsed.path == "/api/sessions":
@@ -933,6 +979,7 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
                 }
                 for item in snapshot.candidate_plans
             ],
+            "context_diagnostics": snapshot.context_diagnostics,
         }
 
     @staticmethod
@@ -943,6 +990,7 @@ class DebuggerRequestHandler(BaseHTTPRequestHandler):
             "status": candidate.status,
             "selected": candidate.selected,
             "error": candidate.error,
+            "diagnostics": candidate.diagnostics,
         }
 
     def _decision_to_dict(self, decision: DecisionView | None) -> dict[str, object] | None:
@@ -1165,6 +1213,7 @@ class GrpcInteractiveApiAdapter(InteractiveApiAdapter):
             status=candidate.status,
             selected=bool(candidate.selected),
             error=candidate.error,
+            diagnostics=_decode_json_field(getattr(candidate, "diagnostics_json", "")),
         )
 
     @classmethod
@@ -1282,6 +1331,9 @@ class GrpcInteractiveApiAdapter(InteractiveApiAdapter):
                 )
                 for item in getattr(snapshot, "candidate_plans", [])
             ],
+            context_diagnostics=_decode_json_field(
+                getattr(snapshot, "context_diagnostics_json", "")
+            ),
         )
 
 
@@ -1297,7 +1349,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--user-config",
         default=None,
-        help="Optional runtime user config YAML used to populate the scene dropdown",
+        help="Optional runtime user config YAML used to supplement discovered scenes",
     )
     parser.add_argument(
         "--usdz-glob",
@@ -1323,6 +1375,20 @@ def _load_scene_ids_from_user_config(user_config_path: str | None) -> list[str]:
     return sorted(set(scene_ids))
 
 
+def _load_available_scene_ids(
+    map_provider: SceneMapProvider,
+    user_config_path: str | None,
+) -> list[str]:
+    scene_ids: set[str] = set()
+    try:
+        scene_ids.update(map_provider.list_scene_ids())
+    except Exception:
+        # Keep the debugger usable even if artifact discovery is temporarily unavailable.
+        pass
+    scene_ids.update(_load_scene_ids_from_user_config(user_config_path))
+    return sorted(scene_ids)
+
+
 def main() -> None:
     args = create_arg_parser().parse_args()
     adapter: InteractiveApiAdapter
@@ -1331,9 +1397,7 @@ def main() -> None:
     else:
         adapter = MockInteractiveApiAdapter()
     map_provider = SceneMapProvider(args.usdz_glob)
-    scene_ids = _load_scene_ids_from_user_config(args.user_config)
-    if not scene_ids and not args.runtime_address:
-        scene_ids = map_provider.list_scene_ids()
+    scene_ids = _load_available_scene_ids(map_provider, args.user_config)
     server = InteractiveDebuggerServer(
         (args.host, args.port),
         adapter,

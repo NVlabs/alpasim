@@ -238,6 +238,7 @@ async def test_recompute_candidate_updates_latest_decision_bundle() -> None:
     assert runner._rollout.current_state.last_committed_decision_bundle == updated_bundle
     assert runner._latest_snapshot.latest_decision is not None
     assert len(runner._latest_snapshot.latest_decision.candidates) == 2
+    assert runner._latest_snapshot.context_diagnostics["candidate_count"] == 2
     runner._record_checkpoint_locked.assert_called_once_with(runner._latest_snapshot)
     assert state.status == "PAUSED"
 
@@ -298,5 +299,6 @@ async def test_select_candidate_updates_latest_decision_bundle() -> None:
     assert runner._rollout.current_state.last_committed_decision_bundle.selected_candidate_id == "input-4:fast:0"
     assert runner._latest_snapshot.latest_decision is not None
     assert runner._latest_snapshot.latest_decision.selected_candidate_id == "input-4:fast:0"
+    assert runner._latest_snapshot.context_diagnostics["selected_candidate_id"] == "input-4:fast:0"
     runner._record_checkpoint_locked.assert_called_once_with(runner._latest_snapshot)
     assert state.status == "PAUSED"

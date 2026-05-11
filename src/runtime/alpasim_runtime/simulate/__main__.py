@@ -43,9 +43,13 @@ logger = logging.getLogger(__name__)
 
 def get_run_name(log_dir: str) -> str:
     run_metadata_path = os.path.join(log_dir, "run_metadata.yaml")
+    if not os.path.exists(run_metadata_path):
+        return Path(log_dir).name or "alpasim_run"
     with open(run_metadata_path, "r") as f:
         run_metadata = yaml.safe_load(f)
-    return run_metadata.get("run_name")
+    if not isinstance(run_metadata, dict):
+        return Path(log_dir).name or "alpasim_run"
+    return run_metadata.get("run_name") or Path(log_dir).name or "alpasim_run"
 
 
 def create_arg_parser() -> argparse.ArgumentParser:

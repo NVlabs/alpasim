@@ -1,0 +1,60 @@
+# @package _global_
+# Local deployment override for using MTGS as the SensorsimService.
+#
+# It keeps the AlpaSim runtime contract unchanged and only replaces the
+# sensorsim container command. The mounted MTGS repo must provide the `mtgs`
+# Python package plus Nerfstudio/CUDA dependencies in the selected image/env.
+
+defaults:
+  - local
+  - _self_
+
+scenes:
+  scene_ids:
+    - mtgs-road_block-331220_4690660_331190_4690710
+  local_usdz_dir: ${repo-relative:"data/nre-artifacts/road_block-331220_4690660_331190_4690710"}
+
+runtime:
+  endpoints:
+    sensorsim:
+      n_concurrent_rollouts: 1
+    physics:
+      skip: true
+    trafficsim:
+      skip: true
+
+services:
+  sensorsim:
+    image: alpasim-base:0.1.4
+    external_image: false
+    volumes:
+      - ${repo-relative:"src"}:/repo/src
+      - ${repo-relative:"MTGS"}:/mnt/mtgs
+      - ${repo-relative:"data/nre-artifacts/road_block-331220_4690660_331190_4690710"}:/mnt/mtgs-artifact
+    environments:
+      - OMP_NUM_THREADS=1
+      - MTGS_REPO=/mnt/mtgs
+      - PYTHONPATH=/repo/src/mtgs_sensorsim:/repo/src/grpc:/mnt/mtgs
+    workdir: /repo
+    command:
+      - "uv run --no-sync python -m alpasim_mtgs_sensorsim"
+      - "--host=0.0.0.0"
+      - "--port={port}"
+      - "--config=/mnt/mtgs/experiments/main_mt/MTGS/road_block-331220_4690660_331190_4690710/config.yml"
+      - "--artifact-dir=/mnt/mtgs-artifact"
+      - "--scene-id=mtgs-road_block-331220_4690660_331190_4690710"
+      - "--travel-id=7"
+      - "--native-height=1080"
+      - "--native-width=1920"
+      - "--warmup-renders=1"
+      - "--warmup-height=180"
+      - "--warmup-width=320"
+      - "--log-level=${wizard.log_level}"
+    replicas_per_container: 1
+    gpus: [0]
+
+  driver:
+    gpus: null
+
+  physics:
+    gpus: null

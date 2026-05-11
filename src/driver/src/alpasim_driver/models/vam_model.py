@@ -78,9 +78,10 @@ def _format_trajs(trajs: torch.Tensor) -> np.ndarray:
 class VAMModel(BaseTrajectoryModel):
     """VAM wrapper implementing the common interface."""
 
-    # VAM uses float16 for inference; float32 on ARM (torch.amp.autocast on aarch64
-    # doesn't auto-cast Float32 weights in F.linear — fails across PyTorch versions)
-    DTYPE = torch.float32 if platform.machine() == "aarch64" else torch.float16
+    # Keep VAM inference in float32. Some VAM checkpoints keep the action expert
+    # weights in fp32; passing fp16 action tensors into that path fails in
+    # F.linear with a Half-vs-Float dtype mismatch.
+    DTYPE = torch.float32
     # VAM only supports single camera
     NUM_CAMERAS = 1
     # NeuroNCAPTransform expects 900x1600 input
@@ -137,7 +138,7 @@ class VAMModel(BaseTrajectoryModel):
         self._camera_ids = camera_ids
         self._context_length = context_length
         self._preproc_pipeline = NeuroNCAPTransform()
-        self._use_autocast = device.type == "cuda" and platform.machine() != "aarch64"
+        self._use_autocast = device.type == "cuda" and self.DTYPE != torch.float32
 
     @property
     def camera_ids(self) -> list[str]:

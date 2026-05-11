@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class CandidateSummaryModel:
     status: str
     selected: bool
     error: str = ""
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ class SessionSnapshotModel:
     ego_history: list[PolylinePointModel] = field(default_factory=list)
     selected_plan: list[PolylinePointModel] = field(default_factory=list)
     candidate_plans: list[CandidatePlanModel] = field(default_factory=list)
+    context_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

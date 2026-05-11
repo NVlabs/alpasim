@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import pickle
 import random
 from typing import Optional, Type
 
@@ -76,6 +77,7 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         super().__init__(address=address, skip=skip)
         self._next_model_override: str | None = None
         self._planner_context_override: dict[str, object] | None = None
+        self._last_drive_debug_info: dict[str, object] = {}
 
     def set_next_model_for_next_drive(self, model_type: str | None) -> None:
         """Request a model switch for the next drive() call only."""
@@ -86,6 +88,12 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     ) -> None:
         """Set per-frame planner context payload for the next drive() call only."""
         self._planner_context_override = planner_context
+
+    def consume_last_drive_debug_info(self) -> dict[str, object]:
+        """Return and clear the latest parsed driver debug payload."""
+        payload = dict(self._last_drive_debug_info)
+        self._last_drive_debug_info = {}
+        return payload
 
     @property
     def stub_class(self) -> Type[EgodriverServiceStub]:
@@ -304,7 +312,21 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             response = await profiled_rpc_call(
                 "drive", "driver", self.stub.drive, request
             )
+            self._last_drive_debug_info = _decode_drive_debug_info(response)
 
         await session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
         return trajectory_from_grpc(response.trajectory)
+
+
+def _decode_drive_debug_info(response: DriveResponse) -> dict[str, object]:
+    debug_info = getattr(response, "debug_info", None)
+    raw = getattr(debug_info, "unstructured_debug_info", b"")
+    if not raw:
+        return {}
+    try:
+        payload = pickle.loads(raw)
+    except Exception:
+        logger.warning("Failed to decode driver debug info payload")
+        return {}
+    return payload if isinstance(payload, dict) else {}

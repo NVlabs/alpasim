@@ -317,6 +317,9 @@ class InteractiveSessionRunner:
                 self._latest_snapshot = replace(
                     self._latest_snapshot,
                     latest_decision=_decision_summary_from_bundle(updated_bundle),
+                    selected_plan=_selected_plan_from_bundle(updated_bundle),
+                    candidate_plans=_candidate_plans_from_bundle(updated_bundle),
+                    context_diagnostics=_context_diagnostics_from_bundle(updated_bundle),
                 )
             if self._latest_snapshot is not None:
                 self._record_checkpoint_locked(self._latest_snapshot)
@@ -338,6 +341,9 @@ class InteractiveSessionRunner:
                 self._latest_snapshot = replace(
                     self._latest_snapshot,
                     latest_decision=_decision_summary_from_bundle(updated_bundle),
+                    selected_plan=_selected_plan_from_bundle(updated_bundle),
+                    candidate_plans=_candidate_plans_from_bundle(updated_bundle),
+                    context_diagnostics=_context_diagnostics_from_bundle(updated_bundle),
                 )
                 self._record_checkpoint_locked(self._latest_snapshot)
             state = self._build_state()
@@ -514,6 +520,9 @@ class InteractiveSessionRunner:
             ego_history=ego_history,
             selected_plan=selected_plan,
             candidate_plans=candidate_plans,
+            context_diagnostics=_context_diagnostics_from_bundle(
+                state.last_committed_decision_bundle
+            ),
         )
 
     def _build_state(self) -> SessionStateModel:
@@ -618,6 +627,7 @@ def _candidate_summary_from_decision(
         status=candidate.status.value,
         selected=candidate.candidate_id == selected_candidate_id,
         error=candidate.error or "",
+        diagnostics=_normalize_debug_payload(candidate.diagnostics),
     )
 
 
@@ -690,3 +700,37 @@ def _candidate_plans_from_bundle(
             )
         )
     return plans
+
+
+def _context_diagnostics_from_bundle(
+    bundle: DecisionBundle | None,
+) -> dict[str, object]:
+    if bundle is None:
+        return {}
+    planner_context = bundle.snapshot.planner_context or {}
+    diagnostics = {
+        "timing": planner_context.get("timing", {}),
+        "quality": planner_context.get("quality", {}),
+        "map_summary": planner_context.get("map_summary", {}),
+        "route_waypoint_count": len(planner_context.get("route_waypoints_in_rig", []) or []),
+        "candidate_count": len(bundle.candidates),
+        "selected_candidate_id": bundle.selected_candidate_id,
+        "arbitration_reason": bundle.arbitration_reason or "",
+    }
+    return _normalize_debug_payload(diagnostics)
+
+
+def _normalize_debug_payload(value):
+    if isinstance(value, dict):
+        return {str(key): _normalize_debug_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_debug_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_debug_payload(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)

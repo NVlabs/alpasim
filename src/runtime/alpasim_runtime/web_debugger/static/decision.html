@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alpasim 决策分析</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = { theme: { extend: { colors: { brand: { 500: '#0ea5e9', 600: '#0284c7' } } } } }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; background: #f8fafc; color: #0f172a; }
+    .panel { background: white; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); border-radius: 16px; }
+    .kv-row { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+    .kv-row:last-child { border-bottom: 0; }
+  </style>
+</head>
+<body class="min-h-screen overflow-hidden">
+  <div id="error-banner" class="hidden mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"></div>
+  <header class="h-14 border-b border-slate-200 bg-white/90 backdrop-blur px-6 flex items-center justify-between">
+    <div>
+      <div class="text-[11px] font-black uppercase tracking-[0.3em] text-slate-400">Decision Analysis</div>
+      <div class="mt-1 flex items-center gap-3 text-sm font-bold text-slate-900">
+        <span id="header-scene">未连接会话</span>
+        <span class="text-slate-300">/</span>
+        <span id="header-tick" class="font-mono text-brand-600">T-</span>
+        <span id="header-status" class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase text-slate-600">offline</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 text-[11px] font-bold">
+      <a id="main-page-link" href="/" class="rounded-lg border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50">返回主控台</a>
+      <button id="refresh" class="rounded-lg border border-slate-200 px-3 py-2 text-slate-600 hover:bg-slate-50">刷新</button>
+      <button id="pause" class="rounded-lg bg-slate-100 px-3 py-2 text-slate-700 hover:bg-slate-200">暂停</button>
+      <button id="resume" class="rounded-lg bg-emerald-600 px-3 py-2 text-white hover:bg-emerald-500">继续</button>
+      <button id="step" class="rounded-lg bg-brand-600 px-3 py-2 text-white hover:bg-brand-500">单步</button>
+    </div>
+  </header>
+
+  <main class="h-[calc(100vh-56px)] p-4 grid grid-cols-[280px_minmax(0,1fr)_360px] gap-4 overflow-hidden">
+    <aside class="flex flex-col gap-4 overflow-hidden">
+      <section class="panel p-4">
+        <div class="mb-3 flex items-center justify-between">
+          <h2 class="text-[11px] font-black uppercase tracking-widest text-slate-400">会话</h2>
+          <button id="reconnect" class="text-[10px] font-bold text-brand-600">恢复上次</button>
+        </div>
+        <select id="scene-id" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"></select>
+        <button id="create-session" class="mt-3 w-full rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-bold text-white">创建分析会话</button>
+      </section>
+      <section class="panel p-4 overflow-hidden flex flex-col">
+        <div class="mb-3 flex items-center justify-between">
+          <h2 class="text-[11px] font-black uppercase tracking-widest text-slate-400">后端集合</h2>
+          <button id="apply-backends" class="rounded-md bg-slate-900 px-2 py-1 text-[10px] font-bold text-white">应用</button>
+        </div>
+        <div id="backend-selector" class="space-y-2 overflow-y-auto"></div>
+      </section>
+      <section class="panel p-4 overflow-hidden flex flex-col">
+        <div class="mb-3 flex items-center justify-between">
+          <h2 class="text-[11px] font-black uppercase tracking-widest text-slate-400">决策时间线</h2>
+          <div class="flex gap-1">
+            <button id="prev-tick" class="rounded border border-slate-200 px-2 py-1 text-[10px]">上一帧</button>
+            <button id="next-tick" class="rounded border border-slate-200 px-2 py-1 text-[10px]">下一帧</button>
+          </div>
+        </div>
+        <div id="timeline-list" class="overflow-y-auto space-y-2 pr-1"></div>
+      </section>
+    </aside>
+
+    <section class="flex flex-col gap-4 overflow-hidden">
+      <div class="grid grid-cols-4 gap-4">
+        <div class="panel p-4">
+          <div class="text-[10px] font-black uppercase text-slate-400">Selected Backend</div>
+          <div id="selected-backend" class="mt-3 text-lg font-bold text-slate-900">-</div>
+          <div id="selected-model" class="mt-1 text-[11px] text-slate-500">model: -</div>
+        </div>
+        <div class="panel p-4">
+          <div class="text-[10px] font-black uppercase text-slate-400">Fallback</div>
+          <div id="fallback-reason" class="mt-3 text-lg font-bold text-rose-600">-</div>
+          <div id="proposal-count" class="mt-1 text-[11px] text-slate-500">proposals: -</div>
+        </div>
+        <div class="panel p-4">
+          <div class="text-[10px] font-black uppercase text-slate-400">Arbitration</div>
+          <div id="arbitration-reason" class="mt-3 text-lg font-bold text-slate-900">-</div>
+          <div id="selected-candidate" class="mt-1 truncate text-[11px] text-slate-500">candidate: -</div>
+        </div>
+        <div class="panel p-4">
+          <div class="text-[10px] font-black uppercase text-slate-400">Snapshot Time</div>
+          <div id="snapshot-time" class="mt-3 text-lg font-bold text-slate-900">-</div>
+          <div id="snapshot-input" class="mt-1 truncate text-[11px] text-slate-500">input: -</div>
+        </div>
+      </div>
+
+      <div class="panel p-4 overflow-hidden flex flex-col">
+        <div class="mb-3 flex items-center justify-between">
+          <h2 class="text-[11px] font-black uppercase tracking-widest text-slate-400">候选分析</h2>
+          <div class="text-[10px] text-slate-500">绿: VAM / 红: PDM</div>
+        </div>
+        <div id="candidate-list" class="grid grid-cols-2 gap-3 overflow-y-auto pr-1"></div>
+      </div>
+    </section>
+
+    <aside class="flex flex-col gap-4 overflow-hidden">
+      <section class="panel p-4 overflow-hidden flex flex-col">
+        <h2 class="mb-3 text-[11px] font-black uppercase tracking-widest text-slate-400">Timing / Freshness</h2>
+        <div id="timing-metrics" class="overflow-y-auto pr-1"></div>
+      </section>
+      <section class="panel p-4 overflow-hidden flex flex-col">
+        <h2 class="mb-3 text-[11px] font-black uppercase tracking-widest text-slate-400">Quality / Context</h2>
+        <div id="quality-metrics" class="overflow-y-auto pr-1"></div>
+      </section>
+      <section class="panel p-4 overflow-hidden flex flex-col">
+        <h2 class="mb-3 text-[11px] font-black uppercase tracking-widest text-slate-400">选中候选详情</h2>
+        <pre id="selected-debug-json" class="overflow-y-auto rounded-xl bg-slate-950 p-3 text-[10px] leading-5 text-slate-100"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="/assets/decision.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from alpasim_grpc.v1 import interactive_runtime_pb2, interactive_runtime_pb2_grpc
@@ -113,6 +114,10 @@ def _snapshot_to_proto(snapshot: SessionSnapshotModel) -> interactive_runtime_pb
             _candidate_plan_to_proto(candidate_plan)
             for candidate_plan in snapshot.candidate_plans
         ],
+        context_diagnostics_json=json.dumps(
+            snapshot.context_diagnostics,
+            sort_keys=True,
+        ),
     )
     if snapshot.latest_decision is not None and hasattr(message, "latest_decision"):
         message.latest_decision.CopyFrom(_decision_to_proto(snapshot.latest_decision))
@@ -147,6 +152,7 @@ def _candidate_to_proto(
         status=candidate.status,
         selected=candidate.selected,
         error=candidate.error,
+        diagnostics_json=json.dumps(candidate.diagnostics, sort_keys=True),
     )
 
 

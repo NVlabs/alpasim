@@ -314,6 +314,8 @@ class DriverServiceBackendAdapter:
             time_query_us=snapshot.time_query_us,
             renderer_data=snapshot.renderer_data,
         )
+        driver_debug_getter = getattr(self._driver, "consume_last_drive_debug_info", None)
+        driver_debug = driver_debug_getter() if callable(driver_debug_getter) else {}
         return CandidateDecision(
             candidate_id=candidate_id,
             step_id=snapshot.step_id,
@@ -325,6 +327,9 @@ class DriverServiceBackendAdapter:
                 "backend_type": self.metadata.backend_type,
                 "input_snapshot_id": snapshot.input_snapshot_id,
                 "model_type_override": self._model_type_override,
+                "driver_debug": driver_debug,
+                "planner_context_quality": (snapshot.planner_context or {}).get("quality", {}),
+                "planner_context_timing": (snapshot.planner_context or {}).get("timing", {}),
             },
             generated_at_us=snapshot.time_now_us,
         )

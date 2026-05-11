@@ -39,12 +39,14 @@ def _make_decision() -> DecisionSummaryModel:
                 backend_id="fast",
                 status="READY",
                 selected=False,
+                diagnostics={"driver_debug": {"selected_model_type": "fast"}},
             ),
             CandidateSummaryModel(
                 candidate_id="input-3:safe:0",
                 backend_id="safe",
                 status="SELECTED",
                 selected=True,
+                diagnostics={"driver_debug": {"selected_model_type": "safe"}},
             ),
         ],
         arbitration_reason="priority",
@@ -64,6 +66,7 @@ def test_state_to_proto_includes_latest_decision() -> None:
         actors=[],
         frame_refs=[],
         latest_decision=decision,
+        context_diagnostics={"timing": {"ego_age_ms": 0.0}},
     )
     state = SessionStateModel(
         interactive_session_id="sess-1",
@@ -82,7 +85,9 @@ def test_state_to_proto_includes_latest_decision() -> None:
     assert proto.latest_decision.step_id == 3
     assert proto.latest_decision.selected_candidate_id == "input-3:safe:0"
     assert len(proto.latest_decision.candidates) == 2
+    assert proto.latest_decision.candidates[0].diagnostics_json != ""
     assert proto.latest_snapshot.latest_decision.step_id == 3
+    assert proto.latest_snapshot.context_diagnostics_json != ""
     assert list(proto.active_backend_ids) == ["fast", "safe"]
 
 

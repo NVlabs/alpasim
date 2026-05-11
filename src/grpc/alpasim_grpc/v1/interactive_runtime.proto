@@ -179,6 +179,7 @@ message CandidateSummary {
     string status = 3;
     bool selected = 4;
     string error = 5;
+    string diagnostics_json = 6;
 }
 
 message DecisionSummary {
@@ -209,6 +210,7 @@ message SessionSnapshot {
     repeated PolylinePoint ego_history = 8;
     repeated PolylinePoint selected_plan = 9;
     repeated CandidatePlan candidate_plans = 10;
+    string context_diagnostics_json = 11;
 }
 
 message SessionState {

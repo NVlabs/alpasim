@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim-mtgs-sensorsim"
+version = "0.1.0"
+description = "MTGS-backed implementation of the AlpaSim SensorsimService"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "alpasim-grpc",
+    "grpcio",
+    "numpy",
+    "opencv-python-headless",
+    "scipy",
+    "torch",
+]
+
+[project.scripts]
+alpasim_mtgs_sensorsim = "alpasim_mtgs_sensorsim.server:main"
+
+[tool.uv.sources]
+alpasim-grpc = { workspace = true }
+
+[tool.setuptools]
+py-modules = ["mtgs_sensorsim_server"]
+
+[tool.setuptools.packages.find]
+include = ["alpasim_mtgs_sensorsim*"]

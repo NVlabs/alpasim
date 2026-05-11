@@ -1,0 +1,65 @@
+# @package _global_
+# Local deployment override for running MTGS sensorsim outside Docker.
+#
+# Start the MTGS gRPC service in the host conda `mtgs` environment on
+# localhost:50053, then run the wizard with `+deploy=local_external_mtgs_sensorsim`.
+
+defaults:
+  - local
+  - _self_
+
+scenes:
+  scene_ids:
+    - mtgs-road_block-331220_4690660_331190_4690710
+  local_usdz_dir: ${repo-relative:"data/nre-artifacts/road_block-331220_4690660_331190_4690710"}
+
+wizard:
+  debug_flags:
+    use_localhost: true
+  run_sim_services:
+    ["driver", "physics", "trafficsim", "controller", "runtime"]
+  external_services:
+    sensorsim:
+      - "localhost:50053"
+
+runtime:
+  extra_cameras: []
+  endpoints:
+    do_shutdown: false
+    sensorsim:
+      n_concurrent_rollouts: 1
+      skip: false
+    physics:
+      skip: true
+    trafficsim:
+      skip: true
+  simulation_config:
+    cameras:
+      - logical_id: CAM_F0
+        height: 180
+        width: 320
+        frame_interval_us: 100000
+        shutter_duration_us: 30000
+        first_frame_offset_us: -30000
+    n_sim_steps: 100
+    n_rollouts: 1
+    group_render_requests: false
+    min_traffic_duration_us: 0
+
+driver:
+  inference:
+    use_cameras: ["CAM_F0"]
+  rectification: null
+
+eval:
+  scorers:
+    image:
+      camera_logical_id: CAM_F0
+  video:
+    camera_id_to_render: CAM_F0
+
+services:
+  driver:
+    gpus: null
+  physics:
+    gpus: null
