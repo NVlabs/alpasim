@@ -36,12 +36,12 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import csaps
 import numpy as np
 from alpasim_utils.artifact import Metadata
-from alpasim_utils.geometry import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import (
     AABB,
     CameraId,
@@ -84,6 +84,7 @@ class TrajdataDataSource(SceneDataSource):
     _map_api: Optional[object] = (
         None  # MapAPI for loading maps (lightweight, can be passed separately)
     )
+    _vector_map_params: dict | None = None
     _rig: Rig | None = None
     _traffic_objects: TrafficObjects | None = None
     _map: VectorMap | None = None
@@ -91,6 +92,8 @@ class TrajdataDataSource(SceneDataSource):
     _smooth_trajectories: bool = True
     _scene_id: str = ""
     _asset_base_path: str | None = None  # Base path for rendering assets
+    _asset_folder_resolver: Optional[Callable[["Scene"], str]] = None
+    _base_timestamp_us: int = 0
 
     @classmethod
     def from_trajdata_scene(
@@ -98,11 +101,13 @@ class TrajdataDataSource(SceneDataSource):
         scene: Scene,
         dataset: Optional[UnifiedDataset] = None,
         map_api=None,
+        vector_map_params: Optional[dict] = None,
         scene_cache: Optional[EnvCache] = None,
         scene_id: Optional[str] = None,
         smooth_trajectories: bool = True,
         base_timestamp_us: int = 0,
         asset_base_path: Optional[str] = None,
+        asset_folder_resolver: Optional[Callable[[Scene], str]] = None,
     ) -> TrajdataDataSource:
         """
         Create TrajdataDataSource from trajdata Scene object.
@@ -111,11 +116,20 @@ class TrajdataDataSource(SceneDataSource):
             scene: trajdata Scene object
             dataset: UnifiedDataset instance (for getting scene_cache and map)
             map_api: MapAPI instance for loading maps (lightweight alternative to dataset)
+            vector_map_params: Map loading parameters (e.g. incl_road_lanes,
+                keep_in_memory). Falls back to ``dataset.vector_map_params`` when
+                a dataset is provided.
             scene_cache: Optional EnvCache instance (if not provided, will be created from dataset)
             scene_id: Optional scene ID (if not provided, uses scene.name)
             smooth_trajectories: Whether to smooth trajectories
-            base_timestamp_us: Base timestamp in microseconds, starts from 0 if None
+            base_timestamp_us: Base timestamp in microseconds added to every
+                per-step timestamp. Defaults to 0 (trajectory starts at t=0).
             asset_base_path: Base path for rendering assets (e.g., MTGS assets)
+            asset_folder_resolver: Optional callable mapping a Scene to its
+                asset folder name. When provided, takes precedence over the
+                default ``data_access_info`` lookup. Plugins use this to inject
+                dataset-specific naming conventions instead of relying on
+                heuristics inside this class.
 
         Returns:
             TrajdataDataSource instance
@@ -124,12 +138,14 @@ class TrajdataDataSource(SceneDataSource):
             _scene=scene,
             _dataset=dataset,
             _map_api=map_api,
+            _vector_map_params=vector_map_params,
             _scene_cache=scene_cache,
             _scene_id=scene_id or scene.name,
             _smooth_trajectories=smooth_trajectories,
             _asset_base_path=asset_base_path,
+            _asset_folder_resolver=asset_folder_resolver,
+            _base_timestamp_us=base_timestamp_us,
         )
-        data_source._base_timestamp_us = base_timestamp_us
         return data_source
 
     @property
@@ -162,39 +178,27 @@ class TrajdataDataSource(SceneDataSource):
         """
         Extract the asset folder name from scene metadata.
 
-        This method attempts to determine the appropriate asset folder name
-        based on scene metadata. Override this in subclasses if needed.
-
         Resolution order:
-        1. USDZ: Use usdz_stem from data_access_info
-        2. Other datasets: Use log_id or asset_folder from data_access_info
-        3. Fallback: Use scene_id with common suffixes removed
+        1. User-supplied ``asset_folder_resolver`` callable (if given)
+        2. ``data_access_info`` keys, in order:
+           - ``asset_folder`` (explicit, generic)
+           - ``log_id`` (NuPlan-style)
+        3. Fallback: ``scene_id`` verbatim.
 
         Returns:
-            Asset folder name (defaults to scene_id if no specific name found)
+            Asset folder name.
         """
-        # Try to get from scene data_access_info
+        if self._asset_folder_resolver is not None and self._scene is not None:
+            return self._asset_folder_resolver(self._scene)
+
         if self._scene is not None and self._scene.data_access_info is not None:
             data_access_info = self._scene.data_access_info
+            for key in ("asset_folder", "log_id"):
+                value = data_access_info.get(key)
+                if value:
+                    return value
 
-            # USDZ: Use usdz_stem (filename without .usdz extension)
-            if "usdz_stem" in data_access_info:
-                return data_access_info["usdz_stem"]
-
-            # Look for asset_folder or similar keys
-            if "asset_folder" in data_access_info:
-                return data_access_info["asset_folder"]
-
-            # NuPlan and other datasets: use log_id
-            if "log_id" in data_access_info:
-                return data_access_info["log_id"]
-
-        # Default: use scene_id (potentially with suffix removed)
-        scene_name = self.scene_id
-        # Remove common suffixes like "-001"
-        if len(scene_name) > 4 and scene_name[-4] == "-" and scene_name[-3:].isdigit():
-            scene_name = scene_name[:-4]
-        return scene_name
+        return self.scene_id
 
     def set_asset_base_path(self, path: str | None) -> None:
         """Set the base path for rendering assets."""
@@ -281,7 +285,7 @@ class TrajdataDataSource(SceneDataSource):
 
         scene_cache = self._get_scene_cache()
         dt = self._scene.dt
-        base_timestamp_us = getattr(self, "_base_timestamp_us", None)
+        base_timestamp_us = self._base_timestamp_us
 
         try:
             timestamps_us = []
@@ -299,11 +303,7 @@ class TrajdataDataSource(SceneDataSource):
                     z_val = self._get_state_value(state, "z", default=0.0)
                     heading_val = self._get_state_value(state, "h")
 
-                    # Calculate timestamp
-                    if base_timestamp_us is None:
-                        timestamp_us = int(ts * dt * 1e6)
-                    else:
-                        timestamp_us = int(base_timestamp_us + ts * dt * 1e6)
+                    timestamp_us = int(base_timestamp_us + ts * dt * 1e6)
 
                     timestamps_us.append(timestamp_us)
                     positions_agent_world.append([x_val, y_val, z_val])
@@ -386,10 +386,16 @@ class TrajdataDataSource(SceneDataSource):
                 f"translation: {world_to_nre[:3, 3]}"
             )
 
-        # Convert ego trajectory to local coordinates (NRE)
+        # Convert ego trajectory to local coordinates (NRE).
+        # Use Pose.from_se3 so any rotation later added to world_to_nre flows
+        # through automatically; current callers populate translation only, but
+        # the SE3 path keeps quaternions correctly composed in both cases.
         if len(ego_trajectory) > 0:
-            translation = world_to_nre[:3, 3]
-            local_positions = ego_trajectory.positions + translation
+            # Pose.from_se3 expects a float32 4x4 SE3 matrix.
+            ego_trajectory = ego_trajectory.transform(
+                Pose.from_se3(world_to_nre.astype(np.float32, copy=False))
+            )
+            local_positions = ego_trajectory.positions
 
             # Validate transform
             position_ego_first_local = local_positions[0]
@@ -398,13 +404,6 @@ class TrajdataDataSource(SceneDataSource):
                     f"First pose after transformation is not at origin: {position_ego_first_local}. "
                     f"Expected [0, 0, ~z], got {position_ego_first_local}"
                 )
-
-            local_quat = ego_trajectory.quaternions.copy()
-            ego_trajectory = Trajectory(
-                timestamps=ego_trajectory.timestamps_us.copy(),
-                positions=local_positions,
-                quaternions=local_quat,
-            )
 
             logger.debug(
                 f"Transformed ego trajectory to local coordinates. "
@@ -586,10 +585,17 @@ class TrajdataDataSource(SceneDataSource):
         if ego_agent is None and len(all_agents) > 0:
             ego_agent = all_agents[0]
 
+        # world_to_nre is a per-scene constant; build the Pose once.
+        # Pose.from_se3 expects a float32 4x4 SE3 matrix.
+        self._ensure_rig_loaded()
+        world_to_nre_pose = Pose.from_se3(
+            self._rig.world_to_nre.astype(np.float32, copy=False)
+        )
+
         traffic_dict = {}
         for agent in all_agents:
             # Skip ego agent
-            if agent.name == "ego" or agent == ego_agent:
+            if agent.name == "ego" or agent is ego_agent:
                 continue
 
             # Extract trajectory
@@ -599,19 +605,8 @@ class TrajdataDataSource(SceneDataSource):
             if trajectory is None or len(trajectory) < 2:
                 continue
 
-            # Convert trajectory to local coordinates (NRE) - use rig's world_to_nre
-            # Explicit dependency: need world_to_nre from rig
-            self._ensure_rig_loaded()
-
-            world_to_nre = self._rig.world_to_nre
-            translation = world_to_nre[:3, 3]
-            local_positions = trajectory.positions + translation
-            local_quat = trajectory.quaternions.copy()
-            trajectory = Trajectory(
-                timestamps=trajectory.timestamps_us.copy(),
-                positions=local_positions,
-                quaternions=local_quat,
-            )
+            # Convert trajectory to local coordinates (NRE).
+            trajectory = trajectory.transform(world_to_nre_pose)
 
             # Smooth if needed
             if self._smooth_trajectories:
@@ -804,10 +799,11 @@ class TrajdataDataSource(SceneDataSource):
             logger.warning("Cannot load map: map_api not available")
             return None
 
-        # Get vector_map_params from dataset if available
-        vector_map_params = {}
-        if self._dataset is not None:
-            vector_map_params = getattr(self._dataset, "vector_map_params", {})
+        # Prefer explicitly-passed vector_map_params, fall back to dataset's.
+        vector_map_params = self._vector_map_params
+        if vector_map_params is None and self._dataset is not None:
+            vector_map_params = getattr(self._dataset, "vector_map_params", None)
+        vector_map_params = vector_map_params or {}
 
         # Build map name
         if not self._scene.location:
@@ -885,7 +881,7 @@ class TrajdataDataSource(SceneDataSource):
         if self._scene is not None:
             dt = self._scene.dt
             length_timesteps = self._scene.length_timesteps
-            base_timestamp_us = getattr(self, "_base_timestamp_us", 0.0)
+            base_timestamp_us = self._base_timestamp_us
             time_range_start = float(base_timestamp_us) / 1e6
             time_range_end = (
                 float(base_timestamp_us + length_timesteps * dt * 1e6) / 1e6
