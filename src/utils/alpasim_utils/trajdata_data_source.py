@@ -28,7 +28,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, ClassVar, Optional
 
 import csaps
 import numpy as np
@@ -68,6 +68,8 @@ class TrajdataDataSource(SceneDataSource):
 
     All properties use lazy loading and caching for efficiency.
     """
+
+    OBS_FORMAT: ClassVar[str] = "x,y,z,h"
 
     _scene: Scene | None = None
     _scene_cache: EnvCache | None = None
@@ -121,6 +123,7 @@ class TrajdataDataSource(SceneDataSource):
         Returns:
             TrajdataDataSource instance
         """
+        scene_cache.set_obs_format(cls.OBS_FORMAT)
         data_source = cls(
             _scene=scene,
             _map_api=map_api,
@@ -140,7 +143,7 @@ class TrajdataDataSource(SceneDataSource):
         return self._scene_id
 
     @property
-    def asset_path(self) -> str | None:
+    def asset_path(self) -> str:
         """
         Resolve asset folder path for this scene.
 
@@ -149,10 +152,10 @@ class TrajdataDataSource(SceneDataSource):
         (e.g., it might be /data/WE_processed/navtest/assets for MTGS).
 
         Returns:
-            Resolved asset folder path, or None if _asset_base_path is not set
+            Resolved asset folder path
         """
         if self._asset_base_path is None:
-            return None
+            raise ValueError("Asset base path is not set. Cannot resolve asset path.")
 
         # Extract asset folder name from scene metadata
         scene_name = self._extract_asset_folder_name()
@@ -200,38 +203,6 @@ class TrajdataDataSource(SceneDataSource):
             "TrajdataDataSource requires a pre-created scene_cache."
         )
 
-    @staticmethod
-    def _get_state_value(state, attr_name: str, default=None):
-        """Extract scalar value from state attribute using StateArray.get_attr().
-
-        Args:
-            state: StateArray object from trajdata cache (from get_raw_state)
-            attr_name: Name of attribute to extract (e.g., "x", "y", "h")
-            default: Default value if attribute doesn't exist
-
-        Returns:
-            Scalar float value
-
-        Raises:
-            AttributeError: If attribute doesn't exist and no default provided
-        """
-        try:
-            value = state.get_attr(attr_name)
-
-            if value is None:
-                if default is not None:
-                    return default
-                raise AttributeError(f"Attribute {attr_name} is None")
-
-            # Convert to scalar if needed
-            if isinstance(value, np.ndarray):
-                return float(value.flat[0])
-            return float(value)
-        except (KeyError, AttributeError, TypeError, IndexError) as e:
-            if default is not None:
-                return default
-            raise AttributeError(f"Failed to get {attr_name} from state: {e}")
-
     def _ensure_rig_loaded(self) -> None:
         """Ensure rig is loaded before accessing world_to_nre.
 
@@ -245,7 +216,7 @@ class TrajdataDataSource(SceneDataSource):
         self,
         agent: AgentMetadata,
     ) -> tuple[Optional[Trajectory], Optional[VehicleConfig]]:
-        """Extract complete trajectory for agent (refer to trajdata_artifact_converter.py implementation)"""
+        """Extract the complete world-frame trajectory for an agent."""
         if self._scene is None:
             return None, None
 
@@ -254,47 +225,31 @@ class TrajdataDataSource(SceneDataSource):
         base_timestamp_us = self._base_timestamp_us
 
         try:
-            timestamps_us = []
-            positions_agent_world = []
-            quaternions_agent_world = []
-
-            # Iterate through all timesteps
-            for ts in range(agent.first_timestep, agent.last_timestep + 1):
-                try:
-                    state = scene_cache.get_raw_state(agent.name, ts)
-
-                    # Get position and orientation using helper
-                    x_val = self._get_state_value(state, "x")
-                    y_val = self._get_state_value(state, "y")
-                    z_val = self._get_state_value(state, "z", default=0.0)
-                    heading_val = self._get_state_value(state, "h")
-
-                    timestamp_us = int(base_timestamp_us + ts * dt * 1e6)
-
-                    timestamps_us.append(timestamp_us)
-                    positions_agent_world.append([x_val, y_val, z_val])
-
-                    # Convert heading to quaternion
-                    quat = R.from_euler("z", heading_val).as_quat()  # [x, y, z, w]
-                    quaternions_agent_world.append(quat)
-
-                except Exception as e:
-                    logger.debug(
-                        f"Failed to get state for agent {agent.name} at ts {ts}: {e}"
-                    )
-                    continue
-
-            if len(timestamps_us) == 0:
+            states, _ = scene_cache.get_agent_history(
+                agent,
+                agent.last_timestep,
+                history_sec=(None, None),
+            )
+            if len(states) == 0:
                 return None, None
 
-            # Create Trajectory
+            positions_agent_world = np.asarray(
+                states.position3d,
+                dtype=np.float32,
+            )
+            headings = np.asarray(states.heading, dtype=np.float64).reshape(-1, 1)
+            quaternions_agent_world = R.from_euler("z", headings).as_quat()
+
+            first_timestep = agent.last_timestep - len(states) + 1
+            timesteps = first_timestep + np.arange(len(states), dtype=np.float64)
+            timestamps_us = (base_timestamp_us + timesteps * dt * 1e6).astype(np.uint64)
+
             trajectory = Trajectory(
-                timestamps=np.array(timestamps_us, dtype=np.uint64),
-                positions=np.array(positions_agent_world, dtype=np.float32),
-                quaternions=np.array(quaternions_agent_world, dtype=np.float32),
+                timestamps=timestamps_us,
+                positions=positions_agent_world,
+                quaternions=quaternions_agent_world.astype(np.float32),
             )
 
-            # Create VehicleConfig (extract from extent)
             vehicle_config = VehicleConfig(
                 aabb_x_m=agent.extent.length,
                 aabb_y_m=agent.extent.width,
@@ -386,6 +341,8 @@ class TrajdataDataSource(SceneDataSource):
             sequence_id=self.scene_id,
             trajectory=ego_trajectory,
             camera_ids=camera_ids,
+            camera_frame_timestamps_us={},
+            camera_frame_ranges_us={},
             world_to_nre=world_to_nre,
             vehicle_config=ego_vehicle_config,
         )

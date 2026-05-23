@@ -226,7 +226,7 @@ class TrajdataSceneProvider:
         scene_cache = self._dataset.cache_class(
             self._dataset.cache_path, scene, self._dataset.augmentations
         )
-        scene_cache.set_obs_format(self._dataset.obs_format)
+        scene_cache.set_obs_format(TrajdataDataSource.OBS_FORMAT)
 
         data_source = TrajdataDataSource.from_trajdata_scene(
             scene=scene,
