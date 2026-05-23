@@ -9,21 +9,13 @@ data directly from trajdata converted data without requiring USDZ format. This i
 useful for researchers using trajdata datasets.
 
 Usage example:
-    from trajdata import UnifiedDataset
     from alpasim_utils.trajdata_data_source import TrajdataDataSource
 
-    # Load trajdata dataset
-    dataset = UnifiedDataset(
-        desired_data=["nusc_mini"],
-        data_dirs={"/path/to/trajdata/data"},
-        ...
+    # Create data source from a trajdata Scene and pre-created EnvCache.
+    data_source = TrajdataDataSource.from_trajdata_scene(
+        scene=scene,
+        scene_cache=scene_cache,
     )
-
-    # Get a scene
-    scene = dataset.get_scene("nusc_mini", "scene-0001")
-
-    # Create data source
-    data_source = TrajdataDataSource.from_trajdata_scene(scene)
 
     # Now can be used in Runtime
     # artifacts = {data_source.scene_id: data_source}
@@ -55,7 +47,6 @@ from scipy.spatial.transform import Rotation as R
 from trajdata.caching import EnvCache
 from trajdata.data_structures.agent import AgentMetadata
 from trajdata.data_structures.scene_metadata import Scene
-from trajdata.dataset import UnifiedDataset
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -80,7 +71,6 @@ class TrajdataDataSource(SceneDataSource):
 
     _scene: Scene | None = None
     _scene_cache: EnvCache | None = None
-    _dataset: UnifiedDataset | None = None
     _map_api: Optional[object] = (
         None  # MapAPI for loading maps (lightweight, can be passed separately)
     )
@@ -99,10 +89,9 @@ class TrajdataDataSource(SceneDataSource):
     def from_trajdata_scene(
         cls,
         scene: Scene,
-        dataset: Optional[UnifiedDataset] = None,
+        scene_cache: EnvCache,
         map_api=None,
         vector_map_params: Optional[dict] = None,
-        scene_cache: Optional[EnvCache] = None,
         scene_id: Optional[str] = None,
         smooth_trajectories: bool = True,
         base_timestamp_us: int = 0,
@@ -114,12 +103,10 @@ class TrajdataDataSource(SceneDataSource):
 
         Args:
             scene: trajdata Scene object
-            dataset: UnifiedDataset instance (for getting scene_cache and map)
-            map_api: MapAPI instance for loading maps (lightweight alternative to dataset)
+            scene_cache: EnvCache instance for this scene.
+            map_api: MapAPI instance for loading maps.
             vector_map_params: Map loading parameters (e.g. incl_road_lanes,
-                keep_in_memory). Falls back to ``dataset.vector_map_params`` when
-                a dataset is provided.
-            scene_cache: Optional EnvCache instance (if not provided, will be created from dataset)
+                keep_in_memory).
             scene_id: Optional scene ID (if not provided, uses scene.name)
             smooth_trajectories: Whether to smooth trajectories
             base_timestamp_us: Base timestamp in microseconds added to every
@@ -136,7 +123,6 @@ class TrajdataDataSource(SceneDataSource):
         """
         data_source = cls(
             _scene=scene,
-            _dataset=dataset,
             _map_api=map_api,
             _vector_map_params=vector_map_params,
             _scene_cache=scene_cache,
@@ -205,33 +191,13 @@ class TrajdataDataSource(SceneDataSource):
         self._asset_base_path = path
 
     def _get_scene_cache(self) -> EnvCache:
-        """Get or create scene_cache"""
+        """Get the scene cache supplied by the scene provider."""
         if self._scene_cache is not None:
             return self._scene_cache
 
-        if self._scene is None:
-            raise ValueError("Cannot create scene_cache: scene is not set")
-
-        # Try to create from dataset if available
-        if self._dataset is not None:
-            logger.debug(f"Creating scene_cache for scene: {self._scene.name}")
-            try:
-                self._scene_cache = self._dataset.cache_class(
-                    self._dataset.cache_path, self._scene, self._dataset.augmentations
-                )
-                self._scene_cache.set_obs_format(self._dataset.obs_format)
-                logger.debug("Scene cache created successfully")
-                return self._scene_cache
-            except Exception as e:
-                logger.error(f"Failed to create scene_cache: {e}")
-                raise
-
-        # If dataset is not set, scene_cache must be provided externally
         raise ValueError(
-            "Cannot create scene_cache: dataset is not set and scene_cache was not provided. "
-            "Either pass 'dataset' parameter or pre-create 'scene_cache' when creating TrajdataDataSource. "
-            "Example: TrajdataDataSource.from_trajdata_scene(scene, dataset=your_dataset) "
-            "or TrajdataDataSource.from_trajdata_scene(scene, scene_cache=your_cache)"
+            "Cannot load trajdata scene: scene_cache was not provided. "
+            "TrajdataDataSource requires a pre-created scene_cache."
         )
 
     @staticmethod
@@ -784,26 +750,18 @@ class TrajdataDataSource(SceneDataSource):
         logger.info("Successfully loaded map from scene.map_data")
         return vec_map
 
-    def _load_map_from_dataset_api(self) -> Optional[VectorMap]:
-        """Load map from dataset._map_api (datasets with map API).
+    def _load_map_from_map_api(self) -> Optional[VectorMap]:
+        """Load map from the explicitly provided map API.
 
         Returns:
             VectorMap if available, None otherwise
         """
-        # Try to get map_api from either self._map_api or self._dataset
         map_api = self._map_api
-        if map_api is None and self._dataset is not None:
-            map_api = getattr(self._dataset, "_map_api", None)
-
         if map_api is None:
             logger.warning("Cannot load map: map_api not available")
             return None
 
-        # Prefer explicitly-passed vector_map_params, fall back to dataset's.
-        vector_map_params = self._vector_map_params
-        if vector_map_params is None and self._dataset is not None:
-            vector_map_params = getattr(self._dataset, "vector_map_params", None)
-        vector_map_params = vector_map_params or {}
+        vector_map_params = self._vector_map_params or {}
 
         # Build map name
         if not self._scene.location:
@@ -838,7 +796,7 @@ class TrajdataDataSource(SceneDataSource):
             logger.info(f"Successfully loaded map: {map_name}")
             return vec_map
         except Exception as e:
-            logger.error(f"Error loading map from dataset API: {e}", exc_info=True)
+            logger.error(f"Error loading map from map API: {e}", exc_info=True)
             return None
 
     @property
@@ -856,8 +814,8 @@ class TrajdataDataSource(SceneDataSource):
         if self._map is not None:
             return self._map
 
-        # Fallback to dataset._map_api
-        self._map = self._load_map_from_dataset_api()
+        # Fallback to the trajdata map API supplied by the scene provider.
+        self._map = self._load_map_from_map_api()
         return self._map
 
     @property

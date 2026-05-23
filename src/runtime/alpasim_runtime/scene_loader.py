@@ -230,7 +230,6 @@ class TrajdataSceneProvider:
 
         data_source = TrajdataDataSource.from_trajdata_scene(
             scene=scene,
-            dataset=None,
             map_api=map_api,
             vector_map_params=vector_map_params,
             scene_cache=scene_cache,
