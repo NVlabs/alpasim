@@ -37,6 +37,7 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+video_model = ["alpasim-video-model"]
 
 [tool.uv.workspace]
 members = [
@@ -66,7 +67,8 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
+alpasim-video-model = { workspace = true }
+trajdata-alpasim = { path = "../trajdata", editable = true }
 
 [tool.uv]
 python-preference = "only-managed"
