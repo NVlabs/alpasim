@@ -12,7 +12,7 @@ Usage example:
     from alpasim_utils.trajdata_data_source import TrajdataDataSource
 
     # Create data source from a trajdata Scene and pre-created EnvCache.
-    data_source = TrajdataDataSource.from_trajdata_scene(
+    data_source = TrajdataDataSource(
         scene=scene,
         scene_cache=scene_cache,
     )
@@ -27,7 +27,7 @@ import copy
 import hashlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, ClassVar, Optional
 
 import csaps
@@ -71,97 +71,48 @@ class TrajdataDataSource(SceneDataSource):
 
     OBS_FORMAT: ClassVar[str] = "x,y,z,h"
 
-    _scene: Scene | None = None
-    _scene_cache: EnvCache | None = None
-    _map_api: Optional[object] = (
-        None  # MapAPI for loading maps (lightweight, can be passed separately)
+    scene: Scene
+    scene_cache: EnvCache
+    map_api: Optional[object] = None
+    vector_map_params: dict | None = None
+    smooth_trajectories: bool = True
+    scene_id: str = ""
+    asset_base_path: str | None = None
+    asset_folder_resolver: Optional[Callable[["Scene"], str]] = None
+    base_timestamp_us: int = 0
+
+    _rig: Rig | None = field(default=None, init=False, repr=False)
+    _traffic_objects: TrafficObjects | None = field(
+        default=None, init=False, repr=False
     )
-    _vector_map_params: dict | None = None
-    _rig: Rig | None = None
-    _traffic_objects: TrafficObjects | None = None
-    _map: VectorMap | None = None
-    _metadata: Metadata | None = None
-    _smooth_trajectories: bool = True
-    _scene_id: str = ""
-    _asset_base_path: str | None = None  # Base path for rendering assets
-    _asset_folder_resolver: Optional[Callable[["Scene"], str]] = None
-    _base_timestamp_us: int = 0
+    _map: VectorMap | None = field(default=None, init=False, repr=False)
+    _metadata: Metadata | None = field(default=None, init=False, repr=False)
 
-    @classmethod
-    def from_trajdata_scene(
-        cls,
-        scene: Scene,
-        scene_cache: EnvCache,
-        map_api=None,
-        vector_map_params: Optional[dict] = None,
-        scene_id: Optional[str] = None,
-        smooth_trajectories: bool = True,
-        base_timestamp_us: int = 0,
-        asset_base_path: Optional[str] = None,
-        asset_folder_resolver: Optional[Callable[[Scene], str]] = None,
-    ) -> TrajdataDataSource:
-        """
-        Create TrajdataDataSource from trajdata Scene object.
-
-        Args:
-            scene: trajdata Scene object
-            scene_cache: EnvCache instance for this scene.
-            map_api: MapAPI instance for loading maps.
-            vector_map_params: Map loading parameters (e.g. incl_road_lanes,
-                keep_in_memory).
-            scene_id: Optional scene ID (if not provided, uses scene.name)
-            smooth_trajectories: Whether to smooth trajectories
-            base_timestamp_us: Base timestamp in microseconds added to every
-                per-step timestamp. Defaults to 0 (trajectory starts at t=0).
-            asset_base_path: Base path for rendering assets (e.g., MTGS assets)
-            asset_folder_resolver: Optional callable mapping a Scene to its
-                asset folder name. When provided, takes precedence over the
-                default ``data_access_info`` lookup. Plugins use this to inject
-                dataset-specific naming conventions instead of relying on
-                heuristics inside this class.
-
-        Returns:
-            TrajdataDataSource instance
-        """
-        scene_cache.set_obs_format(cls.OBS_FORMAT)
-        data_source = cls(
-            _scene=scene,
-            _map_api=map_api,
-            _vector_map_params=vector_map_params,
-            _scene_cache=scene_cache,
-            _scene_id=scene_id or scene.name,
-            _smooth_trajectories=smooth_trajectories,
-            _asset_base_path=asset_base_path,
-            _asset_folder_resolver=asset_folder_resolver,
-            _base_timestamp_us=base_timestamp_us,
-        )
-        return data_source
-
-    @property
-    def scene_id(self) -> str:
-        """Scene ID (immutable identifier)."""
-        return self._scene_id
+    def __post_init__(self) -> None:
+        self.scene_cache.set_obs_format(self.OBS_FORMAT)
+        if not self.scene_id:
+            self.scene_id = self.scene.name
 
     @property
     def asset_path(self) -> str:
         """
         Resolve asset folder path for this scene.
 
-        The asset path is constructed by appending the scene name to _asset_base_path.
-        The _asset_base_path should already contain any dataset-specific subdirectories
+        The asset path is constructed by appending the scene name to asset_base_path.
+        The asset_base_path should already contain any dataset-specific subdirectories
         (e.g., it might be /data/WE_processed/navtest/assets for MTGS).
 
         Returns:
             Resolved asset folder path
         """
-        if self._asset_base_path is None:
+        if self.asset_base_path is None:
             raise ValueError("Asset base path is not set. Cannot resolve asset path.")
 
         # Extract asset folder name from scene metadata
         scene_name = self._extract_asset_folder_name()
 
         # Simple join: asset_base_path already contains dataset-specific subdirs
-        return os.path.join(self._asset_base_path, scene_name)
+        return os.path.join(self.asset_base_path, scene_name)
 
     def _extract_asset_folder_name(self) -> str:
         """
@@ -177,11 +128,11 @@ class TrajdataDataSource(SceneDataSource):
         Returns:
             Asset folder name.
         """
-        if self._asset_folder_resolver is not None and self._scene is not None:
-            return self._asset_folder_resolver(self._scene)
+        if self.asset_folder_resolver is not None:
+            return self.asset_folder_resolver(self.scene)
 
-        if self._scene is not None and self._scene.data_access_info is not None:
-            data_access_info = self._scene.data_access_info
+        if self.scene.data_access_info is not None:
+            data_access_info = self.scene.data_access_info
             for key in ("asset_folder", "log_id"):
                 value = data_access_info.get(key)
                 if value:
@@ -191,17 +142,7 @@ class TrajdataDataSource(SceneDataSource):
 
     def set_asset_base_path(self, path: str | None) -> None:
         """Set the base path for rendering assets."""
-        self._asset_base_path = path
-
-    def _get_scene_cache(self) -> EnvCache:
-        """Get the scene cache supplied by the scene provider."""
-        if self._scene_cache is not None:
-            return self._scene_cache
-
-        raise ValueError(
-            "Cannot load trajdata scene: scene_cache was not provided. "
-            "TrajdataDataSource requires a pre-created scene_cache."
-        )
+        self.asset_base_path = path
 
     def _ensure_rig_loaded(self) -> None:
         """Ensure rig is loaded before accessing world_to_nre.
@@ -217,12 +158,12 @@ class TrajdataDataSource(SceneDataSource):
         agent: AgentMetadata,
     ) -> tuple[Optional[Trajectory], Optional[VehicleConfig]]:
         """Extract the complete world-frame trajectory for an agent."""
-        if self._scene is None:
+        if self.scene is None:
             return None, None
 
-        scene_cache = self._get_scene_cache()
-        dt = self._scene.dt
-        base_timestamp_us = self._base_timestamp_us
+        scene_cache = self.scene_cache
+        dt = self.scene.dt
+        base_timestamp_us = self.base_timestamp_us
 
         try:
             states, _ = scene_cache.get_agent_history(
@@ -271,11 +212,11 @@ class TrajdataDataSource(SceneDataSource):
         if self._rig is not None:
             return self._rig
 
-        if self._scene is None:
+        if self.scene is None:
             raise ValueError("Cannot load rig: scene is not set")
 
         # Get all agents
-        all_agents = self._scene.agents if self._scene.agents else []
+        all_agents = self.scene.agents if self.scene.agents else []
 
         # Identify ego agent
         ego_agent = next((a for a in all_agents if a.name == "ego"), None)
@@ -354,17 +295,17 @@ class TrajdataDataSource(SceneDataSource):
         camera_ids = []
         camera_calibrations = {}
 
-        if self._scene is None:
+        if self.scene is None:
             return camera_ids, camera_calibrations
 
         # Check if sensor_calibration information exists
-        if not self._scene.data_access_info:
+        if not self.scene.data_access_info:
             logger.warning(
                 "scene.data_access_info is empty, skipping camera information extraction"
             )
             return camera_ids, camera_calibrations
 
-        sensor_calibration = self._scene.data_access_info.get("sensor_calibration")
+        sensor_calibration = self.scene.data_access_info.get("sensor_calibration")
         if not sensor_calibration or not isinstance(sensor_calibration, dict):
             logger.warning(
                 "sensor_calibration does not exist or has incorrect format, skipping camera information extraction"
@@ -497,11 +438,11 @@ class TrajdataDataSource(SceneDataSource):
         if self._traffic_objects is not None:
             return self._traffic_objects
 
-        if self._scene is None:
+        if self.scene is None:
             raise ValueError("Cannot load traffic_objects: scene is not set")
 
         # Get all agents
-        all_agents = self._scene.agents if self._scene.agents else []
+        all_agents = self.scene.agents if self.scene.agents else []
 
         # Identify ego agent
         ego_agent = next((a for a in all_agents if a.name == "ego"), None)
@@ -532,7 +473,7 @@ class TrajdataDataSource(SceneDataSource):
             trajectory = trajectory.transform(world_to_nre_pose)
 
             # Smooth if needed
-            if self._smooth_trajectories:
+            if self.smooth_trajectories:
                 try:
                     css = csaps.CubicSmoothingSpline(
                         trajectory.timestamps_us / 1e6,
@@ -688,11 +629,11 @@ class TrajdataDataSource(SceneDataSource):
         Returns:
             VectorMap if available, None otherwise
         """
-        if not hasattr(self._scene, "map_data") or self._scene.map_data is None:
+        if not hasattr(self.scene, "map_data") or self.scene.map_data is None:
             return None
 
         logger.info(f"Loading map from scene.map_data for {self.scene_id}")
-        vec_map = copy.deepcopy(self._scene.map_data)
+        vec_map = copy.deepcopy(self.scene.map_data)
 
         # Ensure rig is loaded (need world_to_nre for transformation)
         self._ensure_rig_loaded()
@@ -713,19 +654,19 @@ class TrajdataDataSource(SceneDataSource):
         Returns:
             VectorMap if available, None otherwise
         """
-        map_api = self._map_api
+        map_api = self.map_api
         if map_api is None:
             logger.warning("Cannot load map: map_api not available")
             return None
 
-        vector_map_params = self._vector_map_params or {}
+        vector_map_params = self.vector_map_params or {}
 
         # Build map name
-        if not self._scene.location:
+        if not self.scene.location:
             logger.warning(f"Scene {self.scene_id} has no location, cannot load map")
             return None
 
-        map_name = f"{self._scene.env_name}:{self._scene.location}"
+        map_name = f"{self.scene.env_name}:{self.scene.location}"
 
         try:
             vec_map = map_api.get_map(map_name, **vector_map_params)
@@ -762,7 +703,7 @@ class TrajdataDataSource(SceneDataSource):
         if self._map is not None:
             return self._map
 
-        if self._scene is None:
+        if self.scene is None:
             logger.warning("Cannot load map: scene is not set")
             return None
 
@@ -793,10 +734,10 @@ class TrajdataDataSource(SceneDataSource):
             camera_id_names = [camera_id.logical_name for camera_id in rig.camera_ids]
 
         # Calculate time range
-        if self._scene is not None:
-            dt = self._scene.dt
-            length_timesteps = self._scene.length_timesteps
-            base_timestamp_us = self._base_timestamp_us
+        if self.scene is not None:
+            dt = self.scene.dt
+            length_timesteps = self.scene.length_timesteps
+            base_timestamp_us = self.base_timestamp_us
             time_range_start = float(base_timestamp_us) / 1e6
             time_range_end = (
                 float(base_timestamp_us + length_timesteps * dt * 1e6) / 1e6
