@@ -21,10 +21,10 @@ This module provides two clear paths for data preprocessing:
 Usage Examples:
 
     # Complex: Use user config with optional overrides
-    python -m alpasim_runtime.prepare_data --user-config user.yaml --rebuild-cache
+    python -m prepare_trajdata --user-config user.yaml --rebuild-cache
 
     # Simple: Direct CLI parameters for basic preprocessing
-    python -m alpasim_runtime.prepare_data \\
+    python -m prepare_trajdata \\
         --desired-data nuplan_test \\
         --data-dir /path/to/nuplan \\
         --cache-location /path/to/cache

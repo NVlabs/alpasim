@@ -23,6 +23,9 @@ dependencies = [
     "tqdm",
     "rich",
     "omegaconf",
+    "pyyaml",
+    "trajdata-alpasim",
+    "pandas<3",
     "protobuf",
     "grpcio",
     "scipy",
@@ -40,7 +43,11 @@ alpasim_grpc = {workspace = true}
 alpasim_utils = {workspace = true}
 alpasim_eval = {workspace = true}
 
+[project.scripts]
+prepare-trajdata = "prepare_trajdata.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = [
     "map_utils",
+    "prepare_trajdata",
 ]

@@ -26,7 +26,7 @@ Main exports:
 
 Example usage (programmatic):
 
-    from alpasim_runtime.prepare_data import preprocess_basic, PrepareDataConfig
+    from prepare_trajdata import preprocess_basic, PrepareDataConfig
 
     # Simple preprocessing with CLI config
     config = PrepareDataConfig(
@@ -45,18 +45,18 @@ Example usage (programmatic):
 
 CLI usage:
     # Simple mode
-    python -m alpasim_runtime.prepare_data \\
+    python -m prepare_trajdata \\
         --desired-data waymo \\
         --data-dir /path/to/waymo \\
         --cache-location /path/to/cache
 
     # Complex mode with user config
-    python -m alpasim_runtime.prepare_data \\
+    python -m prepare_trajdata \\
         --user-config user.yaml \\
         --rebuild-cache
 """
 
-from alpasim_runtime.prepare_data.__main__ import (
+from prepare_trajdata.cli import (
     PrepareDataConfig,
     load_yaml_configs,
     main,
