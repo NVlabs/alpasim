@@ -347,7 +347,7 @@ the predictions of a policy, you can set
 The scene in AlpaSim is a NuRec reconstruction of a real-world driving log.
 
 Publicly available NuRec scenes are stored on
-[Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/main/sample_set/25.07_release)
+[Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/25.07/sample_set/25.07_release)
 and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
 their uuid, rather than their filenames, to prevent versioning issues. The list of currently
 available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available suites
