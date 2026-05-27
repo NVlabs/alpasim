@@ -136,6 +136,11 @@ class WizardConfig:
     # can connect to services running externally (e.g., on developer's machine).
     external_services: dict[str, list[str]] | None = None
 
+    # Renderer mode: which renderer to use for image generation.
+    # Plugins can register alternative renderers via the `alpasim.services`
+    # entry-point group.
+    renderer_type: str = "sensorsim"
+
 
 @dataclass
 class ServicesConfig:

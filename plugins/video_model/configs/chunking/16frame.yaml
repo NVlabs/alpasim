@@ -1,0 +1,12 @@
+# @package _global_
+# Chunking knobs for a 16-frame video model server
+# (`--num_frames_per_block=16`). See chunking/8frame.yaml for the formula.
+
+runtime:
+  renderer_config:
+    first_chunk_frames: 13
+    chunk_frames: 16
+
+  simulation_config:
+    control_timestep_us: 533_328
+    force_gt_duration_us: 2_033_313

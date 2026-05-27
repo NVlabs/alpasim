@@ -100,6 +100,15 @@ class Pose:
         """
         ...
 
+    def blend(self, other: Pose, alpha: float) -> Pose:
+        """
+        Blend this pose with another pose.
+
+        Positions are linearly interpolated and rotations use spherical linear
+        interpolation. Alpha is clamped to [0, 1].
+        """
+        ...
+
     def yaw(self) -> float:
         """Extract yaw angle (rotation around Z axis) in radians."""
         ...
@@ -326,6 +335,19 @@ class Trajectory:
         :param is_relative: If true, applies right multiplication (pose @ transform),
                            otherwise left multiplication (transform @ pose). Default: false.
         :return: A new Trajectory with transformed poses.
+        """
+        ...
+
+    def blend(
+        self,
+        other: Trajectory,
+        alpha: float | NDArray[np.floating],
+    ) -> Trajectory:
+        """
+        Blend this trajectory with another trajectory.
+
+        The trajectories must have identical timestamps. Alpha may be a scalar
+        or a 1D float array with one value per pose. Values are clamped to [0, 1].
         """
         ...
 

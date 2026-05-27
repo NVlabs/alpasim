@@ -4,15 +4,19 @@
 from __future__ import annotations
 
 import asyncio
+import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import yaml
 from alpasim_grpc.v0 import runtime_pb2
 from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.daemon.engine import DaemonEngine, build_simulation_return
+from alpasim_runtime.scene_loader import SceneLoader, _build_artifact_scene_provider
 from alpasim_runtime.worker.ipc import JobResult
 
 from eval.data import AggregationType, MetricReturn
@@ -23,12 +27,116 @@ def _make_config() -> SimpleNamespace:
     return SimpleNamespace(
         user=SimpleNamespace(
             nr_workers=1,
+            renderer_type="sensorsim",
             smooth_trajectories=True,
             scenes=[SimpleNamespace(scene_id="clipgt-a")],
             endpoints=SimpleNamespace(startup_timeout_s=1),
         ),
         network=SimpleNamespace(),
     )
+
+
+def _write_usdz_metadata(path: Path) -> None:
+    metadata = {
+        "scene_id": "clipgt-a",
+        "version_string": "nre-1",
+        "training_date": "2024-11-11",
+        "dataset_hash": "hash-a",
+        "uuid": "uuid-a",
+        "is_resumable": False,
+        "sensors": {
+            "camera_ids": ["camera_front", "camera_left"],
+            "lidar_ids": ["lidar_top"],
+        },
+        "logger": {
+            "name": "wandb",
+            "run_id": "run-a",
+            "run_url": "https://example.invalid/run-a",
+        },
+        "time_range": {
+            "start": 1648604351509172,
+            "end": 1648604371509172,
+        },
+        "training_step_outputs": {
+            "psnr": 28.9,
+        },
+    }
+    with zipfile.ZipFile(path, "w") as zip_file:
+        zip_file.writestr("metadata.yaml", yaml.safe_dump(metadata))
+
+
+@pytest.mark.asyncio
+async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _make_failing_artifact_loader(*args, **kwargs):
+        del args, kwargs
+
+        def _load_artifact(scene_id: str, artifact_path: str):
+            pytest.fail(
+                "get_runtime_info should not load artifacts through the runtime cache"
+            )
+
+        return _load_artifact
+
+    monkeypatch.setattr(
+        "alpasim_runtime.scene_loader.make_artifact_loader",
+        _make_failing_artifact_loader,
+    )
+    artifact_path = tmp_path / "scene.usdz"
+    _write_usdz_metadata(artifact_path)
+    scene_loader = SceneLoader(
+        _build_artifact_scene_provider(
+            user_config=SimpleNamespace(smooth_trajectories=True),
+            usdz_provider_config=SimpleNamespace(
+                data_dir=str(artifact_path),
+                artifact_cache_size=None,
+            ),
+        )
+    )
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir=str(log_dir),
+    )
+    engine._started = True
+    engine._version_ids = _version_ids()
+    engine._runtime_context = SimpleNamespace(
+        max_in_flight=2,
+        config=SimpleNamespace(
+            user=SimpleNamespace(
+                nr_workers=3,
+                renderer_type="sensorsim",
+            ),
+        ),
+        pools={
+            "driver": AddressPool(["driver-a:50051"], n_concurrent=2, skip=False),
+            "sensorsim": AddressPool([], n_concurrent=0, skip=True),
+        },
+        scene_loader=scene_loader,
+    )
+
+    info = await engine.get_runtime_info()
+
+    assert info.max_supported_concurrent_rollouts == 2
+    assert info.nr_workers == 3
+    assert info.renderer_type == "sensorsim"
+    assert info.runtime_version.version_id == "runtime"
+    assert [scene.scene_id for scene in info.scenes] == ["clipgt-a"]
+    assert info.scenes[0].provider_kind == "usdz"
+    assert info.scenes[0].metadata.camera_ids == ["camera_front", "camera_left"]
+    assert info.scenes[0].metadata.start_time_us == 1648604351509172
+    capacities = {
+        capacity.service_name: capacity for capacity in info.service_capacities
+    }
+    assert capacities["driver"].total_capacity == 2
+    assert capacities["driver"].skipped is False
+    assert capacities["sensorsim"].total_capacity == 0
+    assert capacities["sensorsim"].skipped is True
 
 
 @pytest.mark.asyncio
@@ -46,9 +154,10 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             *,
             pools,
             runtime,
+            renderer_type,
             request_store=None,
         ) -> None:
-            del pools, request_store
+            del pools, renderer_type, request_store
             assert runtime is worker_runtime
 
         async def shutdown(self, *, reason: str) -> None:
@@ -65,7 +174,7 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_id_to_artifact_path={"clipgt-a": "/tmp/scene-a.usdz"},
+            scene_loader=MagicMock(),
             pools={"driver": MagicMock()},
             max_in_flight=1,
         )
@@ -87,7 +196,6 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
 
@@ -111,9 +219,10 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
             *,
             pools,
             runtime,
+            renderer_type,
             request_store=None,
         ) -> None:
-            del pools, request_store
+            del pools, renderer_type, request_store
             assert runtime is worker_runtime
 
         async def shutdown(self, *, reason: str) -> None:
@@ -130,7 +239,7 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_id_to_artifact_path={"clipgt-a": "/tmp/scene-a.usdz"},
+            scene_loader=MagicMock(),
             pools={"driver": MagicMock()},
             max_in_flight=1,
         )
@@ -152,7 +261,6 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         validate_config_scenes=False,
     )
@@ -184,11 +292,13 @@ async def test_engine_simulate_submits_without_global_request_lock() -> None:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -232,11 +342,13 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -285,11 +397,13 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_id_to_artifact_path = {"clipgt-a": "/tmp/scene-a.usdz"}
+    # Mock SceneLoader with a fake data source
+    mock_scene_loader = MagicMock()
+    mock_scene_loader.get_data_source.return_value = MagicMock()
+    engine._scene_loader = mock_scene_loader
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),

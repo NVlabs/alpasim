@@ -1,6 +1,7 @@
 alpackages/*.tar
 cosmos-models/
 nre-artifacts/artifact-*
+omni-dreams-scenes/
 rollouts/default-savedir/*
 trafficsim/rollouts/
 ncore-artifacts

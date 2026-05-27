@@ -211,7 +211,8 @@ class ContainerDefinition:
         ), f"Port is required for {service_name}"
         # Apply all variable replacements
         command = command.replace("{port}", str(port))
-        command = command.replace("{sceneset}", context.sceneset_path or "None")
+        sceneset_path = getattr(context.cfg.scenes, "sceneset_path", None)
+        command = command.replace("{sceneset}", sceneset_path or "None")
 
         # Runtime config name replacement
         runtime_config_name = f"generated-user-config-{int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))}.yaml"

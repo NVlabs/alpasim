@@ -7,12 +7,16 @@ import "alpasim_grpc/v0/common.proto";
 
 service RuntimeService {
     rpc simulate (SimulationRequest) returns (SimulationReturn);
+    rpc get_runtime_info (common.Empty) returns (RuntimeInfo);
     rpc shut_down (common.Empty) returns (common.Empty);
 }
 
 message RolloutSpec {
     string scenario_id = 1;
     uint32 nr_rollouts = 2;
+    // Optional client-supplied session UUIDs, one per rollout. If set,
+    // length must equal nr_rollouts. Empty (default) ⇒ runtime generates.
+    repeated string session_uuids = 3;
 }
 
 message SimulationRequest {
@@ -24,6 +28,46 @@ message SimulationRequest {
     repeated DriverAddress available_drivers = 1;
     repeated RolloutSpec rollout_specs = 2; // scenario may be repeated across specs
     uint32 n_concurrent_per_driver = 3;
+}
+
+message SceneMetadata {
+    string version_string = 1;
+    string training_date = 2;
+    string dataset_hash = 3;
+    string uuid = 4;
+
+    repeated string camera_ids = 5;
+    repeated string lidar_ids = 6;
+
+    fixed64 start_time_us = 7;
+    fixed64 end_time_us = 8;
+}
+
+message SceneInfo {
+    string scene_id = 1;
+    string provider_kind = 2;
+    SceneMetadata metadata = 3;
+}
+
+message ServiceCapacity {
+    string service_name = 1;
+    uint32 total_capacity = 2;
+    bool skipped = 3;
+}
+
+message RuntimeInfo {
+    uint32 max_supported_concurrent_rollouts = 1;
+    uint32 nr_workers = 2;
+    string renderer_type = 3;
+
+    repeated SceneInfo scenes = 4;
+    repeated ServiceCapacity service_capacities = 5;
+
+    common.VersionId runtime_version = 6;
+    common.VersionId nre_version = 7;
+    common.VersionId physics_version = 8;
+    common.VersionId driver_version = 9;
+    common.VersionId traffic_version = 10;
 }
 
 // How per-timestep metric values should be reduced to a single scalar.

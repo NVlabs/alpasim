@@ -14,6 +14,7 @@ import numpy as np
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.events.base import EventPriority, EventQueue, RecurringEvent
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
+from alpasim_runtime.force_gt_blend import force_gt_physics_blend_alpha
 from alpasim_utils import geometry
 from alpasim_utils.geometry import Trajectory
 
@@ -99,7 +100,7 @@ class PhysicsEvent(RecurringEvent):
         trafficsim = self.services.trafficsim
 
         target_time_us = self.timestamp_us + self.interval_us
-        force_gt = target_time_us in state.unbound.force_gt_period
+        force_gt = ctx.force_gt
 
         ego_ds_pose = ctx.corrected_ego_trajectory.interpolate_pose(target_time_us)
 
@@ -123,7 +124,16 @@ class PhysicsEvent(RecurringEvent):
                     object_trajectory.interpolate_pose(target_time_us)
                 )
 
-        if state.unbound.physics_update_mode == PhysicsUpdateMode.ALL_ACTORS:
+        should_blend_force_gt_traffic = (
+            force_gt
+            and state.unbound.physics_update_mode == PhysicsUpdateMode.ALL_ACTORS
+        )
+        should_apply_traffic_physics = (
+            state.unbound.physics_update_mode == PhysicsUpdateMode.ALL_ACTORS
+            and not force_gt
+        ) or should_blend_force_gt_traffic
+
+        if should_apply_traffic_physics and traffic_poses_future:
             ego_aabb_pose_future = (
                 ego_ds_pose @ state.unbound.transform_ego_coords_ds_to_aabb
             )
@@ -133,15 +143,26 @@ class PhysicsEvent(RecurringEvent):
                 [ego_aabb_pose_future],
             )
 
-            _, traffic_poses_future = await physics.ground_intersection(
+            gt_traffic_poses_future = traffic_poses_future
+            _, physics_traffic_poses_future = await physics.ground_intersection(
                 scene_id=state.unbound.scene_id,
                 delta_start_us=self.timestamp_us,
                 delta_end_us=target_time_us,
                 ego_trajectory_aabb=ego_traj_aabb,
-                traffic_poses=traffic_poses_future,
+                traffic_poses=gt_traffic_poses_future,
                 ego_aabb=state.unbound.ego_aabb,
-                skip=trafficsim.skip or force_gt,
+                skip=trafficsim.skip and not should_blend_force_gt_traffic,
             )
+            traffic_poses_future = physics_traffic_poses_future
+
+            if should_blend_force_gt_traffic:
+                alpha = force_gt_physics_blend_alpha(state.unbound, target_time_us)
+                for obj_id, gt_pose in gt_traffic_poses_future.items():
+                    physics_pose = traffic_poses_future.get(obj_id)
+                    if physics_pose is not None:
+                        traffic_poses_future[obj_id] = gt_pose.blend(
+                            physics_pose, alpha
+                        )
 
         # Accumulate into per-object trajectories
         for obj_id, pose in traffic_poses_future.items():

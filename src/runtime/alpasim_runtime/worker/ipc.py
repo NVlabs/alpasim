@@ -8,7 +8,7 @@ Inter Process Communication (IPC) message types and helpers for worker pool comm
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing import Queue
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
@@ -27,9 +27,11 @@ class ServiceEndpoints:
 
     driver: ServiceAddress
     sensorsim: ServiceAddress
+    renderer: ServiceAddress
     physics: ServiceAddress
     trafficsim: ServiceAddress
     controller: ServiceAddress
+    extra_services: dict[str, ServiceAddress] = field(default_factory=dict)
 
 
 @dataclass
@@ -42,8 +44,8 @@ class PendingRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
+    # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
+    session_uuid: str = ""
 
 
 @dataclass
@@ -58,10 +60,10 @@ class AssignedRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
     # Concrete service addresses assigned by the parent dispatch loop.
     endpoints: ServiceEndpoints
+    # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
+    session_uuid: str = ""
 
 
 @dataclass

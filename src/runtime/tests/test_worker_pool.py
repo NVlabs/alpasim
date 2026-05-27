@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_runtime.address_pool import AddressPool, ServiceAddress
-from alpasim_runtime.config import ServiceEndpoint
+from alpasim_runtime.config import EndpointAddresses, ServiceEndpoint
 from alpasim_runtime.runtime_context import (
     ALL_SKIP_PER_WORKER_CONCURRENCY,
     compute_max_in_flight,
@@ -57,6 +57,7 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config = MagicMock()
     config.user.nr_workers = nr_workers
     config.user.smooth_trajectories = True
+    config.user.renderer_type = "sensorsim"
     config.user.endpoints.driver.skip = False
     config.user.endpoints.driver.n_concurrent_rollouts = 2
     config.user.endpoints.sensorsim.skip = False
@@ -73,6 +74,7 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config.network.physics.endpoints = [ServiceEndpoint("physics:50053")]
     config.network.trafficsim.endpoints = [ServiceEndpoint("trafficsim:50054")]
     config.network.controller.endpoints = [ServiceEndpoint("controller:50055")]
+    config.network.extra_services = {}
 
     return config
 
@@ -170,13 +172,32 @@ def test_create_address_pools_builds_expected_service_pools() -> None:
     assert pools["physics"].total_capacity == 2
 
 
+def test_create_address_pools_adds_active_renderer_service() -> None:
+    config = _make_config_mock(nr_workers=2)
+    config.user.renderer_type = "video_model"
+    # Use the real EndpointAddresses dataclass (not a MagicMock with attribute
+    # auto-vivification) so the test catches schema mismatches in
+    # create_address_pools' renderer-service code path.
+    config.network.extra_services = {
+        "video_model": EndpointAddresses(endpoints=[ServiceEndpoint("renderer:50056")])
+    }
+
+    pools = create_address_pools(config)
+
+    assert "video_model" in pools
+    assert pools["video_model"].skip is False
+    assert pools["video_model"].total_capacity == 1
+
+
 def _make_endpoints() -> ServiceEndpoints:
     return ServiceEndpoints(
         driver=ServiceAddress("driver:50051", skip=False),
         sensorsim=ServiceAddress("sensorsim:50052", skip=False),
+        renderer=ServiceAddress("sensorsim:50052", skip=False),
         physics=ServiceAddress("physics:50053", skip=False),
         trafficsim=ServiceAddress("trafficsim:50054", skip=False),
         controller=ServiceAddress("controller:50055", skip=False),
+        extra_services={},
     )
 
 
@@ -186,7 +207,6 @@ def _make_assigned_job(request_id: str, job_id: str) -> AssignedRolloutJob:
         job_id=job_id,
         scene_id="scene-A",
         rollout_spec_index=0,
-        artifact_path="/tmp/scene-A.usdz",
         endpoints=_make_endpoints(),
     )
 

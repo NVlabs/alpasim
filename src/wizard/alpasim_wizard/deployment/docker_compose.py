@@ -57,7 +57,14 @@ class DockerComposeDeployment:
 
         try:
             subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "up"],
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(compose_file),
+                    "up",
+                    "--force-recreate",
+                ],
                 check=True,
                 cwd=log_dir,
             )

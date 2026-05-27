@@ -6,7 +6,11 @@
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict
+from collections.abc import Coroutine
+from contextlib import suppress
+from typing import Any, TypeVar
 
 import alpasim_runtime
 from alpasim_grpc import API_VERSION_MESSAGE
@@ -25,6 +29,10 @@ import grpc
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
+
+_PENDING_PROBE_LOG_INTERVAL_S = 10.0
+
 # Service name -> RolloutMetadata.VersionIds field name mapping.
 _SERVICE_TO_VERSION_FIELD = {
     "driver": "egodriver_version",
@@ -40,6 +48,43 @@ _SKIP_VERSION = VersionId(
     git_hash="<skip>",
     grpc_api_version=API_VERSION_MESSAGE,
 )
+
+
+async def _log_awaitable_progress(
+    coroutine: Coroutine[Any, Any, T],
+    *,
+    label: str,
+    log_interval_s: float = _PENDING_PROBE_LOG_INTERVAL_S,
+) -> T:
+    """
+    Wraps a coroutine in another coroutine which periodically logs if it remains pending.
+
+    Useful for detecting stuck/slow operations.
+    """
+    task = asyncio.create_task(coroutine)
+    start_time = time.monotonic()
+
+    try:
+        while True:
+            done, _ = await asyncio.wait(
+                {task},
+                timeout=log_interval_s,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                return task.result()
+
+            logger.info(
+                "%s still waiting after %.0fs",
+                label,
+                time.monotonic() - start_time,
+            )
+    except BaseException:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        raise
 
 
 async def _probe_version_for_address(
@@ -162,7 +207,15 @@ async def gather_versions_from_addresses(
             )
         for address in addresses:
             tasks.append(
-                _probe_version_for_address(svc_name, stub_class, address, timeout_s)
+                _log_awaitable_progress(
+                    _probe_version_for_address(
+                        svc_name,
+                        stub_class,
+                        address,
+                        timeout_s,
+                    ),
+                    label=f"Service version probe for {svc_name} at {address}",
+                )
             )
 
     results = await asyncio.gather(*tasks)
@@ -186,32 +239,49 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
     Uses lightweight probes to check scene availability without creating full pools.
     This ensures we fail fast in the parent if any scenario is invalid.
     """
-    # Validate physics mode compatibility (shared config, check once)
+    simulation_config = config.user.simulation_config
+
+    if (
+        config.user.endpoints.physics.skip
+        and simulation_config.physics_update_mode != PhysicsUpdateMode.NONE
+    ):
+        raise AssertionError("Physics update mode requires the physics service to run.")
     if (
         not config.user.endpoints.physics.skip
-        and config.user.simulation_config.physics_update_mode == PhysicsUpdateMode.NONE
+        and simulation_config.physics_update_mode == PhysicsUpdateMode.NONE
     ):
         raise AssertionError(
             "Physics is disabled in simulation config but physics service is not skipped."
         )
 
     # driver and controller return wildcard (work with any scene), no need to probe
+    services_to_probe = ["sensorsim", "physics", "trafficsim"]
+    skip_flags = {
+        "sensorsim": config.user.endpoints.sensorsim.skip,
+        "physics": config.user.endpoints.physics.skip,
+        "trafficsim": config.user.endpoints.trafficsim.skip,
+    }
+    services_to_probe = [s for s in services_to_probe if not skip_flags[s]]
     service_endpoints = get_service_endpoints(
-        config.network, services=["sensorsim", "physics", "trafficsim"]
+        config.network, services=services_to_probe
     )
 
     tasks = []
     for svc_name, (stub_class, addresses) in service_endpoints.items():
         if not addresses:
             continue
+        address = addresses[0]
         tasks.append(
-            _probe_scenario_compatibility(
-                svc_name,
-                stub_class,
-                addresses[0],
-                config.user.scenes,
-                timeout_s=config.user.endpoints.startup_timeout_s,
-                use_metadata=(svc_name == "trafficsim"),
+            _log_awaitable_progress(
+                _probe_scenario_compatibility(
+                    svc_name,
+                    stub_class,
+                    address,
+                    config.user.scenes,
+                    timeout_s=config.user.endpoints.startup_timeout_s,
+                    use_metadata=(svc_name == "trafficsim"),
+                ),
+                label=f"Scenario validation probe for {svc_name} at {address}",
             )
         )
 

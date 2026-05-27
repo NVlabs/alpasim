@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 NVIDIA Corporation
+
+syntax = "proto3";
+
+package alpadreams.video_model;
+
+import "alpasim_grpc/v0/common.proto";
+import "alpasim_grpc/v0/sensorsim.proto";
+
+service WorldModelService {
+    rpc start_session(SessionRequest) returns (SessionId);
+    rpc close_session(SessionCloseRequest) returns (common.Empty);
+    rpc render_video_chunk(VideoChunkRequest) returns (VideoChunkReturn);
+}
+
+message StaticWorldMap {
+    bytes hdmap_parquets = 1; // bytes of zip-compressed parquet files
+}
+
+message SessionId {
+    string session_id = 1;
+    reserved 2;
+}
+
+enum ActorClassId {
+    INVALID = 0;
+    CAR = 1;
+    TRUCK = 2;
+    PEDESTRIAN = 3;
+    CYCLIST = 4;
+    OTHER = 5;
+}
+
+message DynamicActor {
+    ActorClassId class_id = 1;
+    common.AABB bbox_dims = 2;
+    common.Trajectory trajectory = 3;
+}
+
+message DynamicWorldState {
+    repeated DynamicActor actors = 1;
+}
+
+enum ImageFormat {
+    UNDEFINED = 0;
+    PNG = 1;
+    JPEG = 2;
+    JPEG2000 = 3;
+    RGB_UINT8_PLANAR = 4;
+    AVC = 5;
+    AV1 = 6;
+}
+
+message Image {
+    bytes data = 1;
+    ImageFormat format = 2;
+}
+
+message TextPrompt {
+    string positive = 1;
+    string negative = 2;
+}
+
+message DebugOptions {
+    bool return_hdmap_frames = 1;
+    bool return_bev_map = 2;
+    bool skip_video_generation = 3;
+    float bev_height_m = 4;
+    float bev_fov_deg = 5;
+}
+
+message SessionRequest {
+    reserved 2, 4;
+    StaticWorldMap static_world_map = 3;
+    TextPrompt text_prompt = 5;
+    int32 start_frame_offset = 6;
+    DebugOptions debug_options = 7;
+    repeated nre.grpc.protos.sensorsim.CameraSpec camera_specs = 8;
+    repeated Image initial_frames = 9;
+    repeated common.Pose rig_to_camera = 11;
+}
+
+message SessionCloseRequest {
+    string session_id = 1;
+}
+
+message VideoChunkRequest {
+    SessionId session_id = 1;
+    common.Trajectory rig_trajectory = 2;
+    DynamicWorldState dynamic_state = 3;
+}
+
+message CameraOutput {
+    string camera_logical_id = 1;
+    repeated Image rgb_frames = 2;
+    repeated Image hdmap_condition_frames = 3;
+}
+
+message VideoChunkReturn {
+    reserved 1, 2, 3, 4;
+    repeated CameraOutput camera_outputs = 5;
+    repeated Image bev_map_frames = 6;
+}

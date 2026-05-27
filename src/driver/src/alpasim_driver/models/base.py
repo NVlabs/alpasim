@@ -66,6 +66,10 @@ class ModelPrediction:
     )
 
 
+class ModelInputValidationError(ValueError):
+    """Raised when model inputs fail a precondition checked before inference."""
+
+
 class BaseTrajectoryModel(ABC):
     """Abstract base class for trajectory prediction models.
 

@@ -62,6 +62,7 @@ from .models import DriveCommand
 from .models.base import (
     BaseTrajectoryModel,
     CameraImages,
+    ModelInputValidationError,
     ModelPrediction,
     PredictionInput,
 )
@@ -903,7 +904,13 @@ class EgoDriverService(EgodriverServiceServicer):
         )
         self._job_queue.put_nowait(job)
 
-        prediction = await future
+        try:
+            prediction = await future
+        except ModelInputValidationError as exc:
+            logger.error("Driver input validation failed: %s", exc)
+            if context is not None:
+                await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+            raise
 
         # Convert model prediction to Alpasim trajectory format
         alpasim_traj: Trajectory = self._convert_prediction_to_alpasim_trajectory(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from asyncio import Lock
-from typing import Dict, Type
+from typing import Any, Dict, Type
 
 from alpasim_grpc.v0.common_pb2 import Empty
 from alpasim_grpc.v0.logging_pb2 import LogEntry
@@ -25,7 +25,9 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
 )
 from alpasim_grpc.v0.sensorsim_pb2_grpc import SensorsimServiceStub
 from alpasim_runtime.camera_catalog import CameraCatalog
-from alpasim_runtime.services.service_base import ServiceBase
+from alpasim_runtime.config import SimulationConfig
+from alpasim_runtime.services.service_base import ServiceBase, SessionInfo
+from alpasim_runtime.services.session_configs import RendererSessionConfig
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.geometry import Pose, Trajectory, pose_to_grpc
@@ -61,6 +63,41 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
     @property
     def stub_class(self) -> Type[SensorsimServiceStub]:
         return SensorsimServiceStub
+
+    def make_initial_render_event(self, **kwargs: Any) -> Any:
+        """Create the initial sensorsim render event for a rollout."""
+        from alpasim_runtime.events.camera import make_initial_sensorsim_render_event
+
+        return make_initial_sensorsim_render_event(
+            renderer_service=self,
+            **kwargs,
+        )
+
+    def validate_timing_alignment(self, simulation_config: SimulationConfig) -> None:
+        """Validate rollout timing against sensorsim's control-step cadence."""
+        force_gt_duration_us = simulation_config.force_gt_duration_us
+        control_timestep_us = simulation_config.control_timestep_us
+
+        if force_gt_duration_us < 0:
+            raise ValueError(
+                f"force_gt_duration_us must be >= 0, got {force_gt_duration_us}."
+            )
+        if force_gt_duration_us == 0:
+            return
+        if force_gt_duration_us % control_timestep_us != 0:
+            raise ValueError(
+                f"force_gt_duration_us ({force_gt_duration_us}) "
+                f"must be a multiple of control_timestep_us "
+                f"({control_timestep_us}). "
+                f"Non-divisible durations cause ambiguous policy start timing."
+            )
+
+    def required_policy_start_timestmap_us(
+        self,
+        render_start_timestamp_us: int,
+    ) -> int:
+        """Sensorsim can start policy at the first rendered frame."""
+        return render_start_timestamp_us
 
     @staticmethod
     def _copy_available_cameras(
@@ -204,7 +241,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             ego_mask_id: Optional ego mask identifier to include in the render.
         """
         start_us = trigger.time_range_us.start
-        end_us = trigger.time_range_us.stop - 1
+        end_us = trigger.time_range_us.stop
 
         def trajectory_to_pose_pair(
             trajectory: Trajectory, delta: Pose | None
@@ -369,4 +406,29 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             end_timestamp_us=trigger.time_range_us.stop,
             image_bytes=response.image_bytes,
             camera_logical_id=camera.logical_id,
+        )
+
+    # -- Renderer session lifecycle hooks --------------------------------------
+
+    async def _initialize_session(self, session_info: SessionInfo) -> None:
+        """Initialize a sensorsim rollout session.
+
+        Owns the sensorsim-specific camera discovery and camera catalog merge.
+        Runs once per rollout, after the gRPC connection is open and before the
+        event loop starts.
+
+        Skip-mode handling matches pre-refactor behavior: callers (tests) that
+        monkeypatch ``get_available_cameras`` can still populate camera
+        definitions; callers that do not get the same empty-result failure
+        mode as before at the first ``get_camera_definition`` lookup.
+        """
+        cfg = session_info.session_config
+        if not isinstance(cfg, RendererSessionConfig):
+            # Called without a RendererSessionConfig (direct-RPC tests, etc.).
+            return
+
+        scene_id = cfg.data_source.scene_id
+        sensorsim_cameras = await self.get_available_cameras(scene_id)
+        await self._camera_catalog.merge_local_and_sensorsim_cameras(
+            scene_id, sensorsim_cameras
         )

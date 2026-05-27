@@ -1,10 +1,10 @@
 [build-system]
-requires = [ "setuptools>=61.0,<82", "grpcio-tools", "protobuf>=4.0.0" ]
-build-backend = "setuptools.build_meta"
+requires = [ "hatchling>=1.26", "grpcio-tools", "protobuf>=4.0.0,<5.0.0", "setuptools<82" ]
+build-backend = "hatchling.build"
 
 [project]
 name = "alpasim_grpc"
-version = "0.53.0"
+version = "0.54.0"
 description = "gRPC API definitions for Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -26,6 +26,26 @@ dependencies = [
   compile-protos = "scripts.compile_protos:compile_protos"
   clean-protos = "scripts.compile_protos:clean_proto_files"
 
-[tool.setuptools.packages.find]
-where = [ "." ]
-include = [ "alpasim_grpc*", "scripts*" ]
+[tool.hatch.build.targets.wheel]
+packages = [ "alpasim_grpc", "scripts" ]
+artifacts = [
+  "alpasim_grpc/**/*.proto",
+  "alpasim_grpc/**/*_pb2.py",
+  "alpasim_grpc/**/*_pb2_grpc.py",
+  "alpasim_grpc/**/*.pyi",
+  "alpasim_grpc/py.typed",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "alpasim_grpc/**/*.proto",
+  "alpasim_grpc/**/__init__.py",
+  "alpasim_grpc/py.typed",
+  "hatch_build.py",
+  "pyproject.toml",
+  "README.md",
+  "scripts/**/*.py",
+]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"

@@ -102,8 +102,8 @@ async def convert_single_log(
     for camera_logical_id, images in frames_by_camera.items():
         camera_name = camera_logical_id
         save_path = f"{save_dir}/{camera_name}"
-        images = sorted(images, key=lambda frame: frame.frame_start_us)
-        timestamps_us = np.array([frame.frame_start_us for frame in images])
+        images = sorted(images, key=lambda frame: frame.frame_end_us)
+        timestamps_us = np.array([frame.frame_end_us for frame in images])
 
         match format:
             case "mp4":

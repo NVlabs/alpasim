@@ -16,6 +16,7 @@ from ..schema import ModelConfig
 from .alpamayo_base import CAMERA_NAME_TO_INDEX, AlpamayoBaseModel
 
 logger = logging.getLogger(__name__)
+_ATTN_IMPLEMENTATION = "sdpa"
 
 
 class Alpamayo15Model(AlpamayoBaseModel):
@@ -70,10 +71,13 @@ class Alpamayo15Model(AlpamayoBaseModel):
                 sampling.  Requires roughly 60 GB VRAM (vs ~40 GB standard).
         """
         logger.info("Loading Alpamayo 1.5 checkpoint from %s", checkpoint_path)
+        logger.info("Using Alpamayo 1.5 attn_implementation=%s", _ATTN_IMPLEMENTATION)
 
-        model = Alpamayo1_5.from_pretrained(checkpoint_path, dtype=self.DTYPE).to(
-            device
-        )
+        model = Alpamayo1_5.from_pretrained(
+            checkpoint_path,
+            dtype=self.DTYPE,
+            attn_implementation=_ATTN_IMPLEMENTATION,
+        ).to(device)
         processor = helper.get_processor(model.tokenizer)
 
         self._use_classifier_free_guidance_nav = use_classifier_free_guidance_nav

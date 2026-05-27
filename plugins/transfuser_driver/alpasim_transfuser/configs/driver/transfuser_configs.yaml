@@ -9,7 +9,6 @@ runtime:
     n_sim_steps: 100
     n_rollouts: 1
     control_timestep_us: 250_000
-    time_start_offset_us: 250_000
     ego_mask_rig_config_id: null
 
     # Transfuser uses 4 cameras - render at full resolution, model handles resize
@@ -19,26 +18,22 @@ runtime:
         logical_id: camera_cross_left_120fov
         frame_interval_us: 250_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
       - height: 900
         width: 1600
         logical_id: camera_front_wide_120fov
         frame_interval_us: 250_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
       - height: 900
         width: 1600
         logical_id: camera_cross_right_120fov
         frame_interval_us: 250_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
       - height: 900
         width: 1600
         # used as nuplan B0, see extrinsics below.
         logical_id: camera_rear_left_70fov
         frame_interval_us: 250_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
 
   extra_cameras:
     # Camera positions - calibrated extrinsics for Transfuser's 4-camera setup

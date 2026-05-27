@@ -20,7 +20,7 @@ dependencies = [
   "pandas",
   "pytest",
   "pytest-asyncio",
-  "trajdata-alpasim==1.4.3",
+  "trajdata-alpasim",
 ]
 
 [project.optional-dependencies]
@@ -39,10 +39,6 @@ email = "mtyszkiewicz@nvidia.com"
 [tool.uv.sources]
 alpasim_grpc = {workspace = true}
 utils_rs = {workspace = true}
-
-[tool.uv.sources.trajdata-alpasim]
-git = "https://github.com/NVlabs/trajdata"
-branch = "alpasim"
 
 [tool.setuptools.packages.find]
 where = ["."]

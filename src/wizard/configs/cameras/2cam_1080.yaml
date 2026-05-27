@@ -13,7 +13,6 @@ runtime:
         # If you change this see note in base_config.yaml about `driver.inference.Cframes_subsample`
         frame_interval_us: 100_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
       -
         height: 1080
         width: 1900
@@ -22,4 +21,3 @@ runtime:
         # If you change this see note in base_config.yaml about `driver.inference.Cframes_subsample`
         frame_interval_us: 100_000
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000

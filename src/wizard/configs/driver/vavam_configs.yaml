@@ -6,7 +6,6 @@ runtime:
     n_sim_steps: 100
     n_rollouts: 1
     control_timestep_us: 500_000
-    time_start_offset_us: 500_000 # Needs to be in sync
     ego_mask_rig_config_id: null
 
     cameras:
@@ -15,7 +14,6 @@ runtime:
         logical_id: camera_front_wide_120fov
         frame_interval_us: 500_000 # also needs to be in sync
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
 
   extra_cameras:
     # # Original nuscenes pinhole reference for comparison:

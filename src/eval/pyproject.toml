@@ -20,7 +20,7 @@ dependencies = [
   "alpasim_utils[geometry]",
   "omegaconf",
   "shapely",
-  "trajdata-alpasim==1.4.3",
+  "trajdata-alpasim",
   "rich[jupyter]",
   "pytest",
   "csaps",
@@ -41,7 +41,3 @@ dependencies = [
 [tool.uv.sources]
 alpasim_grpc = {workspace = true}
 alpasim_utils = {workspace = true}
-
-[tool.uv.sources.trajdata-alpasim]
-git = "https://github.com/NVlabs/trajdata"
-branch = "alpasim"

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim-video-model"
+version = "0.1.0"
+description = "External video-model renderer plugin for Alpasim."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "alpasim_plugins",
+    "alpasim_grpc",
+    "alpasim_runtime",
+    "alpasim_utils",
+]
+
+[tool.setuptools]
+package-dir = { alpasim_video_model = "src", "alpasim_video_model.configs" = "configs" }
+packages = [
+    "alpasim_video_model",
+    "alpasim_video_model.events",
+    "alpasim_video_model.configs",
+]
+
+[tool.uv.sources]
+alpasim_plugins = { workspace = true }
+alpasim_grpc = { workspace = true }
+alpasim_runtime = { workspace = true }
+alpasim_utils = { workspace = true }
+
+# Plugin discovery hooks.
+# - ``alpasim.configs.video_model`` exposes deploy YAML to the wizard's Hydra
+#   SearchPathPlugin so ``deploy=external_video_model`` resolves without any
+#   manual hydra.searchpath override.
+# - ``alpasim.services.video_model`` provides the service client consumed by
+#   the core worker for rollout session bootstrap and render-event creation.
+[project.entry-points."alpasim.configs"]
+video_model = "alpasim_video_model.configs"
+
+[project.entry-points."alpasim.services"]
+video_model = "alpasim_video_model.service:VideoModelService"

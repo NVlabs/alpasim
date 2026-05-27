@@ -21,8 +21,6 @@ runtime:
     # Slower control loop to match human reaction time
     control_timestep_us: 200_000   # 5 Hz control (drive() calls)
 
-    time_start_offset_us: 500_000  # 0.5s offset for scene loading
-
     # Single camera for human to watch
     cameras:
       - height: 480
@@ -30,7 +28,6 @@ runtime:
         logical_id: camera_front_wide_120fov
         frame_interval_us: 100_000  # 10 Hz frame updates for smooth video
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
 
 services:
   driver:

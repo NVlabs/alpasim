@@ -2,6 +2,84 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Runtime daemon discovery and startup diagnostics (27.05.26)
+The runtime daemon now exposes `RuntimeService.get_runtime_info`, allowing clients such as AlpaGym to discover runtime capacity before submitting rollouts.
+
+The response includes:
+* Maximum supported concurrent rollouts and worker count.
+* Active renderer type.
+* Available scenes and scene metadata.
+* Per-service capacity and skipped-service status.
+* Runtime, NRE, physics, driver, and traffic component versions.
+
+Runtime startup now logs periodic progress while connecting to services. This makes stuck launches easier to diagnose, especially when external service addresses or IPs are wrong.
+
+Documentation links for the NuRec 25.07 sample dataset were also updated to use the `25.07` Hugging Face branch, where those release artifacts now live.
+
+**Migration**: Existing clients are unchanged. New daemon clients can call `get_runtime_info` during startup or scheduling to avoid hardcoding rollout capacity and scene availability.
+
+## First-frame-aligned simulation timing and force-GT behavior (20.05.26-22.05.26)
+Rollout timing now starts from the first GT camera frame timestamp instead of the egomotion timestamp start. This aligns the first rendered frame with ClipGT/NuRec conventions, where non-ego actor state is only fully valid from the first video frame.
+
+Force-GT startup now blends from recorded GT trajectories to physics-derived trajectories over the force-GT period. This keeps the first camera frame aligned to GT while avoiding an abrupt transition when physics takes over.
+
+During force-GT warmup, the runtime can also skip the expensive `driver.drive(...)` policy query while still submitting driver observations and warming the controller with a GT-derived reference trajectory. The new `runtime.simulation_config.skip_driver_during_force_gt` option defaults to `false`, preserving existing behavior unless explicitly enabled.
+
+Related config and output changes:
+* `runtime.simulation_config.time_start_offset_us` was removed from standard wizard configs.
+* Camera `first_frame_offset_us` was removed; camera timing is now derived from event-based rollout timing.
+* `alpasim_utils.asl_to_frames` now names output frames by the end-of-frame timestamp rather than the start timestamp.
+* The first regular renderer call is tagged as warmup instead of using a separate service warmup call.
+
+**Migration**: Remove `time_start_offset_us` and camera `first_frame_offset_us` from custom runtime or wizard configs. Set `runtime.simulation_config.skip_driver_during_force_gt=true` in wizard configs, or `simulation_config.skip_driver_during_force_gt=true` in generated runtime user configs, to avoid driver policy queries during force-GT warmup. If downstream scripts parse frame filenames produced by `alpasim_utils.asl_to_frames`, update them to expect end-of-frame timestamps.
+
+## Runtime daemon and RL robustness improvements (18.05.26-21.05.26)
+Several runtime and daemon changes improve long-running closed-loop and RL workflows:
+
+* `DriveResponse.terminate_session` lets a driver request early rollout termination, useful for completed RL episodes or straggler cleanup.
+* `RolloutSpec.session_uuid` lets a daemon client provide a session UUID when `nr_rollouts == 1`, making timeout and abort handling target the exact session instead of relying on FIFO heuristics.
+* Runtime evaluation now uses spawned `ProcessPoolExecutor` workers, avoiding gRPC fork-state crashes that could silently zero aggregated metrics.
+* Evaluation driver-response lookup now handles empty response lists instead of raising `IndexError`.
+* Driver precondition failures now raise explicit errors rather than continuing into later crashes.
+* New continuous eval scorers, `min_distance_to_obstacle_m` and `min_distance_to_lane_boundary_m`, provide denser RL reward signals than binary collision/offroad metrics.
+
+**Migration**: Existing callers remain compatible. Custom gRPC driver clients can opt into early termination by setting `DriveResponse.terminate_session=true`. Daemon clients that need precise abort behavior can set `RolloutSpec.session_uuid` for single-rollout requests. Eval configs can opt into the new min-distance scorers where continuous reward signals are useful.
+
+## SceneProvider and SceneLoader runtime scene discovery (08.05.26)
+Runtime scene discovery now goes through a `SceneProvider` / `SceneLoader` abstraction instead of passing artifact globs through the runtime entry point. The default provider remains USDZ artifact-backed, and generated wizard configs populate the provider data directory automatically.
+
+User-facing config changes:
+* Runtime config now contains `scene_provider.kind`.
+* USDZ data is configured under `scene_provider.usdz.data_dir`.
+* The worker-local artifact cache size moved to `scene_provider.usdz.artifact_cache_size`.
+* The direct runtime CLI no longer accepts `--usdz-glob`; scene data comes from the user config.
+
+**Migration**: For wizard-generated runs, no action is needed. For direct `python -m alpasim_runtime.simulate` usage, remove `--usdz-glob` and add a `scene_provider` section to the user config.
+
+## Pluggable renderer architecture and video-model renderer plugin (06.05.26)
+The runtime renderer path is now plugin-based instead of being hardcoded to sensorsim. Sensorsim remains the default renderer and existing configs continue to use it.
+
+Renderer plugins can provide:
+* An `alpasim.services.<name>` service client.
+* An `alpasim.renderers.<name>` initial render-event factory.
+* An `alpasim.configs.<name>` Hydra search path.
+* An optional typed renderer config schema used by the wizard to validate `runtime.renderer_config`.
+
+The first public renderer plugin is `alpasim-video-model`, selected with `wizard.renderer_type: video_model` / `deploy=external_video_model`. It talks to an external video-model gRPC service, parses camera calibration from USDZ ClipGT data, and includes chunking presets such as `+chunking=8frame`, `+chunking=12frame`, and `+chunking=16frame`.
+
+**Migration**: No action is required for sensorsim users. For non-sensorsim renderers, configure `wizard.renderer_type`, the renderer-specific deploy config, `runtime.renderer_config`, and any required external service endpoint.
+
+## Developer workflow and dependency updates (06.05.26-21.05.26)
+The `src/grpc` package now builds generated protobuf artifacts during package builds via Hatchling. Downstream projects can install the gRPC package directly from a Git source or subdirectory without manually running `compile-protos` first:
+
+```bash
+uv add "git+ssh://git@<host>/<org>/alpasim.git#subdirectory=src/grpc"
+```
+
+`trajdata-alpasim` is now pinned to a specific Git commit in the workspace sources instead of relying on the package version string, which has been unreliable.
+
+**Migration**: Local proto development can still use `uv run compile-protos`. Re-run dependency sync after pulling this change so all workspace members resolve the same `trajdata` revision.
+
 ## Wizard runtime server mode and run mode rename (28.04.26)
 Wizard run modes now distinguish one-shot runtime execution from long-running runtime daemon deployment. `wizard.run_mode=BATCH` has been renamed to `wizard.run_mode=ONESHOT`, and `wizard.run_mode=SERVER` starts the runtime as a gRPC server for request-scoped simulations.
 

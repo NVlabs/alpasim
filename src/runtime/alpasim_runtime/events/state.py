@@ -20,6 +20,7 @@ from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.traffic_service import TrafficService
+from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_utils import geometry
 from alpasim_utils.scenario import TrafficObjects
@@ -81,7 +82,7 @@ class StepContext:
     # Per-object trajectory of physics-corrected poses, grown each traffic round.
     traffic_trajectories: dict[str, geometry.Trajectory] = field(default_factory=dict)
 
-    # Async observation tasks tracked between GroupedRenderEvent and PolicyEvent.
+    # Async observation tasks tracked between camera events and PolicyEvent.
     outstanding_tasks: list[asyncio.Task[None]] = field(default_factory=list)
 
     def track_task(self, coroutine: Coroutine[Any, Any, None]) -> None:
@@ -113,10 +114,26 @@ class RolloutState:
     ego_trajectory: geometry.DynamicTrajectory
     ego_trajectory_estimate: geometry.DynamicTrajectory
     traffic_objs: TrafficObjects
+    force_gt_ego_trajectory: geometry.Trajectory | None = None
+
+    @property
+    def force_gt_trajectory(self) -> geometry.Trajectory:
+        """Ego trajectory used while force-GT is driving the rollout."""
+        if self.force_gt_ego_trajectory is not None:
+            return self.force_gt_ego_trajectory
+        return self.unbound.gt_ego_trajectory
 
     # === Assertion tracking (for assert_zero_decision_delay) ===
-    last_egopose_update_us: int = 0
+    last_egopose_update_us: int | None = 0
     last_camera_frame_us: dict[str, int] = field(default_factory=dict)
+    last_camera_frame_start_us: dict[str, int] = field(default_factory=dict)
+
+    # === Camera event aggregation ===
+    pending_camera_triggers: dict[int, list[tuple[RuntimeCamera, Clock.Trigger]]] = (
+        field(default_factory=dict)
+    )
+    pending_camera_flush_timestamps: set[int] = field(default_factory=set)
+    did_warmup_render: bool = False
 
     # === Inter-event data ===
     data_sensorsim_to_driver: bytes | None = None

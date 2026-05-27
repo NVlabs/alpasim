@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
+from alpasim_utils.services import CORE_SERVICE_NAMES, validate_renderer_config
 from alpasim_wizard.context import WizardContext
 from alpasim_wizard.schema import AlpasimConfig, RunMode
 from omegaconf import OmegaConf
@@ -44,6 +45,11 @@ class ConfigurationManager:
         cfg = context.cfg
         artifact_list = context.get_artifacts()
 
+        # Validate plugin-specific config sections against plugin-provided
+        # schemas before writing anything, so bad configs fail the wizard
+        # rather than surfacing at SLURM-worker startup minutes later.
+        self._validate_plugin_configs(cfg)
+
         # Generate each configuration
         self._generate_runtime_config(cfg, artifact_list)
 
@@ -64,12 +70,56 @@ class ConfigurationManager:
         logger.info(f"Generated {len(self.generated_configs)} configuration files")
         return self.generated_configs
 
+    def _validate_plugin_configs(self, cfg: AlpasimConfig) -> None:
+        """Validate plugin-owned config sections against plugin-provided schemas.
+
+        Currently covers ``runtime.renderer_config`` against the active
+        renderer plugin's typed schema (via ``alpasim.services`` entry point).
+        ``validate_renderer_config`` itself gracefully skips when the named
+        plugin is not installed in the wizard's environment, so the same
+        validation also happens at worker startup inside the runtime
+        container as a backstop.
+        """
+        renderer_type = getattr(cfg.wizard, "renderer_type", None)
+        runtime_cfg = OmegaConf.to_container(cfg.runtime, resolve=True)
+        renderer_config = None
+        if isinstance(runtime_cfg, dict):
+            raw = runtime_cfg.get("renderer_config")
+            if isinstance(raw, dict):
+                renderer_config = raw
+
+        try:
+            validate_renderer_config(renderer_type, renderer_config)
+        except Exception as exc:  # noqa: BLE001 -- re-raised with context below
+            raise ValueError(
+                f"Invalid runtime.renderer_config for "
+                f"renderer_type={renderer_type!r}: {exc}"
+            ) from exc
+
     def _generate_runtime_config(
         self, cfg: Any, artifact_list: List[Any]
     ) -> str | None:
         """Generate runtime configuration."""
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)
+
+        # Propagate renderer_type so the runtime can select the active renderer.
+        if hasattr(cfg.wizard, "renderer_type"):
+            runtime_config["renderer_type"] = str(cfg.wizard.renderer_type).lower()
+
+        sceneset_path = getattr(getattr(cfg, "scenes", None), "sceneset_path", None)
+        if sceneset_path is not None:
+            scene_provider = runtime_config.get("scene_provider")
+            if (
+                isinstance(scene_provider, dict)
+                and scene_provider.get("kind") == "usdz"
+                and isinstance(scene_provider.get("usdz"), dict)
+            ):
+                scene_provider["usdz"]["data_dir"] = (
+                    "/mnt/nre-data"
+                    if sceneset_path == "."
+                    else f"/mnt/nre-data/{sceneset_path}"
+                )
 
         # Write simulation params directly (was: fan out per scene)
         simulation_config = runtime_config.pop("simulation_config", {})
@@ -105,6 +155,7 @@ class ConfigurationManager:
             "sensorsim": {"endpoints": []},
             "trafficsim": {"endpoints": []},
             "controller": {"endpoints": []},
+            "extra_services": {},
         }
 
         for c in service_containers:
@@ -139,21 +190,22 @@ class ConfigurationManager:
                         {"address": address, "managed": True}
                     )
 
-        # Add external service addresses (for services running outside the deployment)
+        # Add external service addresses (for services running outside the deployment).
+        # Unknown service names are routed into extra_services so plugin-owned
+        # endpoints stay out of the core public schema.
         external_services = cfg.wizard.external_services
         if external_services is not None:
             for service_name, addresses in external_services.items():
-                if service_name in network_config:
-                    network_config[service_name]["endpoints"].extend(
-                        {"address": address, "managed": False} for address in addresses
-                    )
-                    logger.info(
-                        "Added external %s addresses: %s", service_name, addresses
-                    )
+                if service_name in CORE_SERVICE_NAMES:
+                    target = network_config[service_name]
                 else:
-                    logger.warning(
-                        "Unknown external service '%s', skipping", service_name
+                    target = network_config["extra_services"].setdefault(
+                        service_name, {"endpoints": []}
                     )
+                target["endpoints"].extend(
+                    {"address": address, "managed": False} for address in addresses
+                )
+                logger.info("Added external %s addresses: %s", service_name, addresses)
 
         self._write_config("generated-network-config.yaml", network_config)
         logger.debug("Generated network config")

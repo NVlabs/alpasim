@@ -14,14 +14,18 @@ including in additional repositories:
 
 ### Building and installing
 
-Protobuf definitions compiled into python are not packaged and must be compiled 
-first with running
+Protobuf definitions are compiled into Python during package builds, so installing
+from a wheel, local package path, or Git source includes the generated artifacts:
+```bash
+uv add "git+ssh://git@<host>/<org>/alpasim.git#subdirectory=src/grpc"
+```
+
+You can still compile them in-place for local development by running
 ```python
 uv run compile-protos
 ``` 
-from this folder. This does not happen automatically when installing the 
-`gRPC` package!
-This command also re-compiles them after you changed the definitions.
+from this folder. This command also re-compiles them after you changed the
+definitions.
 
 You can also clean them with
 ```python

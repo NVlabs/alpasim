@@ -1,4 +1,6 @@
 # Minimal eval config for mock tests
+enabled: false
+
 vec_map:
   incl_road_edges: true
   incl_traffic_signs: true

@@ -10,7 +10,6 @@ runtime:
 
       frame_interval_us: 33_000
       shutter_duration_us: 15_000
-      first_frame_offset_us: -15_000
     -
       height: 320
       width: 512
@@ -18,4 +17,3 @@ runtime:
 
       frame_interval_us: 33_000
       shutter_duration_us: 15_000
-      first_frame_offset_us: -15_000

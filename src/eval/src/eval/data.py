@@ -807,13 +807,11 @@ class DriverResponses:
         timestamps_to_search = (
             self.timestamps_us if which_time == "now" else self.query_times_us
         )
+        # Empty list (e.g. session aborted before any response was recorded).
+        if not timestamps_to_search:
+            return None
         idx = np.searchsorted(timestamps_to_search, time)
-        # Corner case: We don't have a response for the last timestamp:
-        if (
-            which_time == "now"
-            and idx == len(timestamps_to_search)
-            and time == self.query_times_us[-1]
-        ):
+        if idx == len(timestamps_to_search):
             return None
         # Too early, haven't received response yet
         if (

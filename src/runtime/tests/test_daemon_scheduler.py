@@ -34,7 +34,6 @@ def _pending(
         job_id=job_id,
         scene_id=scene_id,
         rollout_spec_index=rollout_spec_index,
-        artifact_path=f"/tmp/{scene_id}.usdz",
     )
 
 
@@ -53,9 +52,11 @@ def _result(request_id: str, job_id: str) -> JobResult:
 class _FakeRuntime:
     def __init__(self) -> None:
         self.submitted_job_ids: list[str] = []
+        self.submitted_jobs = []
 
     def submit_assigned_job(self, job) -> None:
         self.submitted_job_ids.append(job.job_id)
+        self.submitted_jobs.append(job)
 
     async def poll_result(self) -> JobResult | None:
         await asyncio.sleep(0.01)
@@ -154,5 +155,27 @@ async def test_scheduler_per_request_pool_releases_correctly() -> None:
     await scheduler.dispatch_once()
 
     assert runtime.submitted_job_ids == ["j1", "j2"]
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_assigns_active_renderer_endpoint() -> None:
+    runtime = _FakeRuntime()
+    pools = {
+        **_make_pools(capacity_per_service=1),
+        "video_model": AddressPool(["video-model:50056"], 1, skip=False),
+    }
+    scheduler = DaemonScheduler(
+        pools=pools,
+        runtime=runtime,
+        renderer_type="video_model",
+    )
+
+    await scheduler.submit_request("req-renderer", [_pending("j1")])
+
+    job = runtime.submitted_jobs[0]
+    assert job.endpoints.renderer.address == "video-model:50056"
+    assert "video_model" not in job.endpoints.extra_services
 
     await scheduler.shutdown(reason="test cleanup")

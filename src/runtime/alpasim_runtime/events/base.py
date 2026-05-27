@@ -27,7 +27,8 @@ class EventPriority:
     ===  ==================  ==========================================
     Pri  Event               Role
     ===  ==================  ==========================================
-    10   GroupedRenderEvent   Render camera images, dispatch to driver
+    10   CameraFrameEvent     Render/register camera frames
+    11   CameraRenderFlushEvent Render grouped camera frames
     20   PolicyEvent          Gather observations, query driver
     30   SimulationEndEvent   Terminate loop (final timestamp only)
     40   ControllerEvent      Run controller + vehicle model
@@ -39,6 +40,7 @@ class EventPriority:
     """
 
     CAMERA = 10
+    CAMERA_FLUSH = 11
     POLICY = 20
     SIMULATION_END = 30
     CONTROLLER = 40
@@ -157,7 +159,11 @@ class RecurringEvent(Event):
         heap it is not referenced elsewhere, so mutating in place is safe.
         """
         await self.run(rollout_state, queue)
-        self.timestamp_us = self._next_timestamp()
+        next_timestamp_us = self._next_timestamp()
+        end_timestamp_us = getattr(rollout_state.unbound, "end_timestamp_us", None)
+        if end_timestamp_us is not None and next_timestamp_us >= end_timestamp_us:
+            return
+        self.timestamp_us = next_timestamp_us
         queue.submit(self)
 
 

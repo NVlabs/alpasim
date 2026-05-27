@@ -7,9 +7,58 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict
 
 from alpasim_utils.scenario import VehicleConfig
+
+# DEFAULT_RENDERER_TYPE is used as a dataclass default below; the canonical
+# home for the renderer-plugin helpers is ``alpasim_utils.services`` (so the
+# wizard can validate plugin configs at submit time without taking a hard
+# dependency on alpasim_runtime). External callers should import directly
+# from ``alpasim_utils.services``, not from here.
+from alpasim_utils.services import DEFAULT_RENDERER_TYPE
 from omegaconf import MISSING
+
+
+@dataclass
+class UsdzProviderConfig:
+    """Configuration for the USDZ artifact-backed scene provider."""
+
+    data_dir: str | None = None
+    # Max worker-local USDZ artifact cache size.
+    # None = unlimited, 0 = disable cache and always reload artifacts.
+    artifact_cache_size: int | None = None
+
+
+@dataclass
+class TrajdataDatasetConfig:
+    """Configuration for a single trajdata dataset source."""
+
+    name: str | None = None
+    data_dir: str | None = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TrajdataProviderConfig:
+    """Configuration for a trajdata-backed scene provider."""
+
+    cache_location: str = MISSING
+    desired_dt: float = 0.1
+    load_vector_map: bool = True
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    num_workers: int = 1
+    dataset: TrajdataDatasetConfig | None = None
+
+
+@dataclass
+class SceneProviderConfig:
+    """Runtime scene provider configuration for one backend family."""
+
+    kind: str = "usdz"  # Literal["usdz", "trajdata"]
+    usdz: UsdzProviderConfig | None = field(default_factory=UsdzProviderConfig)
+    trajdata: TrajdataProviderConfig | None = None
 
 
 @dataclass
@@ -50,6 +99,8 @@ class NetworkSimulatorConfig:
     physics: EndpointAddresses = MISSING
     trafficsim: EndpointAddresses = MISSING
     controller: EndpointAddresses = MISSING
+    # Optional renderer/plugin-owned service addresses keyed by service name.
+    extra_services: dict[str, EndpointAddresses] = field(default_factory=dict)
 
 
 @dataclass
@@ -61,7 +112,6 @@ class RuntimeCameraConfig:
     width: int = 256
     frame_interval_us: int = 33_000  # about 30fps
     shutter_duration_us: int = 17_000
-    first_frame_offset_us: int = 0
 
 
 @dataclass
@@ -165,9 +215,7 @@ class SimulationConfig:
     control_timestep_us: int = 100_000
     pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
     force_gt_duration_us: int = 500_000  # 0.5s
-    time_start_offset_us: int = (
-        250_000  # 0.25s: there are often weird artifacts at the very start of a scene
-    )
+    skip_driver_during_force_gt: bool = False
 
     # if true, we assert that each call to policy happens immediately after a frame has been
     # provided for each camera and the latest egomotion update. This flag does not modify
@@ -237,15 +285,20 @@ class UserSimulatorConfig:
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
-    # Max worker-local artifact cache size.
-    # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: int | None = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.
     # 1 = inline mode, all in one process, good for debugging
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
+
+    # Renderer selection: "sensorsim" (default) or a plugin-provided renderer id.
+    renderer_type: str = DEFAULT_RENDERER_TYPE
+    # Plugin-specific renderer config (untyped dict -- the plugin parses it).
+    renderer_config: dict | None = None
+
+    # Runtime scene provider configuration.
+    scene_provider: SceneProviderConfig = MISSING
 
 
 @dataclass

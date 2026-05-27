@@ -17,8 +17,8 @@ from alpasim_runtime.config import (
     ServiceEndpoint,
 )
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
-from alpasim_runtime.daemon.engine import UnknownSceneError
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
+from alpasim_runtime.errors import UnknownSceneError
 from alpasim_runtime.simulate.__main__ import (
     _serve,
     create_arg_parser,
@@ -65,7 +65,6 @@ def _make_serve_args() -> Namespace:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         listen_address="[::]:50051",
     )
@@ -288,7 +287,6 @@ def test_simulate_parser_supports_serve_mode_args() -> None:
             "--user-config=u.yaml",
             "--network-config=n.yaml",
             "--eval-config=e.yaml",
-            "--usdz-glob=/tmp/*.usdz",
             "--log-dir=/tmp/log",
             "--serve",
             "--listen-address=[::]:50060",
@@ -307,7 +305,6 @@ def test_simulate_parser_rejects_removed_grpc_shutdown_flag() -> None:
                 "--user-config=u.yaml",
                 "--network-config=n.yaml",
                 "--eval-config=e.yaml",
-                "--usdz-glob=/tmp/*.usdz",
                 "--log-dir=/tmp/log",
                 "--serve",
                 "--grpc-graceful-shutdown-s=7.0",
@@ -495,7 +492,6 @@ def _make_one_shot_args() -> Namespace:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         array_job_dir=None,
     )
@@ -609,7 +605,6 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     fake_engine.startup.assert_awaited_once()

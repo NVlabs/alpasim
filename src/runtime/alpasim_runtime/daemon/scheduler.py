@@ -22,6 +22,11 @@ from alpasim_runtime.worker.ipc import (
     PendingRolloutJob,
     ServiceEndpoints,
 )
+from alpasim_utils.services import (
+    CORE_SERVICE_NAMES,
+    DEFAULT_RENDERER_TYPE,
+    normalize_renderer_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +64,11 @@ class DaemonScheduler:
         *,
         pools: dict[str, AddressPool],
         runtime: WorkerRuntimeProtocol,
+        renderer_type: str = DEFAULT_RENDERER_TYPE,
     ) -> None:
         self._pools = pools
         self._runtime = runtime
+        self._renderer_type = normalize_renderer_type(renderer_type)
         self._request_store = RequestStore()
         self._global_pending: deque[tuple[str, PendingRolloutJob]] = deque()
         self._in_flight: dict[
@@ -146,14 +153,21 @@ class DaemonScheduler:
                 job_id=pending_job.job_id,
                 scene_id=pending_job.scene_id,
                 rollout_spec_index=pending_job.rollout_spec_index,
-                artifact_path=pending_job.artifact_path,
                 endpoints=ServiceEndpoints(
                     driver=acquired["driver"],
                     sensorsim=acquired["sensorsim"],
+                    renderer=acquired[self._renderer_type],
                     physics=acquired["physics"],
                     trafficsim=acquired["trafficsim"],
                     controller=acquired["controller"],
+                    extra_services={
+                        name: address
+                        for name, address in acquired.items()
+                        if name not in CORE_SERVICE_NAMES
+                        and name != self._renderer_type
+                    },
                 ),
+                session_uuid=pending_job.session_uuid,
             )
             self._runtime.submit_assigned_job(assigned)
             self._in_flight[assigned.job_id] = (pools, acquired)

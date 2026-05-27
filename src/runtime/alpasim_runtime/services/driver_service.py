@@ -205,11 +205,13 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
     async def drive(
         self, time_now_us: int, time_query_us: int, renderer_data: bytes | None
-    ) -> Trajectory:
+    ) -> tuple[Trajectory, bool]:
         """Request a drive decision for the current session.
 
         Returns:
-            Trajectory containing the selected trajectory for the ego vehicle.
+            Tuple of (trajectory, terminate_session).  When terminate_session
+            is True the caller should terminate the rollout immediately
+            without completing the remainder of the step.
         """
         session_info = self._require_session_info()
         # Create request with both old and new fields for backward compatibility
@@ -260,4 +262,4 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
         await session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
-        return trajectory_from_grpc(response.trajectory)
+        return trajectory_from_grpc(response.trajectory), response.terminate_session

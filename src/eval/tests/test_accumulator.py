@@ -198,6 +198,9 @@ class TestEvalDataAccumulatorHandleMessage:
         assert query_us == 200_000
         assert isinstance(response, DriveResponse)
 
+        accumulator.handle_message(_create_driver_request(300_000, 400_000))
+        assert accumulator._pending_request == (300_000, 400_000)
+
     def test_ignores_orphan_driver_return(
         self, default_eval_config: EvalConfig
     ) -> None:

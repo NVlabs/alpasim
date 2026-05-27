@@ -2,6 +2,7 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import logging
+import traceback
 from abc import ABC, abstractmethod
 
 from eval.data import MetricReturn, SimulationResult
@@ -38,6 +39,9 @@ class ScorerGroup(Scorer):
                 # We're not raising an error here because we want to continue
                 # scoring other metrics even if one metric fails.
                 logger.error(
-                    "Error calculating metrics for %s: %s", scorer.__class__.__name__, e
+                    "Error calculating metrics for %s: %s\n%s",
+                    scorer.__class__.__name__,
+                    e,
+                    traceback.format_exc(),
                 )
         return results

@@ -15,11 +15,12 @@ from alpasim_runtime.config import (
     UserSimulatorConfig,
 )
 from alpasim_runtime.endpoints import get_endpoint_addresses
+from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
-from alpasim_utils.artifact import Artifact
+from alpasim_utils.services import DEFAULT_RENDERER_TYPE, normalize_renderer_type
 from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.schema import EvalConfig
@@ -32,7 +33,7 @@ def create_address_pools(config: SimulatorConfig) -> dict[str, AddressPool]:
     endpoints = config.user.endpoints
     network = config.network
 
-    return {
+    pools = {
         "driver": AddressPool(
             get_endpoint_addresses(network.driver),
             endpoints.driver.n_concurrent_rollouts,
@@ -59,6 +60,22 @@ def create_address_pools(config: SimulatorConfig) -> dict[str, AddressPool]:
             skip=endpoints.controller.skip,
         ),
     }
+
+    renderer_type = normalize_renderer_type(config.user.renderer_type)
+    if renderer_type != DEFAULT_RENDERER_TYPE:
+        renderer_service = network.extra_services.get(renderer_type)
+        if renderer_service is None:
+            raise ValueError(
+                "Missing network.extra_services entry for active renderer "
+                f"{renderer_type!r}"
+            )
+        pools[renderer_type] = AddressPool(
+            get_endpoint_addresses(renderer_service),
+            1,
+            skip=False,
+        )
+
+    return pools
 
 
 def compute_max_in_flight(
@@ -122,13 +139,13 @@ class RuntimeContext:
     """Immutable snapshot of all runtime state needed to dispatch simulation jobs.
 
     Built once during startup by ``build_runtime_context`` after config parsing,
-    service version probing, scenario validation, and address pool creation.
+    service version probing, scenario validation, scene loader creation, and address pool creation.
     """
 
     config: SimulatorConfig
     eval_config: EvalConfig
     version_ids: RolloutMetadata.VersionIds
-    scene_id_to_artifact_path: dict[str, str]
+    scene_loader: SceneLoader
     pools: dict[str, AddressPool]
     max_in_flight: int
 
@@ -148,7 +165,6 @@ async def build_runtime_context(
     user_config_path: str,
     network_config_path: str,
     eval_config_path: str,
-    usdz_glob: str,
     validate_config_scenes: bool = True,
 ) -> RuntimeContext:
     """Build the RuntimeContext by parsing configs, probing services, and validating scenarios.
@@ -157,20 +173,20 @@ async def build_runtime_context(
         1. Parse user and network configs.
         2. Probe all service addresses for version IDs.
         3. Validate scenario compatibility (unless *validate_config_scenes* is False).
-        4. Discover scene artifacts from *usdz_glob*.
+        4. Build the scene loader from scene_provider config.
         5. Create address pools and compute max in-flight concurrency.
 
     Args:
         user_config_path: Path to user YAML config.
         network_config_path: Path to network YAML config.
         eval_config_path: Path to evaluation YAML config.
-        usdz_glob: Glob pattern for USDZ artifact discovery.
         validate_config_scenes: If False, skip scene compatibility checks
             (useful for daemon mode where scenes come from requests).
     """
     config = parse_simulator_config(user_config_path, network_config_path)
     eval_config = typed_parse_config(eval_config_path, EvalConfig)
 
+    # Validate configuration
     version_ids = await gather_versions_from_addresses(
         config.network,
         config.user.endpoints,
@@ -186,13 +202,8 @@ async def build_runtime_context(
         )
     await validate_scenarios(config_for_validation)
 
-    scene_id_to_artifact_path = {
-        scene_id: artifact.source
-        for scene_id, artifact in Artifact.discover_from_glob(
-            usdz_glob,
-            smooth_trajectories=config.user.smooth_trajectories,
-        ).items()
-    }
+    scene_loader = build_scene_loader(config.user)
+
     pools = create_address_pools(config)
     max_in_flight = compute_max_in_flight(pools, config)
 
@@ -200,7 +211,7 @@ async def build_runtime_context(
         config=config,
         eval_config=eval_config,
         version_ids=version_ids,
-        scene_id_to_artifact_path=scene_id_to_artifact_path,
+        scene_loader=scene_loader,
         pools=pools,
         max_in_flight=max_in_flight,
     )

@@ -1,0 +1,18 @@
+# @package _global_
+# Chunking knobs for an 8-frame video model server
+# (`--num_frames_per_block=8`). Apply with `+chunking=8frame`.
+#
+# first_chunk_frames is constrained by the server's VAE temporal compression
+# ratio of 4: initial_frame_chunk_size = (chunk_frames // 4 - 1) * 4 + 1.
+# control_timestep_us tracks regular chunk duration at 30 FPS:
+# chunk_frames * 33_333. force_gt_duration_us follows:
+# first_chunk_frames * 33_333 + N * control_timestep_us.
+
+runtime:
+  renderer_config:
+    first_chunk_frames: 5
+    chunk_frames: 8
+
+  simulation_config:
+    control_timestep_us: 266_664
+    force_gt_duration_us: 2_033_313

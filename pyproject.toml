@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.70.0"
+version = "0.80.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -37,6 +37,8 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+internal = ["alpasim-internal"]
+video_model = ["alpasim-video-model"]
 
 [tool.uv.workspace]
 members = [
@@ -66,6 +68,9 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
+alpasim-internal = { workspace = true }
+alpasim-video-model = { workspace = true }
+trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
 
 [tool.uv]
 python-preference = "only-managed"
@@ -89,10 +94,11 @@ override-dependencies = [
   # `lightning` (transitive via vam==2.4.0) is quarantined on PyPI after the
   # April 30 2026 supply-chain compromise of versions 2.6.2/2.6.3 (TeamPCP
   # campaign). Project-wide quarantine blocks fresh installs of every version,
-  # including 2.4.0, breaking AlpaSim wizard daemon launches. Override to the
-  # upstream git tag (pinned by SHA, immune to tag retargeting) to bypass PyPI
-  # until the project is unquarantined.
-  "lightning @ git+https://github.com/Lightning-AI/pytorch-lightning.git@2129fdf3622e39ba46be4e1139af408e7e951cf3",
+  # including 2.4.0, breaking AlpaSim wizard daemon launches. Pull the GitHub
+  # SHA-pinned archive tarball (immune to tag retargeting, identical SHA to
+  # the git tag 2.4.0) — git+https of this repo's full history is too large
+  # to fetch reliably from the slurm runner network.
+  "lightning @ https://github.com/Lightning-AI/pytorch-lightning/archive/2129fdf3622e39ba46be4e1139af408e7e951cf3.tar.gz",
 ]
 constraint-dependencies = [
   # setuptools 82+ removed pkg_resources, which grpcio-tools 1.62.3 still needs.

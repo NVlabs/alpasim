@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from alpasim_utils.geometry import Pose, Trajectory
 
-from eval.data import RAABB, RenderableTrajectory
+from eval.data import RAABB, DriverResponses, RenderableTrajectory
 
 
 @pytest.fixture
@@ -184,3 +184,59 @@ class TestRAABB:
         assert raabb.size_y == 2.5
         assert raabb.size_z == 1.8
         assert raabb.corner_radius_m == 0.2
+
+
+class TestDriverResponsesGetForTimeEmpty:
+    """Regression: get_driver_response_for_time must handle empty response lists.
+
+    Sessions that abort during force_gt warmup with ``step_subsample_rate > 1``
+    can reach the eval pipeline with ``timestamps_us`` and/or
+    ``query_times_us`` empty — no policy-driven driver response was ever
+    recorded before the abort.  Several scorers (MinADE, PlanDeviation,
+    Safety) iterate over the metric grid and call this method; if it crashes
+    on an empty response list, every scorer dies with IndexError and the
+    whole eval subprocess is taken out as BrokenProcessPool.
+    """
+
+    def _empty_driver_responses(self, sample_raabb: RAABB) -> DriverResponses:
+        ego_traj = RenderableTrajectory(
+            timestamps_us=np.array([0], dtype=np.uint64),
+            positions=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+            quaternions=np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+            raabb=sample_raabb,
+        )
+        return DriverResponses(
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            ego_trajectory_local=ego_traj,
+        )
+
+    def test_get_for_time_empty_returns_none_now(self, sample_raabb: RAABB) -> None:
+        dr = self._empty_driver_responses(sample_raabb)
+        assert dr.get_driver_response_for_time(100_000, "now") is None
+
+    def test_get_for_time_empty_returns_none_query(self, sample_raabb: RAABB) -> None:
+        dr = self._empty_driver_responses(sample_raabb)
+        assert dr.get_driver_response_for_time(100_000, "query") is None
+
+    def test_get_for_time_past_end_returns_none(self, sample_raabb: RAABB) -> None:
+        """``time`` beyond the last recorded entry returns None (no IndexError).
+
+        Previously this crashed with ``IndexError`` on
+        ``timestamps_to_search[idx]`` when ``idx == len(...)`` and the
+        corner-case ``query_times_us[-1]`` guard didn't match.
+        """
+        ego_traj = RenderableTrajectory(
+            timestamps_us=np.array([0], dtype=np.uint64),
+            positions=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+            quaternions=np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+            raabb=sample_raabb,
+        )
+        dr = DriverResponses(
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            ego_trajectory_local=ego_traj,
+            timestamps_us=[100_000, 200_000],
+            query_times_us=[100_000, 200_000],
+            per_timestep_driver_responses=[],  # unused on the no-response path
+        )
+        # Past last entry, but not matching the query_times_us[-1] corner case.
+        assert dr.get_driver_response_for_time(500_000, "now") is None

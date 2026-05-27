@@ -1,5 +1,10 @@
 nr_workers: 1
 
+scene_provider:
+  kind: usdz
+  usdz:
+    data_dir: tests/data/mock
+
 endpoints:
   controller:
     n_concurrent_rollouts: 14
@@ -56,22 +61,20 @@ simulation_config:
       width: 512
       frame_interval_us: 100000
       shutter_duration_us: 30000
-      first_frame_offset_us: -30000
     - logical_id: camera_front_tele_30fov
       height: 320
       width: 512
       frame_interval_us: 100000
       shutter_duration_us: 30000
-      first_frame_offset_us: -30000
   control_timestep_us: 100000
-  force_gt_duration_us: 100000000000000 # large for mock test to prevent need for real drive trajectories
+  # Large for mock test to prevent need for real drive trajectories.
+  force_gt_duration_us: 100000000000000
   n_rollouts: 1
-  n_sim_steps: 50
+  n_sim_steps: 1
   physics_update_mode: NONE
   planner_delay_us: 0
   ego_mask_rig_config_id: "hyperion_8_1"
   route_generator_type: MAP
-  time_start_offset_us: 300000
   vehicle: null
 scenes:
   - scene_id: clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71  # Note: needs to match file from tests/data/mock/dataset-clipgt-1ea7dc88...

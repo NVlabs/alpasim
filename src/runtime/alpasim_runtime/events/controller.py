@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 from alpasim_runtime.events.base import EventPriority, EventQueue, RecurringEvent
+from alpasim_runtime.events.force_gt_utils import controller_reference_trajectory
 from alpasim_runtime.events.state import RolloutState, ServiceBundle
 from alpasim_utils import geometry
 
@@ -65,28 +66,33 @@ class ControllerEvent(RecurringEvent):
 
         pose_local_to_rig = state.ego_trajectory.last_pose
 
-        if force_gt and (len(reference_trajectory_of_rig_in_local.timestamps_us) == 0):
-            max_interp_time_us = min(
-                step_start_us + int(5e6),
-                state.unbound.gt_ego_trajectory.time_range_us.stop - 1,
-            )
-            reference_trajectory_of_rig_in_local = (
-                state.unbound.gt_ego_trajectory.interpolate(
-                    np.linspace(
-                        step_start_us, max_interp_time_us, num=51, dtype=np.uint64
-                    )
+        if force_gt:
+            fallback_trajectory_local_to_rig = state.force_gt_trajectory
+            fallback_range_us = state.force_gt_trajectory.time_range_us
+            if step_start_us not in fallback_range_us:
+                raise ValueError(
+                    "force-GT trajectory does not cover controller step start: "
+                    f"step_start_us={step_start_us}, "
+                    f"trajectory_range={fallback_range_us}"
                 )
+            if target_time_us not in fallback_range_us:
+                raise ValueError(
+                    "force-GT trajectory does not cover controller target: "
+                    f"target_time_us={target_time_us}, "
+                    f"trajectory_range={fallback_range_us}"
+                )
+
+            reference_trajectory_of_rig_in_local = controller_reference_trajectory(
+                state.force_gt_trajectory, step_start_us
             )
 
-        if force_gt:
             dt = (target_time_us - step_start_us) / 1e6
-            pose_local_to_rig_t0 = state.unbound.gt_ego_trajectory.interpolate_pose(
+            pose_local_to_rig_t0 = state.force_gt_trajectory.interpolate_pose(
                 step_start_us
             )
-            pose_local_to_rig_t1 = state.unbound.gt_ego_trajectory.interpolate_pose(
+            pose_local_to_rig_t1 = state.force_gt_trajectory.interpolate_pose(
                 target_time_us
             )
-            fallback_trajectory_local_to_rig = state.unbound.gt_ego_trajectory
         else:
             assert len(state.ego_trajectory.timestamps_us) >= 2, (
                 "ego_trajectory must have at least 2 entries by the time the "

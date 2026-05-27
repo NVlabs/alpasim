@@ -83,6 +83,7 @@ def _cfg(tmp_path: Path, *, run_sim_services: list[str] | None = None):
         scenes=SimpleNamespace(
             nre_version_string="26.02",
             test_suite_id=None,
+            sceneset_path="sceneset-a",
         ),
         services=SimpleNamespace(
             driver=_service(["driver", "--port={port}"]),
@@ -107,7 +108,6 @@ def _context(cfg, *, baseport: int = 6100) -> WizardContext:
         port_assigner=_port_assigner(baseport),
         artifact_list=[],
         num_gpus=0,
-        sceneset_path="sceneset-a",
     )
 
 
