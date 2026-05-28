@@ -1,9 +1,8 @@
 name: Test Stage
 
 on:
-  pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, "pull-request/[0-9]+"]
   workflow_dispatch:
     inputs:
       enable_infra_tests:
@@ -12,7 +11,7 @@ on:
         default: "false"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -147,15 +146,14 @@ jobs:
           set -euo pipefail
           SERVICE="${{ matrix.service }}"
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          else
-            BASE_SHA="${{ github.event.before }}"
-            HEAD_SHA="${{ github.sha }}"
-          fi
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
 
-          CHANGED_FILES="$(bash ./.github/scripts/changed-files.sh "${{ github.event_name }}" "${BASE_SHA}" "${HEAD_SHA}")"
+          CHANGED_FILES="$(bash ./.github/scripts/changed-files.sh \
+            "${{ github.event_name }}" \
+            "${BASE_SHA}" \
+            "${HEAD_SHA}" \
+            "${{ github.event.repository.default_branch }}")"
 
           # Build only when service source changed; otherwise this stage is a no-op.
           SOURCE="stable"
