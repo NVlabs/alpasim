@@ -35,6 +35,7 @@ def test_create_system_via_registry(mpc_impl: MPCImplementation) -> None:
     """create_system() returns a System with a controller from the plugin registry."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         log_file = f.name
+    system = None
     try:
         initial_state = _make_initial_state()
         system = create_system(
@@ -46,5 +47,7 @@ def test_create_system_via_registry(mpc_impl: MPCImplementation) -> None:
         assert hasattr(system, "_controller")
         assert hasattr(system._controller, "compute_control")
     finally:
+        if system is not None:
+            system.close()
         if os.path.exists(log_file):
             os.unlink(log_file)
