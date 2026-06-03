@@ -343,7 +343,7 @@ jobs:
             services.physics.workdir=/repo/src/physics \
             services.runtime.workdir=/repo/src/runtime \
             services.controller.workdir=/repo/src/controller \
-            services.sensorsim.gpus=[0] \
+            services.renderer.gpus=[0] \
             services.physics.gpus=[0] \
             services.driver.gpus=[0]
 
@@ -524,7 +524,7 @@ jobs:
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${LOCAL_OUTPUT_PATH}"
           # Tutorial smoke intentionally scopes to core sim services; runtime-0 owns shutdown.
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --exit-code-from runtime-0 --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --exit-code-from runtime-0 --remove-orphans runtime-0 driver-0 physics-0 renderer-0 controller-0
 
       - name: Collect tutorial logs and tear down
         if: always()
