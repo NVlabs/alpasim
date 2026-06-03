@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.82.0"
+version = "0.87.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -37,7 +37,6 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
-internal = ["alpasim-internal"]
 
 [tool.uv.workspace]
 members = [
@@ -67,7 +66,6 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-alpasim-internal = { workspace = true }
 trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
 
 [tool.uv]
