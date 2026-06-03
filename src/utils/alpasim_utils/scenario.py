@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Self
+from typing import Any, Self
 
 import csaps
 import numpy as np
@@ -76,12 +77,93 @@ class Rig:
     sequence_id: str
     trajectory: Trajectory
     camera_ids: list[CameraId]
+    camera_frame_timestamps_us: dict[str, list[int]]
+    camera_frame_ranges_us: dict[str, list[range]]
     world_to_nre: (
         np.ndarray
     )  # needed as long as cuboid tracks are exported in NRE coords
     vehicle_config: (
         VehicleConfig | None
     )  # ego configuration if available in usdz checkpoint
+
+    @staticmethod
+    def _parse_camera_frame_ranges(
+        raw_timestamps: Any, unique_camera_id: str, sequence_id: str
+    ) -> list[range]:
+        if not isinstance(raw_timestamps, list):
+            raise ValueError(
+                f"Camera {unique_camera_id!r} in {sequence_id=} has malformed "
+                "frame timestamps: expected a list."
+            )
+
+        frame_ranges_us: list[range] = []
+        for frame_idx, raw_frame in enumerate(raw_timestamps):
+            if (
+                isinstance(raw_frame, list | tuple)
+                and len(raw_frame) >= 2
+                and isinstance(raw_frame[0], int)
+                and isinstance(raw_frame[1], int)
+            ):
+                start_us = int(raw_frame[0])
+                end_us = int(raw_frame[1])
+            else:
+                raise ValueError(
+                    f"Camera {unique_camera_id!r} in {sequence_id=} has malformed "
+                    f"frame timestamp at index {frame_idx}: {raw_frame!r}."
+                )
+            if end_us <= start_us:
+                raise ValueError(
+                    f"Camera {unique_camera_id!r} in {sequence_id=} has malformed "
+                    f"frame timestamp at index {frame_idx}: end must be after start."
+                )
+
+            frame_ranges_us.append(range(start_us, end_us))
+
+        return frame_ranges_us
+
+    def first_camera_frame_ranges_us(
+        self, camera_logical_ids: Iterable[str]
+    ) -> dict[str, range]:
+        """First recorded frame window for each configured logical camera."""
+        first_frame_ranges_us: dict[str, range] = {}
+        available_by_logical_id = {
+            camera_id.logical_name: camera_id.unique_id for camera_id in self.camera_ids
+        }
+
+        for logical_id in camera_logical_ids:
+            unique_id = available_by_logical_id.get(logical_id)
+            if unique_id is None:
+                available = ", ".join(sorted(available_by_logical_id))
+                raise ValueError(
+                    f"Configured camera {logical_id!r} is not present in rig "
+                    f"{self.sequence_id!r}. Available cameras: {available}."
+                )
+
+            ranges_us = self.camera_frame_ranges_us.get(unique_id)
+            if not ranges_us:
+                raise ValueError(
+                    f"Configured camera {logical_id!r} ({unique_id!r}) in rig "
+                    f"{self.sequence_id!r} has no frame timestamps."
+                )
+            first_frame_ranges_us[logical_id] = ranges_us[0]
+
+        if not first_frame_ranges_us:
+            raise ValueError("At least one runtime camera must be configured.")
+
+        return first_frame_ranges_us
+
+    def first_camera_frame_end_us(self, camera_logical_ids: Iterable[str]) -> int:
+        """Central first-frame shutter-close time for configured cameras.
+
+        The earliest first-frame end is the rollout render anchor.  Individual
+        per-camera ranges remain available via ``first_camera_frame_ranges_us``.
+        """
+        return min(
+            frame_range.stop
+            for frame_range in self.first_camera_frame_ranges_us(
+                camera_logical_ids
+            ).values()
+        )
 
     @classmethod
     def load_from_json(cls, json_str: str) -> list[Self]:
@@ -103,8 +185,24 @@ class Rig:
             rig_timestamps_us = trajectory["T_rig_world_timestamps_us"]
             rig_poses = trajectory["T_rig_worlds"]
 
+            if "cameras_frame_timestamps_us" not in trajectory:
+                raise ValueError(
+                    f"Missing cameras_frame_timestamps_us in rig trajectory for {sequence_id=}."
+                )
+
+            camera_frame_timestamps_us = {}
+            camera_frame_ranges_us = {}
             camera_ids = []
-            for unique_camera_id in trajectory["cameras_frame_timestamps_us"].keys():
+            for (
+                unique_camera_id,
+                raw_timestamps,
+            ) in trajectory["cameras_frame_timestamps_us"].items():
+                if unique_camera_id not in unique_camera_id_to_camera_id:
+                    raise ValueError(
+                        f"Camera {unique_camera_id!r} in {sequence_id=} is missing "
+                        "from camera_calibrations."
+                    )
+
                 id = CameraId(
                     logical_name=unique_camera_id_to_camera_id[unique_camera_id],
                     trajectory_idx=trajectory_idx,
@@ -113,6 +211,13 @@ class Rig:
                 )
 
                 camera_ids.append(id)
+                frame_ranges_us = cls._parse_camera_frame_ranges(
+                    raw_timestamps, unique_camera_id, sequence_id
+                )
+                camera_frame_ranges_us[unique_camera_id] = frame_ranges_us
+                camera_frame_timestamps_us[unique_camera_id] = [
+                    frame_range.stop for frame_range in frame_ranges_us
+                ]
 
             # parse vehicle config (bbox and ds_to_aabb transform) if available
             if "rig_bbox" not in trajectory:
@@ -157,6 +262,8 @@ class Rig:
                         poses=poses_list,
                     ),
                     camera_ids=camera_ids,
+                    camera_frame_timestamps_us=camera_frame_timestamps_us,
+                    camera_frame_ranges_us=camera_frame_ranges_us,
                     world_to_nre=world_to_nre,
                     vehicle_config=vehicle_config,
                 )

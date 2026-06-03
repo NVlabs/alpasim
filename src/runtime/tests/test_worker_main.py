@@ -6,79 +6,21 @@
 from __future__ import annotations
 
 from multiprocessing import Queue
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import ServiceAddress
-from alpasim_runtime.worker.artifact_cache import make_artifact_loader
+from alpasim_runtime.config import RendererConfig, RendererKind, VideoModelConfig
 from alpasim_runtime.worker.ipc import (
     SHUTDOWN_SENTINEL,
     AssignedRolloutJob,
     JobResult,
     ServiceEndpoints,
 )
-from alpasim_runtime.worker.main import run_worker_loop
-
-
-def test_artifact_loader_reuses_cached_instances() -> None:
-    """Repeated loads for same (scene_id, path) return the same cached object."""
-    load = make_artifact_loader(smooth_trajectories=True)
-
-    first = load("scene-a", "/tmp/scene-a.usdz")
-    second = load("scene-a", "/tmp/scene-a.usdz")
-
-    assert first is second
-
-
-def test_artifact_loader_loads_distinct_scenes() -> None:
-    """Different scene IDs produce different Artifact objects."""
-    load = make_artifact_loader(smooth_trajectories=True)
-
-    scene_a = load("scene-a", "/tmp/scene-a.usdz")
-    scene_b = load("scene-b", "/tmp/scene-b.usdz")
-
-    assert scene_a is not scene_b
-
-
-def test_artifact_loader_evicts_when_capacity_exceeded() -> None:
-    """When full, the cache should evict entries to satisfy max_cache_size."""
-    load = make_artifact_loader(smooth_trajectories=True, max_cache_size=2)
-
-    scene_a_first = load("scene-a", "/tmp/scene-a.usdz")
-    load("scene-b", "/tmp/scene-b.usdz")
-    load("scene-c", "/tmp/scene-c.usdz")
-
-    assert load("scene-b", "/tmp/scene-b.usdz") is not None
-
-    # scene-a should have been evicted; a fresh load returns a new object.
-    scene_a_second = load("scene-a", "/tmp/scene-a.usdz")
-    assert scene_a_second is not scene_a_first
-
-
-def test_artifact_loader_cache_info() -> None:
-    """The returned callable exposes lru_cache's cache_info."""
-    load = make_artifact_loader(smooth_trajectories=True, max_cache_size=4)
-
-    load("s1", "/tmp/s1.usdz")
-    load("s1", "/tmp/s1.usdz")  # hit
-    load("s2", "/tmp/s2.usdz")
-
-    info = load.cache_info()  # type: ignore[attr-defined]
-    assert info.hits == 1
-    assert info.misses == 2
-    assert info.maxsize == 4
-
-
-def test_artifact_loader_disabled_cache() -> None:
-    """max_cache_size=0 disables caching; every call creates a new Artifact."""
-    load = make_artifact_loader(smooth_trajectories=True, max_cache_size=0)
-
-    first = load("scene-a", "/tmp/scene-a.usdz")
-    second = load("scene-a", "/tmp/scene-a.usdz")
-
-    assert first is not second
+from alpasim_runtime.worker.main import run_single_rollout, run_worker_loop
 
 
 @pytest.mark.asyncio
@@ -91,7 +33,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
     async def _fake_run_single_rollout(
         job,
         user_config,
-        artifacts,
+        data_source,
         camera_catalog,
         version_ids,
         rollouts_dir,
@@ -100,7 +42,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
     ) -> JobResult:
         del (
             user_config,
-            artifacts,
+            data_source,
             camera_catalog,
             rollouts_dir,
             eval_config,
@@ -125,7 +67,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
 
     endpoints = ServiceEndpoints(
         driver=ServiceAddress("localhost:10001", skip=False),
-        sensorsim=ServiceAddress("localhost:10002", skip=False),
+        renderer=ServiceAddress("localhost:10002", skip=False),
         physics=ServiceAddress("localhost:10003", skip=False),
         trafficsim=ServiceAddress("localhost:10004", skip=False),
         controller=ServiceAddress("localhost:10005", skip=False),
@@ -135,7 +77,6 @@ async def test_run_worker_loop_uses_parent_version_ids(
         job_id="job-1",
         scene_id="scene-1",
         rollout_spec_index=0,
-        artifact_path="/tmp/scene-1.usdz",
         endpoints=endpoints,
     )
 
@@ -149,6 +90,8 @@ async def test_run_worker_loop_uses_parent_version_ids(
     )
     user_config = MagicMock()
     user_config.endpoints.startup_timeout_s = 1
+    scene_loader = MagicMock()
+    scene_loader.get_data_source.return_value = MagicMock()
 
     completed = await run_worker_loop(
         worker_id=0,
@@ -156,8 +99,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
         result_queue=result_queue,
         num_consumers=1,
         user_config=user_config,
-        smooth_trajectories=False,
-        artifact_cache_size=0,
+        scene_loader=scene_loader,
         camera_catalog=MagicMock(),
         version_ids=parent_version_ids,
         rollouts_dir="/tmp",
@@ -172,3 +114,118 @@ async def test_run_worker_loop_uses_parent_version_ids(
     assert result.rollout_spec_index == 0
     assert result.success is True
     assert seen_version_ids is parent_version_ids
+
+
+@pytest.mark.asyncio
+async def test_run_single_rollout_uses_builtin_video_model_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_renderer_service = object()
+    captured: dict[str, object] = {}
+
+    class FakeRolloutRunner:
+        async def run(self):
+            return "eval-ok"
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.DriverService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.SensorsimService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.PhysicsService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.TrafficService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.ControllerService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+
+    def _fake_video_model_service(
+        address,
+        config,
+        skip=False,
+        camera_catalog=None,
+    ):
+        captured["config"] = config
+        captured["address"] = address
+        captured["skip"] = skip
+        captured["camera_catalog"] = camera_catalog
+        return fake_renderer_service
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.VideoModelService",
+        _fake_video_model_service,
+    )
+
+    def _fake_unbound_create(**kwargs):
+        captured["unbound_create_kwargs"] = kwargs
+        return SimpleNamespace(rollout_uuid="rollout-uuid", scene_id="scene-1")
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.UnboundRollout.create",
+        _fake_unbound_create,
+    )
+
+    def _fake_create_event_rollout(**kwargs):
+        captured["rollout_kwargs"] = kwargs
+        return FakeRolloutRunner()
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.create_event_rollout",
+        _fake_create_event_rollout,
+    )
+
+    job = AssignedRolloutJob(
+        request_id="req-1",
+        job_id="job-1",
+        scene_id="scene-1",
+        rollout_spec_index=0,
+        endpoints=ServiceEndpoints(
+            driver=ServiceAddress("localhost:10001", skip=False),
+            renderer=ServiceAddress("localhost:10006", skip=False),
+            physics=ServiceAddress("localhost:10003", skip=False),
+            trafficsim=ServiceAddress("localhost:10004", skip=False),
+            controller=ServiceAddress("localhost:10005", skip=False),
+        ),
+    )
+    video_model_config = VideoModelConfig(fps=24)
+    user_config = SimpleNamespace(
+        renderer=RendererConfig(
+            kind=RendererKind.video_model,
+            video_model_config=video_model_config,
+        ),
+        simulation_config=MagicMock(),
+    )
+
+    data_source = MagicMock()
+    result = await run_single_rollout(
+        job=job,
+        user_config=user_config,
+        data_source=data_source,
+        camera_catalog=MagicMock(),
+        version_ids=MagicMock(),
+        rollouts_dir="/tmp",
+        eval_config=MagicMock(),
+        eval_executor=MagicMock(),
+    )
+
+    assert result.success is True
+    assert captured["config"] is video_model_config
+    assert captured["address"] == "localhost:10006"
+    assert captured["skip"] is False
+    assert captured["camera_catalog"] is not None
+    assert (
+        captured["unbound_create_kwargs"]["renderer_service"] is fake_renderer_service
+    )
+    assert captured["rollout_kwargs"]["renderer_service"] is fake_renderer_service
+    assert captured["rollout_kwargs"]["data_source"] is data_source
+    # Renderer-specific artifact access stays behind data_source.
+    assert "artifact_path" not in captured["rollout_kwargs"]

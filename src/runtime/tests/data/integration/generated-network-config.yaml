@@ -10,7 +10,7 @@ physics:
   endpoints:
     - address: physics-0:6002
       managed: true
-sensorsim:
+renderer:
   endpoints:
     - address: sensorsim-0:6001
       managed: true

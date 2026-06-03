@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""Tests for GroupedRenderEvent (both aggregated and parallel render modes)."""
+"""Tests for camera frame render events."""
 
 from __future__ import annotations
 
@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from alpasim_runtime.events.base import EventQueue
-from alpasim_runtime.events.camera import GroupedRenderEvent
+from alpasim_runtime.events.camera import (
+    CameraFrameEvent,
+    CameraRenderFlushEvent,
+    make_initial_sensorsim_render_event,
+)
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.types import ImageWithMetadata
@@ -27,245 +31,151 @@ def _make_camera(logical_id: str) -> RuntimeCamera:
     )
 
 
-class TestGroupedRenderEventParallelMode:
-    """Tests for GroupedRenderEvent with use_aggregated_render=False (parallel individual RPCs)."""
+@pytest.mark.asyncio
+async def test_non_aggregated_camera_event_renders_immediately(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    camera = _make_camera("cam_front")
+    fake_image = MagicMock(spec=ImageWithMetadata)
+    mock_sensorsim.render.return_value = fake_image
 
-    @pytest.fixture
-    def cameras(self) -> list[RuntimeCamera]:
-        return [_make_camera("cam_front"), _make_camera("cam_rear")]
+    event = CameraFrameEvent(
+        camera=camera,
+        trigger=camera.clock.ith_trigger(0),
+        sensorsim=mock_sensorsim,
+        driver=mock_driver,
+        use_aggregated_render=False,
+    )
 
-    @pytest.fixture
-    def parallel_event(
-        self,
-        cameras: list[RuntimeCamera],
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-    ) -> GroupedRenderEvent:
-        return GroupedRenderEvent(
-            timestamp_us=100_000,
-            control_timestep_us=100_000,
-            cameras=cameras,
-            sensorsim=mock_sensorsim,
-            driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=False,
-        )
+    queue = EventQueue()
+    await event.handle(rollout_state, queue)
 
-    def test_priority(self, parallel_event: GroupedRenderEvent):
-        assert parallel_event.priority == 10
+    mock_sensorsim.render.assert_awaited_once()
+    mock_sensorsim.aggregated_render.assert_not_awaited()
+    assert rollout_state.last_camera_frame_us["cam_front"] == 33_000
+    assert len(rollout_state.step_context.outstanding_tasks) == 1
 
-    def test_description(self, parallel_event: GroupedRenderEvent):
-        desc = parallel_event.description()
-        assert "GroupedRenderEvent" in desc
-
-    @pytest.mark.asyncio
-    async def test_parallel_render_calls_individual_render_per_camera(
-        self,
-        parallel_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-    ):
-        """Each camera trigger should result in an individual render() call."""
-        fake_image = MagicMock(spec=ImageWithMetadata)
-        mock_sensorsim.render.return_value = fake_image
-
-        queue = EventQueue()
-        await parallel_event.run(rollout_state, queue)
-
-        # With 2 cameras that both have triggers in (0, 100_000], render
-        # should be called once per camera trigger.
-        assert mock_sensorsim.render.await_count >= 1
-        mock_sensorsim.aggregated_render.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_parallel_render_submits_images_to_driver(
-        self,
-        parallel_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-    ):
-        """All rendered images should be submitted to the driver."""
-        fake_image = MagicMock(spec=ImageWithMetadata)
-        mock_sensorsim.render.return_value = fake_image
-
-        queue = EventQueue()
-        await parallel_event.run(rollout_state, queue)
-
-        render_count = mock_sensorsim.render.await_count
-        # Drain tracked tasks to complete submissions
-        await rollout_state.step_context.drain_outstanding_tasks()
-        assert mock_driver.submit_image.await_count == render_count
-
-    @pytest.mark.asyncio
-    async def test_image_submissions_are_tracked_as_tasks(
-        self,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-    ):
-        """submit_image calls should be tracked as outstanding tasks on StepContext."""
-        cameras = [_make_camera("cam_front")]
-        fake_image = MagicMock(spec=ImageWithMetadata)
-        mock_sensorsim.render.return_value = fake_image
-
-        event = GroupedRenderEvent(
-            timestamp_us=100_000,
-            control_timestep_us=100_000,
-            cameras=cameras,
-            sensorsim=mock_sensorsim,
-            driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=False,
-        )
-        queue = EventQueue()
-        await event.run(rollout_state, queue)
-
-        # Image submissions are tracked as tasks, not directly awaited
-        assert len(rollout_state.step_context.outstanding_tasks) >= 1
-
-        # Drain completes the submissions
-        await rollout_state.step_context.drain_outstanding_tasks()
-        mock_driver.submit_image.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_parallel_render_does_not_set_driver_data(
-        self,
-        parallel_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-    ):
-        """Parallel mode uses individual render(), which has no driver_data."""
-        mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
-        rollout_state.data_sensorsim_to_driver = None
-
-        queue = EventQueue()
-        await parallel_event.run(rollout_state, queue)
-
-        assert rollout_state.data_sensorsim_to_driver is None
-
-    @pytest.mark.asyncio
-    async def test_parallel_render_tracks_last_camera_frame(
-        self,
-        parallel_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-    ):
-        """Camera frame timestamps should be tracked for sync validation."""
-        mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
-
-        queue = EventQueue()
-        await parallel_event.run(rollout_state, queue)
-
-        # At least one camera should have its frame time tracked
-        assert len(rollout_state.last_camera_frame_us) > 0
-
-    @pytest.mark.asyncio
-    async def test_no_triggers_skips_render(
-        self,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-    ):
-        """When no triggers fall in the window, no render calls are made."""
-        camera = MagicMock()
-        camera.clock = MagicMock()
-        camera.clock.triggers_completed_in_range.return_value = []
-
-        event = GroupedRenderEvent(
-            timestamp_us=200_000,
-            control_timestep_us=100_000,
-            cameras=[camera],
-            sensorsim=mock_sensorsim,
-            driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=False,
-        )
-
-        queue = EventQueue()
-        await event.run(rollout_state, queue)
-
-        mock_sensorsim.render.assert_not_awaited()
-        mock_driver.submit_image.assert_not_awaited()
+    await rollout_state.step_context.drain_outstanding_tasks()
+    mock_driver.submit_image.assert_awaited_once_with(fake_image)
+    assert len(queue) == 1
 
 
-class TestGroupedRenderEventAggregatedMode:
-    """Tests for GroupedRenderEvent with use_aggregated_render=True (single batched RPC)."""
+@pytest.mark.asyncio
+async def test_non_aggregated_camera_event_tags_first_render_as_warmup(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    camera = _make_camera("cam_front")
+    mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
 
-    @pytest.fixture
-    def aggregated_event(
-        self,
-        runtime_camera: RuntimeCamera,
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-    ) -> GroupedRenderEvent:
-        return GroupedRenderEvent(
-            timestamp_us=100_000,
-            control_timestep_us=100_000,
-            cameras=[runtime_camera],
-            sensorsim=mock_sensorsim,
-            driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=True,
-        )
+    event = CameraFrameEvent(
+        camera=camera,
+        trigger=camera.clock.ith_trigger(0),
+        sensorsim=mock_sensorsim,
+        driver=mock_driver,
+        use_aggregated_render=False,
+    )
 
-    @pytest.mark.asyncio
-    async def test_aggregated_render_calls_aggregated_rpc(
-        self,
-        aggregated_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-    ):
-        """Aggregated mode should call aggregated_render, not individual render."""
-        mock_sensorsim.aggregated_render.return_value = ([], None)
+    await event.handle(rollout_state, EventQueue())
 
-        queue = EventQueue()
-        await aggregated_event.run(rollout_state, queue)
+    assert rollout_state.did_warmup_render is True
 
-        mock_sensorsim.aggregated_render.assert_awaited_once()
-        mock_sensorsim.render.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_image_submissions_are_tracked_as_tasks_aggregated(
-        self,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-        mock_driver: AsyncMock,
-        runtime_camera: RuntimeCamera,
-    ):
-        """submit_image calls should be tracked as outstanding tasks in aggregated mode."""
-        fake_image = MagicMock(spec=ImageWithMetadata)
-        mock_sensorsim.aggregated_render.return_value = ([fake_image], None)
+@pytest.mark.asyncio
+async def test_aggregated_camera_events_flush_same_timestamp_together(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    cam_front = _make_camera("cam_front")
+    cam_rear = _make_camera("cam_rear")
+    trigger_front = Clock.Trigger(range(0, 33_000), sequential_idx=0)
+    trigger_rear = Clock.Trigger(range(1_000, 33_000), sequential_idx=0)
+    fake_image = MagicMock(spec=ImageWithMetadata)
+    mock_sensorsim.aggregated_render.return_value = ([fake_image], b"driver-data")
 
-        event = GroupedRenderEvent(
-            timestamp_us=100_000,
-            control_timestep_us=100_000,
-            cameras=[runtime_camera],
-            sensorsim=mock_sensorsim,
-            driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=True,
-        )
-        queue = EventQueue()
-        await event.run(rollout_state, queue)
+    queue = EventQueue()
+    await CameraFrameEvent(
+        cam_front, trigger_front, mock_sensorsim, mock_driver, True
+    ).handle(rollout_state, queue)
+    await CameraFrameEvent(
+        cam_rear, trigger_rear, mock_sensorsim, mock_driver, True
+    ).handle(rollout_state, queue)
 
-        assert len(rollout_state.step_context.outstanding_tasks) >= 1
+    assert len(rollout_state.pending_camera_triggers[33_000]) == 2
+    assert len(queue) == 3  # one flush plus one next frame per camera
 
-        await rollout_state.step_context.drain_outstanding_tasks()
-        mock_driver.submit_image.assert_awaited()
+    flush = next(
+        event for event in queue.queue if isinstance(event, CameraRenderFlushEvent)
+    )
+    await flush.handle(rollout_state, queue)
 
-    @pytest.mark.asyncio
-    async def test_aggregated_render_stores_driver_data(
-        self,
-        aggregated_event: GroupedRenderEvent,
-        rollout_state: RolloutState,
-        mock_sensorsim: AsyncMock,
-    ):
-        """Aggregated mode stores driver_data on rollout_state."""
-        driver_data_blob = b"aggregated_payload"
-        mock_sensorsim.aggregated_render.return_value = ([], driver_data_blob)
+    mock_sensorsim.aggregated_render.assert_awaited_once()
+    mock_sensorsim.render.assert_not_awaited()
+    assert rollout_state.data_sensorsim_to_driver == b"driver-data"
 
-        queue = EventQueue()
-        await aggregated_event.run(rollout_state, queue)
+    await rollout_state.step_context.drain_outstanding_tasks()
+    mock_driver.submit_image.assert_awaited_once_with(fake_image)
 
-        assert rollout_state.data_sensorsim_to_driver == driver_data_blob
+
+@pytest.mark.asyncio
+async def test_camera_event_schedules_next_frame_ending_at_rollout_boundary(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    camera = _make_camera("cam_front")
+    rollout_state.unbound.end_timestamp_us = 133_000
+    mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
+
+    queue = EventQueue()
+    await CameraFrameEvent(
+        camera=camera,
+        trigger=camera.clock.ith_trigger(0),
+        sensorsim=mock_sensorsim,
+        driver=mock_driver,
+        use_aggregated_render=False,
+    ).handle(rollout_state, queue)
+
+    assert len(queue) == 1
+    next_event = queue.queue[0]
+    assert isinstance(next_event, CameraFrameEvent)
+    assert next_event.trigger.time_range_us.stop == 133_000
+
+
+def test_initial_sensorsim_render_events_skip_first_triggers_outside_rollout(
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    inside = RuntimeCamera(
+        logical_id="inside",
+        render_resolution_hw=(720, 1280),
+        clock=Clock(interval_us=100_000, duration_us=33_000, start_us=0),
+    )
+    exact_end = RuntimeCamera(
+        logical_id="exact_end",
+        render_resolution_hw=(720, 1280),
+        clock=Clock(interval_us=100_000, duration_us=33_000, start_us=67_000),
+    )
+    outside = RuntimeCamera(
+        logical_id="outside",
+        render_resolution_hw=(720, 1280),
+        clock=Clock(interval_us=100_000, duration_us=33_000, start_us=100_000),
+    )
+
+    events = make_initial_sensorsim_render_event(
+        scene_start_us=0,
+        render_start_timestamp_us=0,
+        closed_loop_start_us=100_000,
+        simulation_end_us=100_000,
+        control_timestep_us=100_000,
+        runtime_cameras=[inside, exact_end, outside],
+        renderer_service=mock_sensorsim,
+        driver=mock_driver,
+        broadcaster=MagicMock(),
+    )
+
+    assert [event.camera.logical_id for event in events] == ["inside", "exact_end"]

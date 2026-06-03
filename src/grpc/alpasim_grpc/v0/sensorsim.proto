@@ -22,7 +22,6 @@ service SensorsimService {
     rpc get_version (common.Empty) returns (common.VersionId);
     rpc get_available_scenes (common.Empty) returns (common.AvailableScenesReturn);
     rpc get_available_cameras (AvailableCamerasRequest) returns (AvailableCamerasReturn);
-    rpc shut_down (common.Empty) returns (common.Empty);
     rpc get_available_trajectories (AvailableTrajectoriesRequest) returns (AvailableTrajectoriesReturn);
     rpc get_available_ego_masks (common.Empty) returns (AvailableEgoMasksReturn);
 }

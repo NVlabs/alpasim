@@ -24,6 +24,9 @@ CLAUDE.md
 src/tools/run-on-slurm/runs
 src/tools/run-on-slurm/outputs
 data/drivers/*
+data/alpackages/*
+data/huggingface
+data/vavam-driver
 outputs/
 artifacts/
 asset_harvesting/

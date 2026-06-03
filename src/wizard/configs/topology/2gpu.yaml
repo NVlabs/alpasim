@@ -2,7 +2,7 @@
 # 2-GPU topology: 12 concurrent rollouts. For multi-GPU workstations.
 
 defines:
-  nre_cache_size: 13  # sensorsim.n_concurrent_rollouts + 1
+  nre_cache_size: 13  # renderer.n_concurrent_rollouts + 1
 
 services:
   sensorsim:
@@ -31,11 +31,11 @@ runtime:
   nr_workers: 4
   endpoints:
     # Total capacity per service = nr_gpus x replicas_per_container x n_concurrent_rollouts
-    # SENS: 1 x 1 x 12 = 12
+    # REND: 1 x 1 x 12 = 12
     # DRIV: 1 x 3 x 4  = 12
     # PHYS: 2 x 1 x 6  = 12
     # CONT: 1 (CPU) x 6 x 2 = 12
-    sensorsim:
+    renderer:
       n_concurrent_rollouts: 12
     driver:
       n_concurrent_rollouts: 4

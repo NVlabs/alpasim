@@ -408,5 +408,23 @@ class CameraCatalog:
                 f"Camera '{logical_id}' is not defined for scene '{scene_id}'"
             )
 
+    def get_local_overrides(self) -> Dict[str, CameraDefinitionConfig]:
+        """Return a shallow copy of locally configured camera overrides."""
+        return dict(self._local_overrides)
+
+    def register_scene_definitions(
+        self, scene_id: str, scene_defs: Dict[str, CameraDefinition]
+    ) -> None:
+        """Register camera definitions for a scene without querying sensorsim.
+
+        This is useful for renderer backends that provide their own camera
+        definitions (for example, the internal video model renderer) and do not
+        rely on sensorsim for camera discovery.
+        """
+        self._scene_definitions[scene_id] = {
+            logical_id: definition.copy()
+            for logical_id, definition in scene_defs.items()
+        }
+
 
 __all__ = ["CameraCatalog", "CameraDefinition"]

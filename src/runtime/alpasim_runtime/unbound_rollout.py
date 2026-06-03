@@ -19,16 +19,25 @@ from alpasim_runtime.config import (
     SimulationConfig,
     VehicleConfig,
 )
+from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.sensorsim_service import ImageFormat
-from alpasim_utils.artifact import Artifact
 from alpasim_utils.geometry import Pose, Trajectory
-from alpasim_utils.scenario import AABB, TrafficObjects
+from alpasim_utils.scenario import AABB, TrafficObject, TrafficObjects
+from alpasim_utils.scene_data_source import SceneDataSource
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
 
-# A small epsilon is needed to get the last frames of the original clip rendered
-ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US = 1000
+
+@dataclass(frozen=True)
+class RolloutTiming:
+    egomotion_context_start_us: int
+    render_start_timestamp_us: int
+    first_policy_timestamp_us: int
+    closed_loop_start_us: int
+    end_timestamp_us: int
+    n_sim_steps: int
+    first_camera_frame_ranges_us: dict[str, range]
 
 
 def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
@@ -53,6 +62,80 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
     )
 
 
+def _build_rollout_timing(
+    simulation_config: SimulationConfig,
+    data_source: SceneDataSource,
+    camera_configs: list[RuntimeCameraConfig],
+    *,
+    renderer_service: RendererService,
+) -> RolloutTiming:
+    camera_logical_ids = [camera_cfg.logical_id for camera_cfg in camera_configs]
+    egomotion_context_start_us = data_source.rig.trajectory.time_range_us.start
+
+    # ``first_camera_frame_end_us`` raises through ``first_camera_frame_ranges_us``
+    # when no cameras are configured.  Headless rollouts fall back to the GT
+    # trajectory start as the render anchor.
+    if camera_logical_ids:
+        first_camera_frame_ranges_us = data_source.rig.first_camera_frame_ranges_us(
+            camera_logical_ids
+        )
+        render_start_us = data_source.rig.first_camera_frame_end_us(camera_logical_ids)
+    else:
+        first_camera_frame_ranges_us = {}
+        render_start_us = data_source.rig.trajectory.time_range_us.start
+
+    if simulation_config.assert_zero_decision_delay and camera_configs:
+        for camera_cfg in camera_configs:
+            first_camera_frame_ranges_us[camera_cfg.logical_id] = range(
+                render_start_us - camera_cfg.shutter_duration_us,
+                render_start_us,
+            )
+
+    first_policy_timestamp_us = renderer_service.required_policy_start_timestmap_us(
+        render_start_us
+    )
+
+    closed_loop_start_us = render_start_us + simulation_config.force_gt_duration_us
+    last_valid_gt_timestamp_us = data_source.rig.trajectory.time_range_us.stop - 1
+    n_sim_steps_allowed_by_time = max(
+        0,
+        (last_valid_gt_timestamp_us - first_policy_timestamp_us)
+        // simulation_config.control_timestep_us,
+    )
+    n_sim_steps_actual = min(
+        simulation_config.n_sim_steps,
+        n_sim_steps_allowed_by_time,
+    )
+    if n_sim_steps_actual <= 0:
+        raise ValueError(
+            "No complete policy step fits in the recording after policy start: "
+            f"first_policy_timestamp_us={first_policy_timestamp_us}, "
+            f"last_valid_gt_timestamp_us={last_valid_gt_timestamp_us}, "
+            f"control_timestep_us={simulation_config.control_timestep_us}"
+        )
+    if n_sim_steps_actual < simulation_config.n_sim_steps:
+        logger.info(
+            "Clipping n_sim_steps from %d to %d because only %d complete "
+            "policy steps fit between first_policy_timestamp_us=%d and scene end=%d",
+            simulation_config.n_sim_steps,
+            n_sim_steps_actual,
+            n_sim_steps_allowed_by_time,
+            first_policy_timestamp_us,
+            last_valid_gt_timestamp_us,
+        )
+
+    return RolloutTiming(
+        egomotion_context_start_us=egomotion_context_start_us,
+        render_start_timestamp_us=render_start_us,
+        first_policy_timestamp_us=first_policy_timestamp_us,
+        closed_loop_start_us=closed_loop_start_us,
+        end_timestamp_us=first_policy_timestamp_us
+        + (n_sim_steps_actual * simulation_config.control_timestep_us),
+        n_sim_steps=n_sim_steps_actual,
+        first_camera_frame_ranges_us=first_camera_frame_ranges_us,
+    )
+
+
 @dataclass
 class UnboundRollout:
     """Metadata for a single rollout on a scene.
@@ -70,15 +153,28 @@ class UnboundRollout:
     traffic_objs: TrafficObjects
     version_ids: RolloutMetadata.VersionIds
     n_sim_steps: int
-    start_timestamp_us: int
+    egomotion_context_start_us: int
+    # Timestamp at which the first rendered camera frame's shutter closes —
+    # this is also the start of the force-GT period and of the GT/physics
+    # blend window when ``physics_update_mode != NONE``.
+    render_start_timestamp_us: int
+    # First timestamp at which the policy/controller/physics pipeline runs.
+    # For sensorsim this is the first rendered frame timestamp. For the video
+    # model it is after the short first chunk so later pipeline steps align
+    # with regular chunks.
+    first_policy_timestamp_us: int
+    # Boundary between force-GT and policy-driven control.  This may be after
+    # ``end_timestamp_us`` for open-loop/log-replay rollouts.
+    closed_loop_start_us: int
+    end_timestamp_us: int
     force_gt_duration_us: int
+    skip_driver_during_force_gt: bool
     physics_update_mode: PhysicsUpdateMode
     save_path_root: str
-    time_start_offset_us: int
     control_timestep_us: int
     pose_reporting_interval_us: int
     camera_configs: list[RuntimeCameraConfig]
-    control_timestamps_us: list[int]
+    first_camera_frame_ranges_us: dict[str, range]
     force_gt_period: range
     image_format: ImageFormat
     ego_mask_rig_config_id: str
@@ -107,37 +203,28 @@ class UnboundRollout:
         simulation_config: SimulationConfig,
         scene_id: str,
         version_ids: RolloutMetadata.VersionIds,
-        available_artifacts: dict[str, Artifact],
+        data_source: SceneDataSource,
         rollouts_dir: str,
+        renderer_service: RendererService,
+        session_uuid: str | None = None,
     ) -> UnboundRollout:
-        artifact = available_artifacts[scene_id]
+        """Create UnboundRollout from SceneDataSource."""
 
         camera_configs = list(simulation_config.cameras)
-
-        control_timestamps_us_arr: np.ndarray = (
-            artifact.rig.trajectory.time_range_us.start
-            + simulation_config.time_start_offset_us
-            + np.arange(
-                simulation_config.n_sim_steps + 2
-            )  # we cut off the first and last interval so +2 here
-            * simulation_config.control_timestep_us
+        renderer_service.validate_timing_alignment(simulation_config)
+        timing = _build_rollout_timing(
+            simulation_config,
+            data_source,
+            camera_configs,
+            renderer_service=renderer_service,
         )
-
-        control_timestamps_us = [
-            int(min(t, artifact.rig.trajectory.time_range_us.stop - 1))
-            for t in control_timestamps_us_arr
-            if t
-            < artifact.rig.trajectory.time_range_us.stop
-            + ORIGINAL_TRAJECTORY_DURATION_EXTENSION_US
-        ]
-
-        start_us = control_timestamps_us[0]
-        end_us = control_timestamps_us[-1]
-        gt_ego_trajectory = artifact.rig.trajectory
+        gt_ego_trajectory = data_source.rig.trajectory
 
         # Filter out objects that are not in the time window
-        all_objs_in_window = artifact.traffic_objects.clip_trajectories(
-            start_us, end_us + 1, exclude_empty=True
+        all_objs_in_window = data_source.traffic_objects.clip_trajectories(
+            timing.egomotion_context_start_us,
+            timing.end_timestamp_us + 1,
+            exclude_empty=True,
         )
 
         # Filter out objects that appear for less than the minimum duration.
@@ -152,7 +239,7 @@ class UnboundRollout:
         # hack once the fix is released.
         hidden_ids = set(all_objs_in_window.keys()) - set(traffic_objects.keys())
 
-        hidden_objs_dict: dict[str, TrafficObjects.TrafficObject] = {}
+        hidden_objs_dict: dict[str, TrafficObject] = {}
         if hidden_ids:
             hide_offset = Pose(
                 np.array([0.0, 0.0, -100.0], dtype=np.float32),
@@ -168,30 +255,15 @@ class UnboundRollout:
             TrafficObjects(**hidden_objs_dict) if hidden_objs_dict else None
         )
 
-        # Validate that force_gt_duration is grid-aligned to control_timestep.
-        # A non-divisible duration creates ambiguous policy start timing.
-        if (
-            simulation_config.force_gt_duration_us > 0
-            and simulation_config.force_gt_duration_us
-            % simulation_config.control_timestep_us
-            != 0
-        ):
-            raise ValueError(
-                f"force_gt_duration_us ({simulation_config.force_gt_duration_us}) "
-                f"must be a multiple of control_timestep_us "
-                f"({simulation_config.control_timestep_us}). "
-                f"Non-divisible durations cause ambiguous policy start timing."
-            )
-
         force_gt_period = range(
-            control_timestamps_us[0],
-            control_timestamps_us[0] + simulation_config.force_gt_duration_us + 1,
+            timing.render_start_timestamp_us,
+            timing.closed_loop_start_us + 1,
         )
 
         if simulation_config.vehicle is not None:
             vehicle = simulation_config.vehicle
-        elif artifact.rig.vehicle_config is not None:
-            vehicle = artifact.rig.vehicle_config
+        elif data_source.rig.vehicle_config is not None:
+            vehicle = data_source.rig.vehicle_config
         else:
             raise ValueError("No vehicle config provided/found.")
 
@@ -202,20 +274,24 @@ class UnboundRollout:
         )
 
         return UnboundRollout(
-            rollout_uuid=str(uuid.uuid1()),
+            rollout_uuid=session_uuid or str(uuid.uuid1()),
             scene_id=scene_id,
             gt_ego_trajectory=gt_ego_trajectory,
             traffic_objs=traffic_objects,
-            n_sim_steps=simulation_config.n_sim_steps,
-            start_timestamp_us=artifact.rig.trajectory.time_range_us.start,
+            n_sim_steps=timing.n_sim_steps,
+            egomotion_context_start_us=timing.egomotion_context_start_us,
+            render_start_timestamp_us=timing.render_start_timestamp_us,
+            first_policy_timestamp_us=timing.first_policy_timestamp_us,
+            closed_loop_start_us=timing.closed_loop_start_us,
+            end_timestamp_us=timing.end_timestamp_us,
             force_gt_duration_us=simulation_config.force_gt_duration_us,
+            skip_driver_during_force_gt=simulation_config.skip_driver_during_force_gt,
             control_timestep_us=simulation_config.control_timestep_us,
             follow_log=None,
             save_path_root=os.path.join(rollouts_dir, scene_id),
-            time_start_offset_us=simulation_config.time_start_offset_us,
             version_ids=version_ids,
             camera_configs=camera_configs,
-            control_timestamps_us=control_timestamps_us,
+            first_camera_frame_ranges_us=timing.first_camera_frame_ranges_us,
             force_gt_period=force_gt_period,
             physics_update_mode=simulation_config.physics_update_mode,
             image_format={"jpeg": ImageFormat.JPEG, "png": ImageFormat.PNG}[
@@ -227,15 +303,15 @@ class UnboundRollout:
                 vehicle
             ),
             ego_aabb=ego_aabb,
-            nre_runid=str(artifact.metadata.logger.run_id),
-            nre_version=artifact.metadata.version_string,
-            nre_uuid=str(artifact.metadata.uuid),
+            nre_runid=str(data_source.metadata.logger.run_id),
+            nre_version=data_source.metadata.version_string,
+            nre_uuid=str(data_source.metadata.uuid),
             planner_delay_us=simulation_config.planner_delay_us,
             pose_reporting_interval_us=simulation_config.pose_reporting_interval_us,
             route_generator_type=simulation_config.route_generator_type,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
             vehicle_config=vehicle,
-            vector_map=artifact.map,
+            vector_map=data_source.map,
             hidden_traffic_objs=hidden_traffic_objs,
             group_render_requests=simulation_config.group_render_requests,
         )
@@ -246,7 +322,7 @@ class UnboundRollout:
             scene_id=self.scene_id,
             batch_size=1,  # Always 1 since we only have one rollout
             n_sim_steps=self.n_sim_steps,
-            start_timestamp_us=self.start_timestamp_us,
+            start_timestamp_us=self.egomotion_context_start_us,
             control_timestep_us=self.control_timestep_us,
             nre_runid=self.nre_runid,
             nre_version=self.nre_version,

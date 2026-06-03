@@ -11,7 +11,6 @@ service PhysicsService {
     rpc ground_intersection (PhysicsGroundIntersectionRequest) returns (PhysicsGroundIntersectionReturn);
     rpc get_version (common.Empty) returns (common.VersionId);
     rpc get_available_scenes (common.Empty) returns (common.AvailableScenesReturn);
-    rpc shut_down (common.Empty) returns (common.Empty);
 }
 
 message PhysicsGroundIntersectionRequest {

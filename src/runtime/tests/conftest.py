@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -33,6 +35,27 @@ def _identity_pose() -> Pose:
         np.array([0.0, 0.0, 0.0], dtype=np.float32),
         np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
     )
+
+
+def patch_plugin_registry(
+    monkeypatch: "pytest.MonkeyPatch", registry_cls: type
+) -> None:
+    """Patch ``alpasim_plugins.PluginRegistry`` for tests.
+
+    Production runtime containers install ``alpasim-plugins`` via the deploy
+    YAML's runtime command, but unit tests should not require it: CI runs
+    runtime tests in an env that only has ``alpasim-runtime`` and its
+    declared deps. So if ``alpasim_plugins`` isn't importable, inject a
+    fake module into ``sys.modules`` for the duration of the test. The
+    runtime callsites all do a deferred import of ``alpasim_plugins`` so
+    they see the fake module the first time they're invoked.
+    """
+    if "alpasim_plugins" in sys.modules:
+        monkeypatch.setattr("alpasim_plugins.PluginRegistry", registry_cls)
+        return
+    fake = types.ModuleType("alpasim_plugins")
+    fake.PluginRegistry = registry_cls  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "alpasim_plugins", fake)
 
 
 def _make_trajectory(timestamps_us: list[int]) -> Trajectory:
@@ -138,13 +161,16 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound.scene_id = "test-scene"
     unbound.gt_ego_trajectory = simple_trajectory
     unbound.n_sim_steps = 10
-    unbound.start_timestamp_us = 0
-    unbound.time_start_offset_us = 0
+    unbound.egomotion_context_start_us = 0
+    unbound.render_start_timestamp_us = 0
+    unbound.first_policy_timestamp_us = 0
+    unbound.closed_loop_start_us = 100_000
+    unbound.end_timestamp_us = 1_100_000
     unbound.control_timestep_us = 100_000
-    unbound.control_timestamps_us = list(range(0, 1_100_000, 100_000))
     unbound.pose_reporting_interval_us = 0
-    unbound.force_gt_duration_us = 200_000
-    unbound.force_gt_period = range(0, 200_001)
+    unbound.force_gt_duration_us = 100_000
+    unbound.force_gt_period = range(0, 100_000)
+    unbound.skip_driver_during_force_gt = False
     unbound.save_path_root = "/tmp/test"
     unbound.image_format = 2  # JPEG
     unbound.ego_mask_rig_config_id = "default"
@@ -160,6 +186,7 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
 
     # Camera configs
     unbound.camera_configs = []
+    unbound.first_camera_frame_ranges_us = {"cam_front": range(0, 100_000)}
 
     return unbound
 

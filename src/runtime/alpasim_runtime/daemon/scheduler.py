@@ -15,6 +15,7 @@ from alpasim_runtime.address_pool import (
     release_all,
     try_acquire_all,
 )
+from alpasim_runtime.config import BASE_SERVICE_NAMES
 from alpasim_runtime.daemon.request_store import RequestStore
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
@@ -46,9 +47,9 @@ class DaemonScheduler:
     """Job scheduler that manages dispatch of simulation jobs to workers.
 
     Maintains a global pending queue and uses a greedy acquire-all strategy:
-    for each pending job, it attempts to acquire one slot from every service
-    pool simultaneously.  If any pool is exhausted, dispatch pauses until a
-    running job completes and releases its slots.
+    for each pending job, it attempts to acquire one slot from every required
+    service pool simultaneously. If any pool is exhausted, dispatch pauses until
+    a running job completes and releases its slots.
 
     Requests may optionally override specific pools (e.g. a per-request driver
     pool) via ``submit_request``.
@@ -62,6 +63,7 @@ class DaemonScheduler:
     ) -> None:
         self._pools = pools
         self._runtime = runtime
+        self._required_service_names = (*BASE_SERVICE_NAMES, "renderer")
         self._request_store = RequestStore()
         self._global_pending: deque[tuple[str, PendingRolloutJob]] = deque()
         self._in_flight: dict[
@@ -135,7 +137,10 @@ class DaemonScheduler:
         while self._global_pending:
             request_id, pending_job = self._global_pending[0]  # peek
             pools = self._request_pools.get(request_id, self._pools)
-            acquired = try_acquire_all(pools)
+            required_pools = {
+                name: pools[name] for name in self._required_service_names
+            }
+            acquired = try_acquire_all(required_pools)
             if acquired is None:
                 return
 
@@ -146,17 +151,17 @@ class DaemonScheduler:
                 job_id=pending_job.job_id,
                 scene_id=pending_job.scene_id,
                 rollout_spec_index=pending_job.rollout_spec_index,
-                artifact_path=pending_job.artifact_path,
                 endpoints=ServiceEndpoints(
                     driver=acquired["driver"],
-                    sensorsim=acquired["sensorsim"],
+                    renderer=acquired["renderer"],
                     physics=acquired["physics"],
                     trafficsim=acquired["trafficsim"],
                     controller=acquired["controller"],
                 ),
+                session_uuid=pending_job.session_uuid,
             )
             self._runtime.submit_assigned_job(assigned)
-            self._in_flight[assigned.job_id] = (pools, acquired)
+            self._in_flight[assigned.job_id] = (required_pools, acquired)
 
     def on_result(self, result: JobResult) -> None:
         entry = self._in_flight.pop(result.job_id, None)

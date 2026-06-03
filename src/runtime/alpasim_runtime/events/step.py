@@ -12,7 +12,7 @@ import time
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry
 from alpasim_runtime.broadcaster import MessageBroadcaster
-from alpasim_runtime.events.base import EventPriority, EventQueue, RecurringEvent
+from alpasim_runtime.events.base import Event, EventPriority, EventQueue, RecurringEvent
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_runtime.telemetry.telemetry_context import try_get_context
 from alpasim_utils import geometry
@@ -80,8 +80,8 @@ class StepEvent(RecurringEvent):
                 telemetry_ctx.step_duration.observe(step_duration)
         else:
             # --- Initial case: log initial actor poses ---
-            t0_us = state.unbound.control_timestamps_us[0]
-            t1_us = state.unbound.control_timestamps_us[1]
+            t0_us = state.unbound.egomotion_context_start_us
+            t1_us = state.unbound.first_policy_timestamp_us
             await log_actor_poses(
                 state,
                 np.array([t0_us, t1_us], dtype=np.uint64),
@@ -89,6 +89,32 @@ class StepEvent(RecurringEvent):
             )
 
         # --- Always: create fresh StepContext for next step ---
+        state.step_context = StepContext()
+        state.step_wall_start = time.perf_counter()
+
+
+class InitialStepEvent(Event):
+    """Log the initial rollout state before the first policy step."""
+
+    priority: int = EventPriority.STEP
+
+    def __init__(self, timestamp_us: int, services: ServiceBundle):
+        super().__init__(timestamp_us=timestamp_us)
+        self.services = services
+
+    async def handle(self, state: RolloutState, queue: EventQueue) -> None:
+        del queue
+        await log_actor_poses(
+            state,
+            np.array(
+                [
+                    state.unbound.egomotion_context_start_us,
+                    state.unbound.first_policy_timestamp_us,
+                ],
+                dtype=np.uint64,
+            ),
+            self.services.broadcaster,
+        )
         state.step_context = StepContext()
         state.step_wall_start = time.perf_counter()
 

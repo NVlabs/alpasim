@@ -97,7 +97,8 @@ class AlpasimWizard:
         elif self.context.cfg.wizard.run_method == RunMethod.NONE:
             logger.info(
                 "Config generated but not executed. "
-                "Run 'docker compose up' in %s to start the simulation",
+                "Run 'docker compose up --exit-code-from runtime-0' in %s "
+                "to start the simulation",
                 self.context.cfg.wizard.log_dir,
             )
 

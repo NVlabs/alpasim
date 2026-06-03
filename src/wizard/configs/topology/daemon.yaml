@@ -28,7 +28,7 @@ services:
 runtime:
   nr_workers: 1
   endpoints:
-    sensorsim:
+    renderer:
       n_concurrent_rollouts: 1
     driver:
       skip: true

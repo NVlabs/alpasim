@@ -211,7 +211,8 @@ class ContainerDefinition:
         ), f"Port is required for {service_name}"
         # Apply all variable replacements
         command = command.replace("{port}", str(port))
-        command = command.replace("{sceneset}", context.sceneset_path or "None")
+        sceneset_path = getattr(context.cfg.scenes, "sceneset_path", None)
+        command = command.replace("{sceneset}", sceneset_path or "None")
 
         # Runtime config name replacement
         runtime_config_name = f"generated-user-config-{int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))}.yaml"
@@ -302,7 +303,8 @@ def build_container_set(
         # Check if service should be skipped (skip: true in runtime config)
         if runtime_cfg:
             endpoints = getattr(runtime_cfg, "endpoints", {})
-            service_endpoint = endpoints.get(service_name, {})
+            endpoint_name = "renderer" if service_name == "sensorsim" else service_name
+            service_endpoint = endpoints.get(endpoint_name, {})
             if service_endpoint.get("skip", False):
                 logger.debug(f"Skipping service {service_name} (marked as skip)")
                 return []

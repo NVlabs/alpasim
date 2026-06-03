@@ -83,6 +83,7 @@ def _cfg(tmp_path: Path, *, run_sim_services: list[str] | None = None):
         scenes=SimpleNamespace(
             nre_version_string="26.02",
             test_suite_id=None,
+            sceneset_path="sceneset-a",
         ),
         services=SimpleNamespace(
             driver=_service(["driver", "--port={port}"]),
@@ -107,7 +108,6 @@ def _context(cfg, *, baseport: int = 6100) -> WizardContext:
         port_assigner=_port_assigner(baseport),
         artifact_list=[],
         num_gpus=0,
-        sceneset_path="sceneset-a",
     )
 
 
@@ -146,3 +146,36 @@ def test_external_services_are_marked_unmanaged_in_network_config(
     assert network["driver"]["endpoints"] == [
         {"address": "localhost:6789", "managed": False}
     ]
+
+
+def test_managed_sensorsim_is_written_as_renderer_endpoint(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    context = _context(cfg, baseport=6100)
+    container_set = build_container_set(context, "uuid")
+    manager = ConfigurationManager(str(tmp_path))
+
+    manager._generate_network_config(container_set.sim, cfg)
+
+    network = yaml.safe_load((tmp_path / "generated-network-config.yaml").read_text())
+    assert network["renderer"]["endpoints"] == [
+        {"address": "sensorsim-0:6101", "managed": True}
+    ]
+    assert "sensorsim" not in network
+
+
+def test_external_video_model_is_first_class_network_endpoint(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path, run_sim_services=["runtime"])
+    cfg.wizard.external_services = {"renderer": ["localhost:50056"]}
+    manager = ConfigurationManager(str(tmp_path))
+
+    manager._generate_network_config([], cfg)
+
+    network = yaml.safe_load((tmp_path / "generated-network-config.yaml").read_text())
+    assert network["renderer"]["endpoints"] == [
+        {"address": "localhost:50056", "managed": False}
+    ]
+    assert "sensorsim" not in network
+    assert "video_model" not in network
+    assert "extra_services" not in network

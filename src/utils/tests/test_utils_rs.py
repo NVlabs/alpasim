@@ -77,6 +77,37 @@ class TestPose:
         inv = p.inverse()
         assert_allclose(inv.vec3, [-1.0, -2.0, -3.0])
 
+    def test_blend_matches_scipy_slerp(self) -> None:
+        yaw0 = 0.0
+        yaw1 = math.pi / 2
+        p0 = _pose([0.0, 0.0, 0.0], [0.0, 0.0, math.sin(yaw0 / 2), math.cos(yaw0 / 2)])
+        p1 = _pose(
+            [10.0, 20.0, 30.0],
+            [0.0, 0.0, math.sin(yaw1 / 2), math.cos(yaw1 / 2)],
+        )
+
+        blended = p0.blend(p1, 0.25)
+        expected_quat = Slerp([0.0, 1.0], R.from_quat([p0.quat, p1.quat]))(
+            [0.25]
+        ).as_quat()[0]
+
+        assert_allclose(blended.vec3, [2.5, 5.0, 7.5])
+        assert_allclose(blended.quat, expected_quat, atol=1e-6)
+
+    def test_blend_clamps_alpha(self) -> None:
+        p0 = _pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0])
+        p1 = _pose([4.0, 5.0, 6.0], [0.0, 0.0, 0.0, 1.0])
+
+        assert_allclose(p0.blend(p1, -1.0).vec3, p0.vec3)
+        assert_allclose(p0.blend(p1, 2.0).vec3, p1.vec3)
+
+    def test_blend_rejects_non_finite_alpha(self) -> None:
+        p0 = _pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0])
+        p1 = _pose([4.0, 5.0, 6.0], [0.0, 0.0, 0.0, 1.0])
+
+        with pytest.raises(ValueError, match="alpha must be finite"):
+            p0.blend(p1, math.nan)
+
     def test_matmul_identity(self) -> None:
         p = _pose([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0])
         result = p @ Pose.identity()
@@ -708,6 +739,48 @@ class TestTrajectoryTransform:
         transformed = traj.transform(transform, True)
 
         assert_allclose(transformed.positions[0], [0.0, 1.0, 0.0], atol=1e-6)
+
+
+class TestTrajectoryBlend:
+    """Tests for trajectory-level pose blending."""
+
+    def test_blend_with_alpha_array(self) -> None:
+        gt = _trajectory(
+            [100, 200, 300],
+            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+        )
+        physics = _trajectory(
+            [100, 200, 300],
+            [[0.0, 0.0, 10.0], [10.0, 0.0, 10.0], [20.0, 0.0, 10.0]],
+        )
+
+        blended = gt.blend(physics, np.array([0.0, 0.5, 1.0], dtype=np.float32))
+
+        assert_allclose(blended.timestamps_us, [100, 200, 300])
+        assert_allclose(blended.positions[:, 2], [0.0, 5.0, 10.0])
+        assert_allclose(blended.quaternions, gt.quaternions)
+
+    def test_blend_with_scalar_alpha(self) -> None:
+        gt = _trajectory([100, 200], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        physics = _trajectory([100, 200], [[0.0, 0.0, 10.0], [2.0, 0.0, 10.0]])
+
+        blended = gt.blend(physics, 0.25)
+
+        assert_allclose(blended.positions[:, 2], [2.5, 2.5])
+
+    def test_blend_rejects_mismatched_timestamps(self) -> None:
+        gt = _trajectory([100, 200], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        physics = _trajectory([100, 201], [[0.0, 0.0, 10.0], [2.0, 0.0, 10.0]])
+
+        with pytest.raises(ValueError, match="different timestamps"):
+            gt.blend(physics, 0.5)
+
+    def test_blend_rejects_wrong_alpha_length(self) -> None:
+        gt = _trajectory([100, 200], [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        physics = _trajectory([100, 200], [[0.0, 0.0, 10.0], [2.0, 0.0, 10.0]])
+
+        with pytest.raises(ValueError, match="alpha length"):
+            gt.blend(physics, np.array([0.0], dtype=np.float32))
 
 
 class TestTrajectorySliceFilter:

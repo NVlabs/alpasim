@@ -2,7 +2,7 @@
 # 8-GPU topology: 64 concurrent rollouts. For high-throughput SLURM runs with OSS driver.
 
 defines:
-  nre_cache_size: 17  # sensorsim.n_concurrent_rollouts + 1
+  nre_cache_size: 17  # renderer.n_concurrent_rollouts + 1
   physics_cache_size: 6
 
 eval:
@@ -36,11 +36,11 @@ runtime:
   nr_workers: 8
   endpoints:
     # Total capacity per service = nr_gpus x replicas_per_container x n_concurrent_rollouts
-    # SENS: 4 x 1  x 16 = 64
+    # REND: 4 x 1  x 16 = 64
     # DRIV: 4 x 8  x 2  = 64
     # PHYS: 4 x 4  x 4  = 64
     # CONT: 1 (CPU) x 16 x 4 = 64
-    sensorsim:
+    renderer:
       n_concurrent_rollouts: 16
     driver:
       n_concurrent_rollouts: 2

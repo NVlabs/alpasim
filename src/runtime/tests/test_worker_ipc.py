@@ -26,7 +26,7 @@ def _make_endpoints() -> ServiceEndpoints:
     """Create a test ServiceEndpoints instance."""
     return ServiceEndpoints(
         driver=ServiceAddress("driver:50051", skip=False),
-        sensorsim=ServiceAddress("sensorsim:50052", skip=False),
+        renderer=ServiceAddress("sensorsim:50052", skip=False),
         physics=ServiceAddress("physics:50053", skip=False),
         trafficsim=ServiceAddress("trafficsim:50054", skip=False),
         controller=ServiceAddress("controller:50055", skip=False),
@@ -42,13 +42,11 @@ class TestPendingRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=2,
-            artifact_path="/tmp/test-scene.usdz",
         )
 
         assert job.job_id == "test-123"
         assert job.scene_id == "test-scene"
         assert job.rollout_spec_index == 2
-        assert job.artifact_path == "/tmp/test-scene.usdz"
 
     def test_pickling(self):
         """PendingRolloutJob should be picklable."""
@@ -56,7 +54,6 @@ class TestPendingRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=1,
-            artifact_path="/tmp/test-scene.usdz",
         )
         pickled = pickle.dumps(job)
         unpickled = pickle.loads(pickled)
@@ -64,24 +61,21 @@ class TestPendingRolloutJob:
         assert unpickled.job_id == job.job_id
         assert unpickled.scene_id == job.scene_id
         assert unpickled.rollout_spec_index == job.rollout_spec_index
-        assert unpickled.artifact_path == job.artifact_path
 
 
 class TestAssignedRolloutJob:
     """Tests for AssignedRolloutJob dataclass."""
 
     def test_creation(self):
-        """Assigned jobs include artifact path and service endpoints."""
+        """Assigned jobs include identity and service endpoints."""
         ep = _make_endpoints()
         job = AssignedRolloutJob(
             request_id="req-1",
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=0,
-            artifact_path="/tmp/test-scene.usdz",
             endpoints=ep,
         )
-        assert job.artifact_path == "/tmp/test-scene.usdz"
         assert job.endpoints.driver.address == "driver:50051"
 
     def test_pickling(self):
@@ -92,7 +86,6 @@ class TestAssignedRolloutJob:
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=0,
-            artifact_path="/tmp/test-scene.usdz",
             endpoints=ep,
         )
 
@@ -100,7 +93,6 @@ class TestAssignedRolloutJob:
         unpickled = pickle.loads(pickled)
 
         assert unpickled.job_id == job.job_id
-        assert unpickled.artifact_path == "/tmp/test-scene.usdz"
         assert unpickled.endpoints.driver.address == "driver:50051"
         assert unpickled.endpoints.physics.skip is False
 
@@ -111,7 +103,7 @@ class TestServiceEndpoints:
     def test_creation(self):
         ep = _make_endpoints()
         assert ep.driver.address == "driver:50051"
-        assert ep.sensorsim.address == "sensorsim:50052"
+        assert ep.renderer.address == "sensorsim:50052"
         assert ep.physics.address == "physics:50053"
         assert ep.trafficsim.address == "trafficsim:50054"
         assert ep.controller.address == "controller:50055"
@@ -119,13 +111,13 @@ class TestServiceEndpoints:
     def test_with_skip(self):
         ep = ServiceEndpoints(
             driver=ServiceAddress("skip", skip=True),
-            sensorsim=ServiceAddress("addr:1", skip=False),
+            renderer=ServiceAddress("renderer:50056", skip=False),
             physics=ServiceAddress("skip", skip=True),
             trafficsim=ServiceAddress("addr:2", skip=False),
             controller=ServiceAddress("skip", skip=True),
         )
         assert ep.driver.skip is True
-        assert ep.sensorsim.skip is False
+        assert ep.renderer.address == "renderer:50056"
 
     def test_pickling(self):
         ep = _make_endpoints()

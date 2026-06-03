@@ -211,6 +211,23 @@ SERVICE_EXCHANGES = {
             response="available_ego_masks_return",
         ),
     ],
+    "video_model": [
+        ExchangeConfig(
+            method="start_session",
+            request_entry="video_model_session_request",
+            response="video_model_session_id",
+        ),
+        ExchangeConfig(
+            method="close_session",
+            request_entry="video_model_session_close_request",
+            response=None,
+        ),
+        ExchangeConfig(
+            method="render_video_chunk",
+            request_entry="video_model_chunk_request",
+            response="video_model_chunk_return",
+        ),
+    ],
 }
 
 

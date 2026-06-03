@@ -19,6 +19,7 @@ from .base import (
     BaseTrajectoryModel,
     CameraImages,
     DriveCommand,
+    ModelInputValidationError,
     ModelPrediction,
     PredictionInput,
 )
@@ -149,6 +150,49 @@ def build_ego_history(
     )
 
     return ego_history_xyz_tensor, ego_history_rot_tensor
+
+
+def _validate_ego_history_span(
+    ego_pose_history: list[PoseAtTime] | None,
+    *,
+    latest_camera_frame_us: int,
+    num_history_steps: int,
+    history_time_step: float,
+    model_name: str,
+) -> None:
+    """Validate that ego poses cover the model's required history window."""
+    required_span_us = int((num_history_steps - 1) * history_time_step * 1_000_000)
+    required_span_ms = required_span_us / 1e3
+    num_poses = 0 if ego_pose_history is None else len(ego_pose_history)
+
+    if ego_pose_history is None or len(ego_pose_history) < 2:
+        raise ModelInputValidationError(
+            f"{model_name} needs at least 2 ego poses spanning "
+            f"{required_span_ms:.1f}ms before latest_camera_frame_us="
+            f"{latest_camera_frame_us}, got {num_poses} pose(s)."
+        )
+
+    earliest_required_us = latest_camera_frame_us - required_span_us
+    earliest_available_us = min(p.timestamp_us for p in ego_pose_history)
+    latest_available_us = max(p.timestamp_us for p in ego_pose_history)
+    available_span_ms = (latest_available_us - earliest_available_us) / 1e3
+
+    if latest_available_us < latest_camera_frame_us:
+        raise ModelInputValidationError(
+            f"{model_name} ego pose history is stale: available_span="
+            f"{available_span_ms:.1f}ms, required_span={required_span_ms:.1f}ms, "
+            f"latest_available_us={latest_available_us}, "
+            f"latest_camera_frame_us={latest_camera_frame_us}."
+        )
+
+    if earliest_available_us > earliest_required_us:
+        raise ModelInputValidationError(
+            f"{model_name} ego pose history is too short: available_span="
+            f"{available_span_ms:.1f}ms, required_span={required_span_ms:.1f}ms, "
+            f"earliest_available_us={earliest_available_us}, "
+            f"earliest_required_us={earliest_required_us}, "
+            f"latest_camera_frame_us={latest_camera_frame_us}."
+        )
 
 
 class AlpamayoBaseModel(BaseTrajectoryModel):
@@ -398,48 +442,17 @@ class AlpamayoBaseModel(BaseTrajectoryModel):
                     headings=np.zeros(0),
                 )
 
-        # Check ego history covers the required time span for interpolation.
-        # We need at least 2 poses spanning (NUM_HISTORY_STEPS-1)*HISTORY_TIME_STEP
-        # seconds back from the current timestamp.  build_ego_history() will
-        # interpolate the 16 target samples from these poses.
-        required_span_us = (self.NUM_HISTORY_STEPS - 1) * self.HISTORY_TIME_STEP * 1e6
-        if (
-            prediction_input.ego_pose_history is None
-            or len(prediction_input.ego_pose_history) < 2
-        ):
-            num_poses = (
-                0
-                if prediction_input.ego_pose_history is None
-                else len(prediction_input.ego_pose_history)
-            )
-            logger.warning(
-                "Not enough pose history: %d < 2. Returning empty trajectory.",
-                num_poses,
-            )
-            return ModelPrediction(
-                trajectory_xy=np.zeros((0, 2)),
-                headings=np.zeros(0),
-            )
-
         # Get current timestamp from the latest frame
         latest_timestamp = max(
             max(ts for ts, _ in frames) for frames in camera_images.values()
         )
-        earliest_required_us = latest_timestamp - required_span_us
-        earliest_available_us = min(
-            p.timestamp_us for p in prediction_input.ego_pose_history
+        _validate_ego_history_span(
+            prediction_input.ego_pose_history,
+            latest_camera_frame_us=latest_timestamp,
+            num_history_steps=self.NUM_HISTORY_STEPS,
+            history_time_step=self.HISTORY_TIME_STEP,
+            model_name=self.__class__.__name__,
         )
-        if earliest_available_us > earliest_required_us:
-            logger.warning(
-                "Pose history too short: available span %.1fms < required %.1fms. "
-                "Returning empty trajectory.",
-                (latest_timestamp - earliest_available_us) / 1e3,
-                required_span_us / 1e3,
-            )
-            return ModelPrediction(
-                trajectory_xy=np.zeros((0, 2)),
-                headings=np.zeros(0),
-            )
 
         ego_history_xyz, ego_history_rot = build_ego_history(
             prediction_input.ego_pose_history,

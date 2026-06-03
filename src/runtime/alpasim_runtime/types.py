@@ -27,6 +27,7 @@ class Clock:
     interval_us: int
     duration_us: int
     start_us: int = 0
+    first_end_us: int | None = None
 
     def __post_init__(self) -> None:
         if self.interval_us <= 0:
@@ -34,87 +35,28 @@ class Clock:
         if self.duration_us < 0:
             raise ValueError("duration_us must be non-negative")
 
-    @staticmethod
-    def int_ceil_div(a: int, b: int) -> int:
-        """
-        Returns the ceiling of the division of a by b using only integer arithmetic,
-        avoiding numerical accuracy issues.
-
-        :param a: The numerator (integer).
-        :param b: The denominator (integer, must not be zero).
-        :return: The ceiling of the division of a by b.
-        """
-        if b == 0:
-            raise ValueError("Division by zero is not allowed.")
-
-        # Perform integer ceiling division
-        return (a + b - 1) // b if a * b > 0 else a // b
-
     def ith_trigger(self, i: int) -> Trigger:
         """Returns the i-th trigger of the clock since self.start_us"""
         if i < 0:
             raise ValueError(f"Trigger index must be non-negative, got {i}")
+        if i == 0 and self.first_end_us is not None:
+            return Clock.Trigger(
+                range(self.start_us, self.first_end_us),
+                sequential_idx=i,
+            )
+        first_end_us = (
+            self.first_end_us
+            if self.first_end_us is not None
+            else self.start_us + self.duration_us
+        )
+        end_us = first_end_us + i * self.interval_us
         return Clock.Trigger(
             range(
-                self.start_us + i * self.interval_us,
-                self.start_us + self.duration_us + i * self.interval_us,
+                end_us - self.duration_us,
+                end_us,
             ),
             sequential_idx=i,
         )
-
-    def last_trigger(self, time_us: int) -> Trigger:
-        """Returns the last trigger to have started (may still be ongoing) at `time_us`."""
-        trigger_i = (time_us - self.start_us) // self.interval_us
-        return self.ith_trigger(trigger_i)
-
-    def triggers_completed_in_range(
-        self, time_range_us: range, skip_straddles: bool = False
-    ) -> list[Trigger]:
-        """
-        Return a list of camera triggers that are entirely completed within `time_range_us`
-        Conventional notes:
-        - triggers that complete at `time_range_us.stop` are included
-        -    rationale: an event/trigger that completes at the given interval is
-                        considered to be available on that interval
-        - triggers that complete at `time_range_us.start` are not included
-        -    rationale: an event/trigger that completed at the start of an interval
-                        would have been "available" on the previous interval, since
-                        interval[i].start == interval[i-1].end
-        - triggers that start before `self.start_us` are not included in results
-
-        Parameters:
-        - time_range_us: the range of time to consider
-        - skip_straddles: if True, exclude triggers that began before `time_range_us.start`
-        """
-
-        """
-        Example:
-        |           |           |           |     <<< clock trigger starts
-        <  >        <  >        <  >        <  >  <<< clock trigger intervals
-          [               ]                       <<< time_range_us 1
-        ....        ....                          <<< return triggers completed in time_range_us 1 (!skipping straddles)
-             [                                 ]  <<< time_range_us 2
-                    ....        ....        ....  <<< return triggers completed in time_range_us 2 (!skipping straddles)
-                     [                  ]         <<< time_range_us 3
-                                ....              <<< return triggers completed in time_range_us 3 (skipping straddles)
-        """
-
-        # Note: time_range_us.start + 1 ensures exclusions of triggers that start at time_range_us.start
-        #       and the 0-bounding ensures that we only consider triggers that start after self.start_us
-        i_min = Clock.int_ceil_div(
-            max(time_range_us.start + 1 - self.start_us - self.duration_us, 0),
-            self.interval_us,
-        )
-        i_max = (
-            time_range_us.stop - self.start_us - self.duration_us
-        ) // self.interval_us
-
-        if skip_straddles:
-            first_trigger_start = self.start_us + i_min * self.interval_us
-            if time_range_us.start > first_trigger_start:
-                i_min += 1
-
-        return [self.ith_trigger(i) for i in range(max(i_min, 0), max(i_max + 1, 0))]
 
 
 @dataclass
@@ -133,14 +75,17 @@ class RuntimeCamera:
 
     @classmethod
     def from_camera_config(
-        cls, camera_cfg: RuntimeCameraConfig, rig_start_us: int
+        cls, camera_cfg: RuntimeCameraConfig, first_frame_range_us: range
     ) -> RuntimeCamera:
         """Build a `RuntimeCamera` from a scenario `CameraConfig`."""
 
+        first_frame_duration_us = first_frame_range_us.stop - first_frame_range_us.start
+        duration_us = camera_cfg.shutter_duration_us or first_frame_duration_us
         clock = Clock(
             interval_us=camera_cfg.frame_interval_us,
-            duration_us=camera_cfg.shutter_duration_us,
-            start_us=rig_start_us + camera_cfg.first_frame_offset_us,
+            duration_us=duration_us,
+            start_us=first_frame_range_us.start,
+            first_end_us=first_frame_range_us.stop,
         )
         return cls(
             logical_id=camera_cfg.logical_id,

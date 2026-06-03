@@ -41,12 +41,10 @@ class VDCSimService(controller_pb2_grpc.VDCServiceServicer):
 
     def __init__(
         self,
-        server: grpc.Server,
         log_dir: str,
         controller_config: ControllerConfig,
     ):
         logger.info(f"VDCServicer initialized logging to: {log_dir}")
-        self._server = server
         self._backend = SystemManager(log_dir, controller_config=controller_config)
         self._lock = Lock()
 
@@ -83,14 +81,6 @@ class VDCSimService(controller_pb2_grpc.VDCServiceServicer):
             response = self._backend.run_controller_and_vehicle_model(request)
         return response
 
-    def shut_down(self, request: common_pb2.Empty, context: grpc.ServicerContext):
-        logger.info("shut_down")
-        context.add_callback(self._shut_down)
-        return common_pb2.Empty()
-
-    def _shut_down(self) -> None:
-        self._server.stop(0)
-
 
 def serve(
     host: str,
@@ -100,7 +90,7 @@ def serve(
 ):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=1))
     controller_pb2_grpc.add_VDCServiceServicer_to_server(
-        VDCSimService(server, log_dir, controller_config=controller_config), server
+        VDCSimService(log_dir, controller_config=controller_config), server
     )
     address = f"{host}:{port}"
     logger.info(f"Starting server on {address}")

@@ -119,6 +119,13 @@ def validate_config(cfg: AlpasimConfig) -> None:
     """
     _check_required_config_groups(cfg)
 
+    do_shutdown = OmegaConf.select(cfg.runtime, "endpoints.do_shutdown", default=True)
+    if do_shutdown is False:
+        logger.warning(
+            "runtime.endpoints.do_shutdown=false is ignored: shutdown behavior "
+            "changed and managed services now shut down after the runtime exits."
+        )
+
     # Validate NRE version configuration
     if cfg.scenes.nre_version_string is None and not cfg.services.sensorsim:
         raise RuntimeError(

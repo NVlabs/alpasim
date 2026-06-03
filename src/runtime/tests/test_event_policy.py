@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from alpasim_runtime.config import PhysicsUpdateMode
-from alpasim_runtime.events.base import EventQueue
+from alpasim_runtime.events.base import EndSimulationException, EventQueue
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import (
     PolicyEvent,
@@ -20,7 +20,7 @@ from alpasim_runtime.events.policy import (
     transform_trajectory_from_noisy_to_true_local_frame,
 )
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
-from alpasim_utils.geometry import Polyline, Pose, Trajectory
+from alpasim_utils.geometry import DynamicTrajectory, Polyline, Pose, Trajectory
 
 # ---------------------------------------------------------------------------
 # PolicyEvent tests
@@ -58,7 +58,7 @@ class TestPolicyEvent:
         """PolicyEvent.run() should call driver.drive with correct timestamps."""
         # Setup driver to return a trajectory
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)
@@ -67,6 +67,45 @@ class TestPolicyEvent:
         call_kwargs = mock_driver.drive.call_args.kwargs
         assert call_kwargs["time_now_us"] == 200_000
         assert call_kwargs["time_query_us"] == 300_000
+
+    @pytest.mark.asyncio
+    async def test_first_run_submits_full_initial_egomotion_context(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        timestamps_us = np.array([0, 100_000, 200_000], dtype=np.uint64)
+        ego_context = simple_trajectory.interpolate(timestamps_us)
+        zero_dynamics = np.zeros((len(ego_context), 12), dtype=np.float64)
+        rollout_state.ego_trajectory_estimate = (
+            DynamicTrajectory.from_trajectory_and_dynamics(
+                ego_context,
+                zero_dynamics,
+            )
+        )
+        rollout_state.last_egopose_update_us = None
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(200_000, 300_001),
+            False,
+        )
+
+        event = PolicyEvent(
+            timestamp_us=200_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=[],
+            route_generator=None,
+            send_recording_ground_truth=False,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        mock_driver.submit_trajectory.assert_awaited_once()
+        trajectory, dynamic_states = mock_driver.submit_trajectory.call_args.args
+        assert trajectory.timestamps_us.tolist() == [0, 100_000, 200_000]
+        assert len(dynamic_states) == 3
+        assert rollout_state.last_egopose_update_us == 200_000
 
     @pytest.mark.asyncio
     async def test_handle_reschedules_same_event(
@@ -78,7 +117,7 @@ class TestPolicyEvent:
     ):
         """RecurringEvent.handle() runs then reschedules with advanced timestamp."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.handle(rollout_state, queue)
@@ -101,12 +140,45 @@ class TestPolicyEvent:
         rollout_state.data_sensorsim_to_driver = b"some_data"
 
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)
 
         assert rollout_state.data_sensorsim_to_driver is None
+
+    @pytest.mark.asyncio
+    async def test_run_raises_end_simulation_on_terminate(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """When driver returns terminate_session=True, PolicyEvent raises EndSimulationException."""
+        drive_traj = simple_trajectory.clip(200_000, 300_001)
+        mock_driver.drive.return_value = (drive_traj, True)
+
+        with pytest.raises(EndSimulationException):
+            await policy_event.run(rollout_state, EventQueue())
+
+    @pytest.mark.asyncio
+    async def test_handle_does_not_reschedule_on_terminate(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """When driver requests termination, the event is not rescheduled."""
+        drive_traj = simple_trajectory.clip(200_000, 300_001)
+        mock_driver.drive.return_value = (drive_traj, True)
+
+        queue = EventQueue()
+        with pytest.raises(EndSimulationException):
+            await policy_event.handle(rollout_state, queue)
+
+        assert len(queue) == 0  # Not rescheduled
 
     @pytest.mark.asyncio
     async def test_run_fills_step_context_timing(
@@ -118,7 +190,7 @@ class TestPolicyEvent:
     ):
         """PolicyEvent.run() fills timing fields on the existing StepContext."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)
@@ -127,6 +199,157 @@ class TestPolicyEvent:
         assert rollout_state.step_context.step_start_us == 200_000
         assert rollout_state.step_context.target_time_us == 300_000
         assert rollout_state.step_context.driver_trajectory is not None
+
+    @pytest.mark.asyncio
+    async def test_force_gt_calls_drive_by_default_and_stores_driver_trajectory(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+    ) -> None:
+        """Force-GT should query policy by default and leave controller override downstream."""
+        route = Polyline(
+            points=np.array(
+                [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [8.0, 0.0, 0.0]],
+                dtype=np.float32,
+            )
+        )
+        rollout_state.unbound.force_gt_period = range(0, 300_001)
+        rollout_state.data_sensorsim_to_driver = b"renderer-data"
+        expected_driver_trajectory = Trajectory.from_poses(
+            np.array([200_000, 300_000], dtype=np.uint64),
+            [
+                Pose(
+                    np.array([99.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+                Pose(
+                    np.array([100.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+            ],
+        )
+        mock_driver.drive.return_value = (expected_driver_trajectory, False)
+
+        event = PolicyEvent(
+            timestamp_us=200_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=["cam_front"],
+            route_generator=cast(
+                Any,
+                SimpleNamespace(generate_route=lambda *_args, **_kwargs: route),
+            ),
+            send_recording_ground_truth=True,
+        )
+
+        await event.run(rollout_state, EventQueue())
+
+        mock_driver.submit_trajectory.assert_awaited_once()
+        mock_driver.submit_route.assert_awaited_once()
+        mock_driver.submit_recording_ground_truth.assert_awaited_once()
+        mock_driver.drive.assert_awaited_once()
+        assert mock_driver.drive.call_args.kwargs["renderer_data"] == b"renderer-data"
+        assert rollout_state.data_sensorsim_to_driver is None
+
+        assert rollout_state.step_context is not None
+        driver_trajectory = rollout_state.step_context.driver_trajectory
+        assert driver_trajectory is not None
+        np.testing.assert_array_equal(
+            driver_trajectory.timestamps_us, expected_driver_trajectory.timestamps_us
+        )
+        np.testing.assert_allclose(
+            driver_trajectory.positions,
+            np.array([[99.0, 0.0, 0.0], [100.0, 0.0, 0.0]], dtype=np.float32),
+        )
+
+    @pytest.mark.asyncio
+    async def test_force_gt_skip_driver_flag_skips_drive(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+    ) -> None:
+        """Feature flag should preserve skip-driver behavior during force-GT."""
+        rollout_state.unbound.force_gt_period = range(0, 300_001)
+        rollout_state.unbound.skip_driver_during_force_gt = True
+        rollout_state.data_sensorsim_to_driver = b"renderer-data"
+        force_gt_trajectory = Trajectory.from_poses(
+            np.array([0, 100_000, 200_000, 300_000], dtype=np.uint64),
+            [
+                Pose(
+                    np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+                Pose(
+                    np.array([1.0, 0.0, 2.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+                Pose(
+                    np.array([2.0, 0.0, 3.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+                Pose(
+                    np.array([3.0, 0.0, 4.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+            ],
+        )
+        rollout_state.force_gt_ego_trajectory = force_gt_trajectory
+
+        event = PolicyEvent(
+            timestamp_us=200_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=["cam_front"],
+            route_generator=None,
+            send_recording_ground_truth=False,
+        )
+
+        await event.run(rollout_state, EventQueue())
+
+        mock_driver.drive.assert_not_awaited()
+        assert rollout_state.data_sensorsim_to_driver is None
+
+        assert rollout_state.step_context is not None
+        driver_trajectory = rollout_state.step_context.driver_trajectory
+        assert driver_trajectory is not None
+        expected_trajectory = force_gt_trajectory.clip(200_000, 300_001)
+        np.testing.assert_array_equal(
+            driver_trajectory.timestamps_us, expected_trajectory.timestamps_us
+        )
+        np.testing.assert_allclose(
+            driver_trajectory.positions,
+            expected_trajectory.positions,
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_treats_empty_force_gt_period_as_noop(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """Zero force-GT duration should never mark a policy step as force-GT."""
+        rollout_state.unbound.force_gt_period = range(100_000, 100_000)
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(100_000, 200_001),
+            False,
+        )
+        event = PolicyEvent(
+            timestamp_us=100_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=["cam_front"],
+            route_generator=None,
+            send_recording_ground_truth=False,
+        )
+
+        await event.run(rollout_state, EventQueue())
+
+        assert rollout_state.step_context is not None
+        assert rollout_state.step_context.force_gt is False
 
     @pytest.mark.asyncio
     async def test_drains_outstanding_tasks_before_drive(
@@ -144,10 +367,13 @@ class TestPolicyEvent:
         async def blocked_send() -> None:
             await gate.wait()
 
-        # Simulate a pending camera submission from GroupedRenderEvent
+        # Simulate a pending camera submission from a camera render event.
         rollout_state.step_context.track_task(blocked_send())
 
-        mock_driver.drive.return_value = simple_trajectory.clip(200_000, 300_001)
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(200_000, 300_001),
+            False,
+        )
 
         event = PolicyEvent(
             timestamp_us=200_000,
@@ -206,7 +432,10 @@ class TestPolicyEvent:
         mock_driver: AsyncMock,
         simple_trajectory: Trajectory,
     ):
-        mock_driver.drive.return_value = simple_trajectory.clip(100_000, 200_001)
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(100_000, 200_001),
+            False,
+        )
 
         event = PolicyEvent(
             timestamp_us=100_000,
@@ -239,23 +468,21 @@ class TestAssertSensorsUpToDate:
         # Should not raise
         assert_sensors_up_to_date(rollout_state, step_start_us, ["cam_front"])
 
-    def test_raises_on_camera_mismatch(self, rollout_state: RolloutState):
-        # ego_trajectory_estimate latest is 200_000 — use that as step_start_us
-        # so the egopose check passes and the camera check is exercised.
+    def test_allows_older_camera_frame(self, rollout_state: RolloutState):
         rollout_state.last_camera_frame_us = {
             "cam_front": 50_000,
             "cam_rear": 200_000,
         }
 
-        with pytest.raises(ValueError, match="Cameras not up to date"):
-            assert_sensors_up_to_date(rollout_state, 200_000, ["cam_front", "cam_rear"])
+        assert_sensors_up_to_date(rollout_state, 200_000, ["cam_front", "cam_rear"])
 
-    def test_skips_camera_check_on_first_policy_call(self, rollout_state: RolloutState):
-        """First policy call has no camera frames yet — should not raise."""
+    def test_raises_when_required_camera_has_no_frame(
+        self, rollout_state: RolloutState
+    ):
         rollout_state.last_camera_frame_us = {}  # No frames yet
 
-        # Should not raise even though cameras have no frames
-        assert_sensors_up_to_date(rollout_state, 200_000, ["cam_front"])
+        with pytest.raises(ValueError, match="Cameras not up to date"):
+            assert_sensors_up_to_date(rollout_state, 200_000, ["cam_front"])
 
     def test_empty_camera_ids(self, rollout_state: RolloutState):
         rollout_state.last_camera_frame_us = {}

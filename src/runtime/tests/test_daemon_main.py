@@ -10,21 +10,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from alpasim_grpc.v0 import common_pb2, runtime_pb2
-from alpasim_runtime import endpoints
-from alpasim_runtime.config import (
-    EndpointAddresses,
-    NetworkSimulatorConfig,
-    ServiceEndpoint,
-)
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
-from alpasim_runtime.daemon.engine import UnknownSceneError
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
-from alpasim_runtime.simulate.__main__ import (
-    _serve,
-    create_arg_parser,
-    run_simulation,
-    shutdown_services,
-)
+from alpasim_runtime.errors import UnknownSceneError
+from alpasim_runtime.simulate.__main__ import _serve, create_arg_parser, run_simulation
 
 import grpc
 
@@ -40,84 +29,14 @@ class _AbortContext:
         raise RuntimeError("aborted")
 
 
-class _FakeShutdownStub:
-    calls: list[str] = []
-
-    def __init__(self, channel) -> None:
-        self._channel = channel
-
-    async def shut_down(self, request, timeout: float) -> None:
-        del request, timeout
-        self.calls.append(self._channel.address)
-
-
-class _FakeChannel:
-    def __init__(self, address: str) -> None:
-        self.address = address
-        self.closed = False
-
-    async def close(self) -> None:
-        self.closed = True
-
-
 def _make_serve_args() -> Namespace:
     return Namespace(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         listen_address="[::]:50051",
     )
-
-
-def _patch_serve_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[SimpleNamespace, AsyncMock]:
-    fake_config = SimpleNamespace(
-        user=SimpleNamespace(endpoints=SimpleNamespace(do_shutdown=True)),
-    )
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.parse_simulator_config",
-        Mock(return_value=fake_config),
-    )
-    shutdown_services = AsyncMock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.shutdown_services",
-        shutdown_services,
-    )
-    return fake_config, shutdown_services
-
-
-@pytest.mark.asyncio
-async def test_shutdown_services_only_targets_managed_addresses(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _FakeShutdownStub.calls = []
-    config = SimpleNamespace(
-        user=SimpleNamespace(endpoints=SimpleNamespace(do_shutdown=True)),
-        network=NetworkSimulatorConfig(
-            driver=EndpointAddresses(
-                endpoints=[
-                    ServiceEndpoint("managed-driver:50051", managed=True),
-                    ServiceEndpoint("external-driver:50052", managed=False),
-                ]
-            ),
-            sensorsim=EndpointAddresses(endpoints=[]),
-            physics=EndpointAddresses(endpoints=[]),
-            trafficsim=EndpointAddresses(endpoints=[]),
-            controller=EndpointAddresses(endpoints=[]),
-        ),
-    )
-    monkeypatch.setitem(endpoints.SERVICE_STUBS, "driver", _FakeShutdownStub)
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.grpc.aio.insecure_channel",
-        _FakeChannel,
-    )
-
-    await shutdown_services(config)
-
-    assert _FakeShutdownStub.calls == ["managed-driver:50051"]
 
 
 @pytest.mark.asyncio
@@ -201,7 +120,6 @@ async def test_servicer_shutdown_rpc_is_safe_for_repeated_requests() -> None:
 async def test_daemon_main_serve_starts_and_drains(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_config, shutdown_services = _patch_serve_config(monkeypatch)
     engine = SimpleNamespace()
     app_instances = []
 
@@ -237,14 +155,12 @@ async def test_daemon_main_serve_starts_and_drains(
     app = app_instances[0]
     assert app.engine is engine
     assert app.listen_address == "[::]:50051"
-    shutdown_services.assert_awaited_once_with(fake_config)
 
 
 @pytest.mark.asyncio
 async def test_daemon_main_serve_stops_on_app_shutdown_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_config, shutdown_services = _patch_serve_config(monkeypatch)
     engine = SimpleNamespace()
     app_instances = []
 
@@ -278,7 +194,6 @@ async def test_daemon_main_serve_stops_on_app_shutdown_request(
     await asyncio.wait_for(_serve(_make_serve_args()), timeout=0.5)
 
     assert len(app_instances) == 1
-    shutdown_services.assert_awaited_once_with(fake_config)
 
 
 def test_simulate_parser_supports_serve_mode_args() -> None:
@@ -288,7 +203,6 @@ def test_simulate_parser_supports_serve_mode_args() -> None:
             "--user-config=u.yaml",
             "--network-config=n.yaml",
             "--eval-config=e.yaml",
-            "--usdz-glob=/tmp/*.usdz",
             "--log-dir=/tmp/log",
             "--serve",
             "--listen-address=[::]:50060",
@@ -307,7 +221,6 @@ def test_simulate_parser_rejects_removed_grpc_shutdown_flag() -> None:
                 "--user-config=u.yaml",
                 "--network-config=n.yaml",
                 "--eval-config=e.yaml",
-                "--usdz-glob=/tmp/*.usdz",
                 "--log-dir=/tmp/log",
                 "--serve",
                 "--grpc-graceful-shutdown-s=7.0",
@@ -495,7 +408,6 @@ def _make_one_shot_args() -> Namespace:
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
         array_job_dir=None,
     )
@@ -580,11 +492,6 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         engine_cls,
     )
 
-    shutdown_services = AsyncMock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.shutdown_services",
-        shutdown_services,
-    )
     merge_metrics_files = Mock()
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.merge_metrics_files",
@@ -609,12 +516,10 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        usdz_glob="/tmp/*.usdz",
         log_dir="/tmp/log",
     )
     fake_engine.startup.assert_awaited_once()
     fake_engine.shutdown.assert_awaited_once()
-    shutdown_services.assert_awaited_once_with(fake_config)
     merge_metrics_files.assert_called_once_with("/tmp/log/telemetry")
     generate_metrics_plot.assert_called_once()
 
@@ -663,11 +568,6 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
         Mock(return_value=fake_engine),
     )
 
-    shutdown_services = AsyncMock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.shutdown_services",
-        shutdown_services,
-    )
     merge_metrics_files = Mock()
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.merge_metrics_files",
@@ -689,7 +589,6 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
         await run_simulation(args)
 
     fake_engine.shutdown.assert_awaited_once()
-    shutdown_services.assert_awaited_once_with(fake_config)
     merge_metrics_files.assert_not_called()
     generate_metrics_plot.assert_not_called()
 
@@ -724,12 +623,6 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_simulate_raises(
         Mock(return_value=fake_engine),
     )
 
-    shutdown_services = AsyncMock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.shutdown_services",
-        shutdown_services,
-    )
-
     args = _make_one_shot_args()
 
     with pytest.raises(RuntimeError, match="simulate failed"):
@@ -738,7 +631,6 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_simulate_raises(
     fake_engine.startup.assert_awaited_once()
     fake_engine.simulate.assert_awaited_once()
     fake_engine.shutdown.assert_awaited_once()
-    shutdown_services.assert_awaited_once_with(fake_config)
 
 
 @pytest.mark.asyncio
@@ -771,12 +663,6 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_startup_raises(
         Mock(return_value=fake_engine),
     )
 
-    shutdown_services = AsyncMock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.shutdown_services",
-        shutdown_services,
-    )
-
     args = _make_one_shot_args()
 
     with pytest.raises(RuntimeError, match="startup failed"):
@@ -784,4 +670,3 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_startup_raises(
 
     fake_engine.simulate.assert_not_awaited()
     fake_engine.shutdown.assert_awaited_once()
-    shutdown_services.assert_awaited_once_with(fake_config)

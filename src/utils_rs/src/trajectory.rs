@@ -6,7 +6,9 @@
 use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 
-use crate::array_utils::{ensure_unit_quat, extract_array1_u64, extract_array2_f32};
+use crate::array_utils::{
+    ensure_unit_quat, extract_array1_f32, extract_array1_u64, extract_array2_f32,
+};
 use crate::polyline::Polyline;
 use crate::pose::{quat_to_scipy, Pose};
 use glam::{Quat, Vec3};
@@ -497,6 +499,76 @@ impl Trajectory {
             .collect();
 
         Self { poses }
+    }
+
+    /// Blend this trajectory with another trajectory.
+    ///
+    /// The trajectories must have the same timestamps. Alpha may be either a
+    /// scalar or a 1D float numpy array with one value per pose. Values are
+    /// clamped to [0, 1].
+    fn blend(&self, py: Python<'_>, other: &Trajectory, alpha: PyObject) -> PyResult<Self> {
+        if self.poses.len() != other.poses.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Cannot blend trajectories with different lengths: {} != {}",
+                self.poses.len(),
+                other.poses.len()
+            )));
+        }
+
+        for (i, (lhs, rhs)) in self.poses.iter().zip(other.poses.iter()).enumerate() {
+            if lhs.timestamp_us != rhs.timestamp_us {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Cannot blend trajectories with different timestamps at index {}: {} != {}",
+                    i, lhs.timestamp_us, rhs.timestamp_us
+                )));
+            }
+        }
+
+        let alpha_ndim = alpha
+            .getattr(py, "ndim")
+            .ok()
+            .and_then(|ndim| ndim.extract::<usize>(py).ok());
+        let alphas = if matches!(alpha_ndim, Some(ndim) if ndim > 0) {
+            let values = extract_array1_f32(py, &alpha, "alpha")?;
+            if values.len() != self.poses.len() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "alpha length {} does not match trajectory length {}",
+                    values.len(),
+                    self.poses.len()
+                )));
+            }
+            values
+        } else {
+            match alpha.extract::<f32>(py) {
+                Ok(value) => vec![value; self.poses.len()],
+                Err(_) => {
+                    let values = extract_array1_f32(py, &alpha, "alpha")?;
+                    if values.len() != self.poses.len() {
+                        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                            "alpha length {} does not match trajectory length {}",
+                            values.len(),
+                            self.poses.len()
+                        )));
+                    }
+                    values
+                }
+            }
+        };
+
+        let mut poses = Vec::with_capacity(self.poses.len());
+        for ((lhs, rhs), &alpha) in self.poses.iter().zip(other.poses.iter()).zip(alphas.iter()) {
+            if !alpha.is_finite() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "alpha values must be finite",
+                ));
+            }
+            poses.push(TimestampedPose::new(
+                lhs.timestamp_us,
+                lhs.pose.blend_with(&rhs.pose, alpha),
+            ));
+        }
+
+        Ok(Self { poses })
     }
 
     /// Extract the spatial path as a Polyline, dropping timing information.

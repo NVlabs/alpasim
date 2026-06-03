@@ -8,6 +8,7 @@ from collections.abc import Callable
 from alpasim_grpc.v0 import common_pb2, runtime_pb2, runtime_pb2_grpc
 from alpasim_runtime.daemon.engine import DaemonEngine, InvalidRequestError
 from alpasim_runtime.daemon.scheduler import DaemonUnavailableError
+from alpasim_runtime.errors import UnknownSceneError
 
 import grpc
 
@@ -16,7 +17,7 @@ class RuntimeDaemonServicer(runtime_pb2_grpc.RuntimeServiceServicer):
     """gRPC servicer that maps RPC methods to DaemonEngine operations.
 
     Maps domain exceptions to appropriate gRPC status codes:
-    ``InvalidRequestError`` (including ``UnknownSceneError``) -> ``INVALID_ARGUMENT``,
+    ``ValueError``-derived request validation errors -> ``INVALID_ARGUMENT``,
     ``DaemonUnavailableError`` -> ``UNAVAILABLE``.
     """
 
@@ -35,8 +36,21 @@ class RuntimeDaemonServicer(runtime_pb2_grpc.RuntimeServiceServicer):
     ) -> runtime_pb2.SimulationReturn:
         try:
             return await self._engine.simulate(request)
-        except InvalidRequestError as exc:
+        except (InvalidRequestError, UnknownSceneError) as exc:
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except DaemonUnavailableError as exc:
+            await context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
+
+        raise RuntimeError("context.abort did not terminate request")
+
+    async def get_runtime_info(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.aio.ServicerContext,
+    ) -> runtime_pb2.RuntimeInfo:
+        del request
+        try:
+            return await self._engine.get_runtime_info()
         except DaemonUnavailableError as exc:
             await context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
 

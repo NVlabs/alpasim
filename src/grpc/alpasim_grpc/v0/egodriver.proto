@@ -17,7 +17,6 @@ service EgodriverService {
     rpc submit_recording_ground_truth (GroundTruthRequest) returns (common.Empty);
     rpc drive (DriveRequest) returns (DriveResponse);
     rpc get_version (common.Empty) returns (common.VersionId);
-    rpc shut_down (common.Empty) returns (common.Empty);
 }
 
 message Route {
@@ -120,4 +119,11 @@ message DriveResponse {
     }
 
     DebugInfo debug_info = 3;
+
+    // When true, the simulator will terminate the rollout session
+    // immediately upon receiving this response, without completing the
+    // remainder of the current step or scheduling the next policy query.
+    // Use this to signal early termination (e.g. RL episode done,
+    // straggler cleanup).
+    bool terminate_session = 4;
 }

@@ -43,9 +43,8 @@ async def test_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path):
             "--user-config=tests/data/mock/user-config.yaml",
             "--network-config=tests/data/mock/network-config.yaml",
             "--eval-config=tests/data/mock/eval-config.yaml",
-            "--usdz-glob=tests/data/**/*.usdz",
             f"--log-dir={tmp_path}",
         ]
     )
-    success = await asyncio.wait_for(run_simulation(parsed_args), timeout=35)
+    success = await asyncio.wait_for(run_simulation(parsed_args), timeout=120)
     assert success

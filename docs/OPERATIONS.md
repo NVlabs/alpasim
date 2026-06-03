@@ -88,7 +88,7 @@ For sensorsim specifically, tune these together:
 
 - `services.sensorsim.replicas_per_container`
 - the NRE container's internal `--max-workers`
-- `runtime.endpoints.sensorsim.n_concurrent_rollouts`
+- `runtime.endpoints.renderer.n_concurrent_rollouts`
 
 Recent OSS deploy configs prefer `replicas_per_container: 1` plus higher `--max-workers`.
 
@@ -139,7 +139,7 @@ The simulator has multiple synchronized "clocks":
 1. **Camera frames** (`frame_interval_us`) - How often cameras capture images
 1. **Pose reporting** (`pose_reporting_interval_us`) - How often intermediate poses are reported
    between control steps (0 = at `control_timestep_us` rate, the default)
-1. **Simulation start** (`time_start_offset_us`) - Initial offset to avoid artifacts
+1. **Simulation start** - The recorded egomotion start timestamp by default
 
 For correct operation, these must be mathematically aligned.
 
@@ -157,12 +157,6 @@ To change to 5Hz inference (200ms between decisions):
 
 1. **Pose reporting** (`pose_reporting_interval_us`): defaults to 0, which falls back to
    `control_timestep_us`. No explicit setting needed unless you want intermediate pose reports.
-
-1. **Set time offset** (must be a multiple of `control_timestep_us`):
-
-   ```bash
-   runtime.simulation_config.time_start_offset_us=600000  # 3 * 200ms
-   ```
 
 1. **Match camera frame rate** (VaVam default has 1 camera):
 
@@ -182,7 +176,6 @@ To change to 5Hz inference (200ms between decisions):
 uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.simulation_config.control_timestep_us=200000 \
-    runtime.simulation_config.time_start_offset_us=600000 \
     runtime.simulation_config.cameras.0.frame_interval_us=200000
 ```
 
@@ -197,7 +190,6 @@ To use 30Hz cameras (33.3ms) but 10Hz inference (100ms):
 1. **Inference runs at 10Hz**: `control_timestep_us=100002` (must be 3 × 33334)
 1. **Subsample frames**: `driver.inference.Cframes_subsample=3` (use every 3rd frame)
 1. **Pose reporting**: `pose_reporting_interval_us` defaults to 0 (falls back to `control_timestep_us`)
-1. **Time offset aligns**: `time_start_offset_us=300006` (3 × 100002)
 
 **Full command** (based on `exp/sim/20s_at_30Hz.yaml`):
 
@@ -205,7 +197,6 @@ To use 30Hz cameras (33.3ms) but 10Hz inference (100ms):
 uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
     wizard.log_dir=runs/{DATETIME} \
     runtime.simulation_config.control_timestep_us=100002 \
-    runtime.simulation_config.time_start_offset_us=300006 \
     runtime.simulation_config.cameras.0.frame_interval_us=33334 \
     ++driver.inference.Cframes_subsample=3
 ```
@@ -242,17 +233,18 @@ runtime.simulation_config.assert_zero_decision_delay=true
 
 Based on actual config files in `src/wizard/configs/`:
 
-| Frequency | `control_timestep_us` | `time_start_offset_us`      | Notes               |
-| --------- | --------------------- | --------------------------- | ------------------- |
-| 2Hz       | 500000 (500ms)        | 500000 (1×) or 1500000 (3×) | VaVam default       |
-| 5Hz       | 200000 (200ms)        | 600000 (3×)                 | Example config      |
-| 10Hz      | 100000 (100ms)        | 300000 (3×)                 | Base config default |
-| 30Hz      | 33334 (33.3ms)        | 100002 (3×)                 | High frequency      |
+| Frequency | `control_timestep_us` | Notes               |
+| --------- | --------------------- | ------------------- |
+| 2Hz       | 500000 (500ms)        | VaVam default       |
+| 5Hz       | 200000 (200ms)        | Example config      |
+| 10Hz      | 100000 (100ms)        | Base config default |
+| 30Hz      | 33334 (33.3ms)        | High frequency      |
 
 `pose_reporting_interval_us` defaults to 0 for all frequencies (falls back to `control_timestep_us`).
 
-**Pattern**: Most configs use `time_start_offset_us = 3 × control_timestep_us` to avoid artifacts at
-scene start.
+Simulation starts from the first USDZ timestamp with valid recorded camera and
+non-ego actor data. The first policy step is aligned to the first completed
+camera frames.
 
 **See also**:
 
@@ -401,6 +393,12 @@ This file is generated before Docker Compose has necessarily finished starting
 the runtime daemon. Clients should treat `host` and `port` as discovery metadata
 and poll until the runtime gRPC port accepts connections.
 
+After the port accepts connections, clients can call
+`RuntimeService.get_runtime_info()` to discover the server's maximum supported
+concurrent rollouts, available scenes and lightweight scene metadata, service
+capacity by backing service, and service versions before submitting
+`RuntimeService.simulate()` requests.
+
 By default, the runtime server port is allocated from `wizard.baseport` after
 the backing service ports. Pin it with `wizard.runtime_server_port=<port>` when
 client scripts or firewall rules need a stable port.
@@ -412,9 +410,21 @@ also use `driver_source=external_dynamic` and provide drivers per request with
 `SimulationRequest.available_drivers` and `n_concurrent_per_driver`; those
 request addresses override the configured driver pool for that RPC only.
 
-To stop the server, call `RuntimeService.shut_down()`. Runtime shutdown also
-shuts down backing services when `runtime.endpoints.do_shutdown=true`; set it
-to `false` to leave the backing services running.
+To stop the server, call `RuntimeService.shut_down()`. In managed deployments,
+Docker Compose or Slurm tears down backing services after the runtime exits.
+The legacy `runtime.endpoints.do_shutdown` setting is kept for compatibility
+but no longer controls backing-service RPC shutdown.
+
+When running a generated `docker-compose.yaml` manually for one-shot simulations,
+start Compose with `--exit-code-from runtime-0`, for example:
+
+```bash
+docker compose -f docker-compose.yaml up --exit-code-from runtime-0
+```
+
+The runtime container exits when the simulation is complete, while the backing
+services are long-running servers. Without `--exit-code-from runtime-0`, Docker
+Compose can continue waiting after `runtime-0` exits successfully.
 
 ### How do I enable/disable specific services?
 

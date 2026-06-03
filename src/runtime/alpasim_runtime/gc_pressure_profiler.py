@@ -24,7 +24,6 @@ import gc
 import logging
 from collections import Counter
 from time import perf_counter
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ _gc_phase_generation: int = 0
 _installed: bool = False
 
 # Pre-collection snapshot for stall diff (captured in "start", consumed in "stop")
-_pre_stall_snapshot: Optional[Counter[str]] = None
+_pre_stall_snapshot: Counter[str] | None = None
 
 # ---------------------------------------------------------------------------
 # GC callback (registered via gc.callbacks)

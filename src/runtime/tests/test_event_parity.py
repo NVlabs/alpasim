@@ -26,7 +26,7 @@ from alpasim_runtime.events.base import (
     EventQueue,
     SimulationEndEvent,
 )
-from alpasim_runtime.events.camera import GroupedRenderEvent
+from alpasim_runtime.events.camera import CameraFrameEvent, CameraRenderFlushEvent
 from alpasim_runtime.events.controller import ControllerEvent
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import (
@@ -323,18 +323,31 @@ class TestControllerAndEgoPhysicsPipeline:
         assert call_kwargs["rig_reference_trajectory_in_rig"] is not None
 
     @pytest.mark.asyncio
-    async def test_controller_event_uses_full_gt_fallback_during_force_gt(
+    async def test_controller_event_uses_gt_reference_during_force_gt(
         self,
         rollout_state: RolloutState,
         service_bundle: ServiceBundle,
         mock_controller: AsyncMock,
     ):
-        """Force-GT should pass the full GT trajectory as the fallback input."""
+        """Force-GT should feed GT reference even when policy produced a driver trajectory."""
+        driver_trajectory = Trajectory.from_poses(
+            np.array([100_000, 200_000], dtype=np.uint64),
+            [
+                Pose(
+                    np.array([99.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+                Pose(
+                    np.array([100.0, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                ),
+            ],
+        )
         ctx = StepContext(
             step_start_us=100_000,
             target_time_us=200_000,
             force_gt=True,
-            driver_trajectory=MagicMock(timestamps_us=[]),
+            driver_trajectory=driver_trajectory,
         )
         rollout_state.step_context = ctx
 
@@ -350,6 +363,314 @@ class TestControllerAndEgoPhysicsPipeline:
             call_kwargs["fallback_trajectory_local_to_rig"]
             is rollout_state.unbound.gt_ego_trajectory
         )
+        expected_reference = rollout_state.unbound.gt_ego_trajectory.clip(
+            100_000, 1_000_001
+        ).transform(rollout_state.ego_trajectory.last_pose.inverse())
+        actual_reference = call_kwargs["rig_reference_trajectory_in_rig"]
+        np.testing.assert_array_equal(
+            actual_reference.timestamps_us,
+            expected_reference.timestamps_us,
+        )
+        np.testing.assert_allclose(
+            actual_reference.positions,
+            expected_reference.positions,
+        )
+
+    @pytest.mark.asyncio
+    async def test_controller_event_uses_force_gt_helper_for_reference(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        simple_trajectory: Trajectory,
+    ):
+        """Controller should delegate force-GT reference construction to the helper."""
+        force_gt_trajectory = MagicMock()
+        force_gt_trajectory.time_range_us = range(100_000, 1_000_001)
+        force_gt_trajectory.clip.return_value = simple_trajectory
+        force_gt_trajectory.interpolate_pose.return_value = simple_trajectory.get_pose(
+            1
+        )
+        rollout_state.force_gt_ego_trajectory = force_gt_trajectory
+        rollout_state.unbound.skip_driver_during_force_gt = False
+        rollout_state.step_context = StepContext(
+            step_start_us=200_000,
+            target_time_us=300_000,
+            force_gt=True,
+            driver_trajectory=MagicMock(timestamps_us=[]),
+        )
+
+        event = ControllerEvent(
+            timestamp_us=200_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        # ``controller_reference_trajectory`` clips the force-GT trajectory from
+        # step_start_us to a horizon bounded by the trajectory end.
+        force_gt_trajectory.clip.assert_called_once()
+        clip_start, clip_end = force_gt_trajectory.clip.call_args.args
+        assert clip_start == 200_000
+        assert clip_end <= force_gt_trajectory.time_range_us.stop
+
+    @pytest.mark.asyncio
+    async def test_controller_event_rejects_force_gt_trajectory_outside_step(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        simple_trajectory: Trajectory,
+    ):
+        """Force-GT trajectory should cover the controller step interval."""
+        force_gt_trajectory = MagicMock()
+        force_gt_trajectory.time_range_us = range(100_000, 200_001)
+        force_gt_trajectory.interpolate.return_value = simple_trajectory
+        force_gt_trajectory.interpolate_pose.return_value = simple_trajectory.get_pose(
+            1
+        )
+        rollout_state.force_gt_ego_trajectory = force_gt_trajectory
+        rollout_state.step_context = StepContext(
+            step_start_us=100_000,
+            target_time_us=300_000,
+            force_gt=True,
+            driver_trajectory=MagicMock(timestamps_us=[]),
+        )
+
+        event = ControllerEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="force-GT trajectory does not cover controller target",
+        ):
+            await event.run(rollout_state, EventQueue())
+
+        force_gt_trajectory.interpolate_pose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_controller_event_uses_blended_fallback_during_force_gt(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_controller: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """Force-GT should prefer the prebuilt physics-blended fallback."""
+        blended_fallback = Trajectory.from_poses(
+            simple_trajectory.timestamps_us,
+            [
+                Pose(
+                    simple_trajectory.get_pose(i).vec3
+                    + np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                    simple_trajectory.get_pose(i).quat,
+                )
+                for i in range(len(simple_trajectory))
+            ],
+        )
+        rollout_state.force_gt_ego_trajectory = blended_fallback
+        rollout_state.step_context = StepContext(
+            step_start_us=100_000,
+            target_time_us=200_000,
+            force_gt=True,
+            driver_trajectory=MagicMock(timestamps_us=[]),
+        )
+
+        event = ControllerEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        call_kwargs = mock_controller.run_controller_and_vehicle.call_args.kwargs
+        assert call_kwargs["fallback_trajectory_local_to_rig"] is blended_fallback
+
+    @pytest.mark.asyncio
+    async def test_force_gt_physics_blend_applies_to_traffic_actors_in_all_actors_mode(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+    ):
+        """Force-GT physics blending should blend traffic GT poses too."""
+        gt_traffic_traj = Trajectory.from_poses(
+            np.array([0, 100_000, 200_000, 300_000], dtype=np.uint64),
+            [
+                _make_pose(0.0, 1.0, 0.0),
+                _make_pose(1.0, 1.0, 0.0),
+                _make_pose(2.0, 1.0, 0.0),
+                _make_pose(3.0, 1.0, 0.0),
+            ],
+        )
+        traffic_obj = TrafficObject(
+            track_id="car_1",
+            aabb=AABB(x=4.0, y=2.0, z=1.5),
+            trajectory=gt_traffic_traj,
+            is_static=False,
+            label_class="VEHICLE",
+        )
+        rollout_state.traffic_objs["car_1"] = traffic_obj
+        rollout_state.unbound.traffic_objs = rollout_state.traffic_objs
+        rollout_state.unbound.physics_update_mode = PhysicsUpdateMode.ALL_ACTORS
+        rollout_state.unbound.render_start_timestamp_us = 100_000
+        rollout_state.unbound.force_gt_duration_us = 200_000
+
+        ctx = StepContext(
+            step_start_us=100_000,
+            target_time_us=200_000,
+            force_gt=True,
+            corrected_ego_trajectory=_make_trajectory_from_range(
+                100_000, 200_000, 100_000
+            ),
+            traffic_response=TrafficReturn(),
+        )
+        rollout_state.step_context = ctx
+        service_bundle.trafficsim.skip = True
+
+        async def fake_ground_intersection(**kwargs):
+            physics_traffic_poses = {
+                obj_id: Pose(
+                    pose.vec3 + np.array([0.0, 0.0, 10.0], dtype=np.float32),
+                    pose.quat,
+                )
+                for obj_id, pose in kwargs["traffic_poses"].items()
+            }
+            return kwargs["ego_trajectory_aabb"], physics_traffic_poses
+
+        service_bundle.physics.ground_intersection.side_effect = (
+            fake_ground_intersection
+        )
+
+        event = PhysicsEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+            target=PhysicsTarget.TRAFFIC,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        service_bundle.physics.ground_intersection.assert_awaited_once()
+        call_kwargs = service_bundle.physics.ground_intersection.call_args.kwargs
+        assert call_kwargs["skip"] is False
+        pose = ctx.traffic_trajectories["car_1"].interpolate_pose(200_000)
+        assert pose.vec3.tolist() == [2.0, 1.0, 5.0]
+
+    @pytest.mark.asyncio
+    async def test_force_gt_traffic_blend_skips_actor_missing_from_physics(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+    ):
+        """Traffic blending should not require physics output for every actor."""
+        gt_traffic_traj = Trajectory.from_poses(
+            np.array([0, 100_000, 200_000, 300_000], dtype=np.uint64),
+            [
+                _make_pose(0.0, 1.0, 0.0),
+                _make_pose(1.0, 1.0, 0.0),
+                _make_pose(2.0, 1.0, 0.0),
+                _make_pose(3.0, 1.0, 0.0),
+            ],
+        )
+        for track_id in ["car_1", "car_missing"]:
+            rollout_state.traffic_objs[track_id] = TrafficObject(
+                track_id=track_id,
+                aabb=AABB(x=4.0, y=2.0, z=1.5),
+                trajectory=gt_traffic_traj,
+                is_static=False,
+                label_class="VEHICLE",
+            )
+        rollout_state.unbound.traffic_objs = rollout_state.traffic_objs
+        rollout_state.unbound.physics_update_mode = PhysicsUpdateMode.ALL_ACTORS
+        rollout_state.unbound.render_start_timestamp_us = 100_000
+        rollout_state.unbound.force_gt_duration_us = 200_000
+        rollout_state.step_context = StepContext(
+            step_start_us=100_000,
+            target_time_us=200_000,
+            force_gt=True,
+            corrected_ego_trajectory=_make_trajectory_from_range(
+                100_000, 200_000, 100_000
+            ),
+            traffic_response=TrafficReturn(),
+        )
+        service_bundle.trafficsim.skip = True
+
+        async def fake_ground_intersection(**kwargs):
+            physics_pose = kwargs["traffic_poses"]["car_1"]
+            return kwargs["ego_trajectory_aabb"], {
+                "car_1": Pose(
+                    physics_pose.vec3 + np.array([0.0, 0.0, 10.0], dtype=np.float32),
+                    physics_pose.quat,
+                )
+            }
+
+        service_bundle.physics.ground_intersection.side_effect = (
+            fake_ground_intersection
+        )
+
+        event = PhysicsEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+            target=PhysicsTarget.TRAFFIC,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        pose = rollout_state.step_context.traffic_trajectories[
+            "car_1"
+        ].interpolate_pose(200_000)
+        assert pose.vec3.tolist() == [2.0, 1.0, 5.0]
+        assert "car_missing" not in rollout_state.step_context.traffic_trajectories
+
+    @pytest.mark.asyncio
+    async def test_force_gt_traffic_actors_skip_physics_in_ego_only_mode(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+    ):
+        """EGO_ONLY mode should not apply physics to non-ego actors."""
+        gt_traffic_traj = Trajectory.from_poses(
+            np.array([0, 100_000, 200_000, 300_000], dtype=np.uint64),
+            [
+                _make_pose(0.0, 1.0, 0.0),
+                _make_pose(1.0, 1.0, 0.0),
+                _make_pose(2.0, 1.0, 0.0),
+                _make_pose(3.0, 1.0, 0.0),
+            ],
+        )
+        traffic_obj = TrafficObject(
+            track_id="car_1",
+            aabb=AABB(x=4.0, y=2.0, z=1.5),
+            trajectory=gt_traffic_traj,
+            is_static=False,
+            label_class="VEHICLE",
+        )
+        rollout_state.traffic_objs["car_1"] = traffic_obj
+        rollout_state.unbound.traffic_objs = rollout_state.traffic_objs
+        rollout_state.unbound.physics_update_mode = PhysicsUpdateMode.EGO_ONLY
+
+        ctx = StepContext(
+            step_start_us=100_000,
+            target_time_us=200_000,
+            force_gt=True,
+            corrected_ego_trajectory=_make_trajectory_from_range(
+                100_000, 200_000, 100_000
+            ),
+            traffic_response=TrafficReturn(),
+        )
+        rollout_state.step_context = ctx
+
+        event = PhysicsEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+            target=PhysicsTarget.TRAFFIC,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        service_bundle.physics.ground_intersection.assert_not_awaited()
+        pose = ctx.traffic_trajectories["car_1"].interpolate_pose(200_000)
+        assert pose.vec3.tolist() == [2.0, 1.0, 0.0]
 
     @pytest.mark.asyncio
     async def test_policy_event_creates_step_context_with_driver_trajectory(
@@ -361,7 +682,7 @@ class TestControllerAndEgoPhysicsPipeline:
     ):
         """PolicyEvent creates a StepContext and writes driver_trajectory to it."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         event = PolicyEvent(
             timestamp_us=200_000,
@@ -392,34 +713,36 @@ class TestGroupedRenderDataFlow:
     @pytest.fixture
     def grouped_render_event(
         self,
-        runtime_camera: MagicMock,
+        runtime_camera,
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
-    ) -> GroupedRenderEvent:
-        return GroupedRenderEvent(
-            timestamp_us=200_000,
-            control_timestep_us=100_000,
-            cameras=[runtime_camera],
+    ) -> CameraFrameEvent:
+        return CameraFrameEvent(
+            camera=runtime_camera,
+            trigger=runtime_camera.clock.ith_trigger(0),
             sensorsim=mock_sensorsim,
             driver=mock_driver,
-            scene_start_us=0,
             use_aggregated_render=True,
         )
 
     @pytest.mark.asyncio
     async def test_grouped_render_populates_driver_data(
         self,
-        grouped_render_event: GroupedRenderEvent,
+        grouped_render_event: CameraFrameEvent,
         rollout_state: RolloutState,
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
     ):
-        """GroupedRenderEvent stores driver_data on rollout_state."""
+        """Aggregated camera flush stores driver_data on rollout_state."""
         driver_data_blob = b"aggregated_render_payload"
         mock_sensorsim.aggregated_render.return_value = ([], driver_data_blob)
 
         queue = EventQueue()
-        await grouped_render_event.run(rollout_state, queue)
+        await grouped_render_event.handle(rollout_state, queue)
+        flush = next(
+            event for event in queue.queue if isinstance(event, CameraRenderFlushEvent)
+        )
+        await flush.handle(rollout_state, queue)
 
         assert rollout_state.data_sensorsim_to_driver == driver_data_blob
 
@@ -430,25 +753,17 @@ class TestGroupedRenderDataFlow:
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
     ):
-        """When no camera triggers fall in the window, driver_data is not set."""
-        camera = MagicMock()
-        camera.clock = MagicMock()
-        camera.clock.triggers_completed_in_range.return_value = []
-
-        event = GroupedRenderEvent(
+        """When no camera triggers are registered, driver_data is not set."""
+        event = CameraRenderFlushEvent(
             timestamp_us=200_000,
-            control_timestep_us=100_000,
-            cameras=[camera],
             sensorsim=mock_sensorsim,
             driver=mock_driver,
-            scene_start_us=0,
-            use_aggregated_render=True,
         )
 
         rollout_state.data_sensorsim_to_driver = None
 
         queue = EventQueue()
-        await event.run(rollout_state, queue)
+        await event.handle(rollout_state, queue)
 
         mock_sensorsim.aggregated_render.assert_not_awaited()
         assert rollout_state.data_sensorsim_to_driver is None
@@ -465,7 +780,7 @@ class TestGroupedRenderDataFlow:
         rollout_state.data_sensorsim_to_driver = b"some_renderer_payload"
 
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         event = PolicyEvent(
             timestamp_us=200_000,
@@ -494,7 +809,7 @@ class TestGroupedRenderDataFlow:
         rollout_state.data_sensorsim_to_driver = payload
 
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         event = PolicyEvent(
             timestamp_us=200_000,
@@ -514,17 +829,21 @@ class TestGroupedRenderDataFlow:
     @pytest.mark.asyncio
     async def test_grouped_render_forwards_images_to_driver(
         self,
-        grouped_render_event: GroupedRenderEvent,
+        grouped_render_event: CameraFrameEvent,
         rollout_state: RolloutState,
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
     ):
-        """GroupedRenderEvent forwards all images from aggregated_render to driver."""
+        """Aggregated camera flush forwards all images from aggregated_render."""
         fake_images = [MagicMock(), MagicMock(), MagicMock()]
         mock_sensorsim.aggregated_render.return_value = (fake_images, b"data")
 
         queue = EventQueue()
-        await grouped_render_event.run(rollout_state, queue)
+        await grouped_render_event.handle(rollout_state, queue)
+        flush = next(
+            event for event in queue.queue if isinstance(event, CameraRenderFlushEvent)
+        )
+        await flush.handle(rollout_state, queue)
 
         # Drain tracked tasks to complete submissions
         await rollout_state.step_context.drain_outstanding_tasks()
@@ -795,7 +1114,7 @@ class TestPolicyEventPipelineIntegration:
     ):
         """PolicyEvent creates StepContext with driver_trajectory."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)
@@ -818,7 +1137,7 @@ class TestPolicyEventPipelineIntegration:
     ):
         """RecurringEvent.handle() reschedules with timestamp += interval_us."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.handle(rollout_state, queue)
@@ -840,7 +1159,7 @@ class TestPolicyEventPipelineIntegration:
         rollout_state.data_sensorsim_to_driver = None
 
         drive_traj = simple_trajectory.clip(200_000, 300_001)
-        mock_driver.drive.return_value = drive_traj
+        mock_driver.drive.return_value = (drive_traj, False)
 
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)

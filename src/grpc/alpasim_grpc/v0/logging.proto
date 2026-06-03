@@ -11,6 +11,7 @@ import "alpasim_grpc/v0/egodriver.proto";
 import "alpasim_grpc/v0/physics.proto";
 import "alpasim_grpc/v0/traffic.proto";
 import "alpasim_grpc/v0/controller.proto";
+import "alpasim_grpc/v0/video_model.proto";
 
 message RolloutMetadata {
     message VersionIds {
@@ -107,5 +108,11 @@ message LogEntry {
 
         common.Empty available_ego_masks_request = 22;
         nre.grpc.protos.sensorsim.AvailableEgoMasksReturn available_ego_masks_return = 23;
+
+        alpadreams.video_model.SessionRequest video_model_session_request = 24;
+        alpadreams.video_model.SessionId video_model_session_id = 25;
+        alpadreams.video_model.SessionCloseRequest video_model_session_close_request = 26;
+        alpadreams.video_model.VideoChunkRequest video_model_chunk_request = 28;
+        alpadreams.video_model.VideoChunkReturn video_model_chunk_return = 29;
     }
 }

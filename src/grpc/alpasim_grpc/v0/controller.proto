@@ -15,7 +15,6 @@ service VDCService {
   rpc run_controller_and_vehicle(RunControllerAndVehicleModelRequest)
       returns (RunControllerAndVehicleModelResponse) {
   }
-  rpc shut_down(common.Empty) returns (common.Empty);
 }
 
 message VDCSessionRequest {

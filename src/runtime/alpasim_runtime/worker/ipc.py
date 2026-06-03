@@ -26,7 +26,7 @@ class ServiceEndpoints:
     """Concrete service addresses assigned to a single job."""
 
     driver: ServiceAddress
-    sensorsim: ServiceAddress
+    renderer: ServiceAddress
     physics: ServiceAddress
     trafficsim: ServiceAddress
     controller: ServiceAddress
@@ -42,8 +42,8 @@ class PendingRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
+    # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
+    session_uuid: str = ""
 
 
 @dataclass
@@ -58,10 +58,10 @@ class AssignedRolloutJob:
     scene_id: str
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
-    # Artifact source path for this job's scene.
-    artifact_path: str
     # Concrete service addresses assigned by the parent dispatch loop.
     endpoints: ServiceEndpoints
+    # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
+    session_uuid: str = ""
 
 
 @dataclass

@@ -8,6 +8,24 @@ from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_utils.logs import async_read_pb_log
 
 
+def _redact_video_model_payloads(log_entry: LogEntry) -> None:
+    entry_type = log_entry.WhichOneof("log_entry")
+    if entry_type == "video_model_session_request":
+        request = log_entry.video_model_session_request
+        request.static_world_map.hdmap_parquets = b"<hdmap data redacted>"
+        for image in request.initial_frames:
+            image.data = b"<image data redacted>"
+    elif entry_type == "video_model_chunk_return":
+        response = log_entry.video_model_chunk_return
+        for camera_output in response.camera_outputs:
+            for image in camera_output.rgb_frames:
+                image.data = b"<image data redacted>"
+            for image in camera_output.hdmap_condition_frames:
+                image.data = b"<image data redacted>"
+        for image in response.bev_map_frames:
+            image.data = b"<image data redacted>"
+
+
 async def print_asl(
     file_path: str,
     start: int,
@@ -31,6 +49,7 @@ async def print_asl(
                     log_entry.driver_camera_image.camera_image.image_bytes = (
                         b"<image data redacted>"
                     )
+                _redact_video_model_payloads(log_entry)
                 print(log_entry)
 
         message_i += 1

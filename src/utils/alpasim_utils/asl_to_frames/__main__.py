@@ -4,7 +4,9 @@
 """
 A CLI utility for extracting camera frames from alpasim logs (.asl files) and saving as video or
 individual images. The results for each discovered file `path/to/<name>.asl` will be saved at
-`path/to/<name>_asl_frames/<camera_id>/<mp4_or_jpegs_or_pngs>`.
+`path/to/<name>_asl_frames/<camera_id>/<mp4_or_jpegs_or_pngs>`. Video model chunk
+returns are also exported as `video_model_rgb_<camera_id>` and
+`video_model_hdmap_<camera_id>` streams.
 The necessary dependencies for this script can be installed with the optional dependency: eg
 `pip install alpasim_grpc_protobuf4[asl_to_frames]`.
 """
@@ -13,6 +15,7 @@ import argparse
 import asyncio
 import glob
 import logging
+from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 import aiofiles
@@ -20,6 +23,7 @@ import numpy as np
 from aiofiles import os as aios
 from alpasim_grpc.v0.egodriver_pb2 import DriveSessionRequest, RolloutCameraImage
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
+from alpasim_grpc.v0.video_model_pb2 import VideoChunkRequest, VideoChunkReturn
 from alpasim_utils.logs import async_read_pb_log
 
 try:
@@ -35,6 +39,12 @@ logger.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
 SaveFormat: TypeAlias = Literal["mp4", "frames"]
+
+
+@dataclass(frozen=True)
+class Frame:
+    image_bytes: bytes
+    timestamp_us: int
 
 
 def pad_to_divisible_by_16(image: np.ndarray) -> np.ndarray:
@@ -75,7 +85,9 @@ async def convert_single_log(
     save_dir: str,
     format: SaveFormat,
 ) -> None:
-    frames_by_camera: dict[str, list[RolloutCameraImage.CameraImage]] = {}
+    frames_by_camera: dict[str, list[Frame]] = {}
+    video_model_frames_by_name: dict[str, list[Frame]] = {}
+    pending_video_model_chunk_request: VideoChunkRequest | None = None
 
     rollout_metadata: RolloutMetadata | None = None
     drive_session_request: DriveSessionRequest | None = None
@@ -89,7 +101,23 @@ async def convert_single_log(
             image: RolloutCameraImage.CameraImage = (
                 message.driver_camera_image.camera_image
             )
-            frames_by_camera.setdefault(image.logical_id, []).append(image)
+            frames_by_camera.setdefault(image.logical_id, []).append(
+                Frame(image_bytes=image.image_bytes, timestamp_us=image.frame_end_us)
+            )
+        elif message.WhichOneof("log_entry") == "video_model_chunk_request":
+            pending_video_model_chunk_request = message.video_model_chunk_request
+        elif message.WhichOneof("log_entry") == "video_model_chunk_return":
+            if pending_video_model_chunk_request is None:
+                logger.warning(
+                    "Skipping video_model_chunk_return without preceding request."
+                )
+                continue
+            _collect_video_model_frames(
+                message.video_model_chunk_return,
+                pending_video_model_chunk_request,
+                video_model_frames_by_name,
+            )
+            pending_video_model_chunk_request = None
 
     if rollout_metadata is None:
         raise ValueError("RolloutMetadata not found in log; unknown rollout index.")
@@ -99,11 +127,64 @@ async def convert_single_log(
 
     await aios.makedirs(save_dir, exist_ok=True)
 
-    for camera_logical_id, images in frames_by_camera.items():
-        camera_name = camera_logical_id
-        save_path = f"{save_dir}/{camera_name}"
-        images = sorted(images, key=lambda frame: frame.frame_start_us)
-        timestamps_us = np.array([frame.frame_start_us for frame in images])
+    await _save_frame_groups(frames_by_camera, save_dir, format)
+    await _save_frame_groups(video_model_frames_by_name, save_dir, format)
+
+
+def _collect_video_model_frames(
+    response: VideoChunkReturn,
+    request: VideoChunkRequest,
+    frames_by_name: dict[str, list[Frame]],
+) -> None:
+    request_timestamps_us = [pose.timestamp_us for pose in request.rig_trajectory.poses]
+
+    for camera_output in response.camera_outputs:
+        camera_id = camera_output.camera_logical_id
+        _extend_video_model_frame_group(
+            frames_by_name=frames_by_name,
+            stream_name=f"video_model_rgb_{camera_id}",
+            image_bytes=[image.data for image in camera_output.rgb_frames],
+            timestamps_us=request_timestamps_us,
+        )
+        _extend_video_model_frame_group(
+            frames_by_name=frames_by_name,
+            stream_name=f"video_model_hdmap_{camera_id}",
+            image_bytes=[image.data for image in camera_output.hdmap_condition_frames],
+            timestamps_us=request_timestamps_us,
+        )
+
+
+def _extend_video_model_frame_group(
+    frames_by_name: dict[str, list[Frame]],
+    stream_name: str,
+    image_bytes: list[bytes],
+    timestamps_us: list[int],
+) -> None:
+    if not image_bytes:
+        return
+
+    if len(image_bytes) > len(timestamps_us):
+        logger.warning(
+            "Skipping %d %s frame(s) without request timestamps.",
+            len(image_bytes) - len(timestamps_us),
+            stream_name,
+        )
+
+    frames_by_name.setdefault(stream_name, []).extend(
+        Frame(image_bytes=data, timestamp_us=timestamp_us)
+        for data, timestamp_us in zip(image_bytes, timestamps_us)
+    )
+
+
+async def _save_frame_groups(
+    frames_by_name: dict[str, list[Frame]],
+    save_dir: str,
+    format: SaveFormat,
+) -> None:
+    for stream_name, images in frames_by_name.items():
+        save_path = f"{save_dir}/{stream_name}"
+        images = sorted(images, key=lambda frame: frame.timestamp_us)
+        timestamps_us = np.array([frame.timestamp_us for frame in images])
 
         match format:
             case "mp4":
@@ -115,7 +196,7 @@ async def convert_single_log(
 
 
 async def frames_to_mp4(
-    images: list[RolloutCameraImage.CameraImage],
+    images: list[Frame],
     timestamps_us: np.ndarray,
     save_path: str,
 ) -> None:
@@ -154,7 +235,7 @@ async def _write_image(content: bytes, path: str) -> None:
 
 
 async def save_frames_as_files(
-    images: list[RolloutCameraImage.CameraImage],
+    images: list[Frame],
     timestamps_us: np.ndarray,
     save_path: str,
 ) -> None:

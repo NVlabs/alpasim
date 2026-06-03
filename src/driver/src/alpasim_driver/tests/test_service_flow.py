@@ -23,8 +23,6 @@ from alpasim_grpc.v0.egodriver_pb2 import (
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 
-import grpc.aio
-
 from ..frame_cache import FrameCache
 from ..main import EgoDriverService
 from ..schema import DriverConfig
@@ -91,11 +89,9 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     cfg = OmegaConf.merge(schema, raw_cfg)
 
     loop = asyncio.get_running_loop()
-    server = grpc.aio.server()
     service = EgoDriverService(
         cfg=cfg,
         loop=loop,
-        grpc_server=server,
     )
 
     session_uuid = "test-session"

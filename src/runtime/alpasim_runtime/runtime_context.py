@@ -10,17 +10,22 @@ from dataclasses import dataclass
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.config import (
+    BASE_SERVICE_NAMES,
+    CORE_SERVICE_NAMES,
     NetworkSimulatorConfig,
+    RendererKind,
     SimulatorConfig,
     UserSimulatorConfig,
 )
 from alpasim_runtime.endpoints import get_endpoint_addresses
+from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.validation import (
     gather_versions_from_addresses,
     validate_scenarios,
 )
-from alpasim_utils.artifact import Artifact
 from alpasim_utils.yaml_utils import typed_parse_config
+from omegaconf import MISSING
+from omegaconf.errors import MissingMandatoryValue
 
 from eval.schema import EvalConfig
 
@@ -32,33 +37,24 @@ def create_address_pools(config: SimulatorConfig) -> dict[str, AddressPool]:
     endpoints = config.user.endpoints
     network = config.network
 
-    return {
-        "driver": AddressPool(
-            get_endpoint_addresses(network.driver),
-            endpoints.driver.n_concurrent_rollouts,
-            skip=endpoints.driver.skip,
-        ),
-        "sensorsim": AddressPool(
-            get_endpoint_addresses(network.sensorsim),
-            endpoints.sensorsim.n_concurrent_rollouts,
-            skip=endpoints.sensorsim.skip,
-        ),
-        "physics": AddressPool(
-            get_endpoint_addresses(network.physics),
-            endpoints.physics.n_concurrent_rollouts,
-            skip=endpoints.physics.skip,
-        ),
-        "trafficsim": AddressPool(
-            get_endpoint_addresses(network.trafficsim),
-            endpoints.trafficsim.n_concurrent_rollouts,
-            skip=endpoints.trafficsim.skip,
-        ),
-        "controller": AddressPool(
-            get_endpoint_addresses(network.controller),
-            endpoints.controller.n_concurrent_rollouts,
-            skip=endpoints.controller.skip,
-        ),
-    }
+    pools = {}
+    for service_name in CORE_SERVICE_NAMES:
+        network_endpoint = getattr(network, service_name)
+        user_endpoint = getattr(endpoints, service_name)
+        addresses = get_endpoint_addresses(network_endpoint)
+        if not user_endpoint.skip and not addresses:
+            raise ValueError(
+                f"Service {service_name!r} has no endpoint addresses in "
+                f"network.{service_name} and "
+                f"runtime.endpoints.{service_name}.skip=False"
+            )
+        pools[service_name] = AddressPool(
+            addresses,
+            user_endpoint.n_concurrent_rollouts,
+            skip=user_endpoint.skip,
+        )
+
+    return pools
 
 
 def compute_max_in_flight(
@@ -73,9 +69,11 @@ def compute_max_in_flight(
     become unbounded.
     """
     num_workers = config.user.nr_workers
-    service_caps = {name: pool.total_capacity for name, pool in pools.items()}
+    required_names = (*BASE_SERVICE_NAMES, "renderer")
+    service_caps = {name: pools[name].total_capacity for name in required_names}
 
-    for name, pool in pools.items():
+    for name in required_names:
+        pool = pools[name]
         if not pool.skip and service_caps[name] == 0:
             raise ValueError(f"Service '{name}' has zero capacity")
 
@@ -117,18 +115,49 @@ def compute_num_consumers_per_worker(
     return math.ceil(effective_in_flight / nr_workers)
 
 
+def validate_renderer_config(config: SimulatorConfig) -> None:
+    """Ensure renderer-specific options match the selected renderer."""
+    try:
+        renderer = config.user.renderer
+        renderer_kind = renderer.kind
+    except MissingMandatoryValue as exc:
+        raise ValueError("runtime.renderer.kind is required") from exc
+
+    if renderer == MISSING or renderer_kind == MISSING:
+        raise ValueError("runtime.renderer.kind is required")
+
+    if (
+        renderer_kind == RendererKind.sensorsim
+        and renderer.video_model_config is not None
+    ):
+        raise ValueError(
+            "runtime.renderer.video_model_config is only valid when "
+            "runtime.renderer.kind=video_model"
+        )
+    if (
+        renderer_kind == RendererKind.video_model
+        and renderer.video_model_config is None
+    ):
+        raise ValueError(
+            "runtime.renderer.video_model_config is required when "
+            "runtime.renderer.kind=video_model"
+        )
+    if not isinstance(renderer_kind, RendererKind):
+        raise ValueError(f"Unknown runtime.renderer.kind: {renderer_kind!r}")
+
+
 @dataclass(frozen=True)
 class RuntimeContext:
     """Immutable snapshot of all runtime state needed to dispatch simulation jobs.
 
     Built once during startup by ``build_runtime_context`` after config parsing,
-    service version probing, scenario validation, and address pool creation.
+    service version probing, scenario validation, scene loader creation, and address pool creation.
     """
 
     config: SimulatorConfig
     eval_config: EvalConfig
     version_ids: RolloutMetadata.VersionIds
-    scene_id_to_artifact_path: dict[str, str]
+    scene_loader: SceneLoader
     pools: dict[str, AddressPool]
     max_in_flight: int
 
@@ -140,7 +169,9 @@ def parse_simulator_config(
     """Parse user and network YAML configs into a unified SimulatorConfig."""
     user_config = typed_parse_config(user_config_path, UserSimulatorConfig)
     network_config = typed_parse_config(network_config_path, NetworkSimulatorConfig)
-    return SimulatorConfig(user=user_config, network=network_config)
+    config = SimulatorConfig(user=user_config, network=network_config)
+    validate_renderer_config(config)
+    return config
 
 
 async def build_runtime_context(
@@ -148,7 +179,6 @@ async def build_runtime_context(
     user_config_path: str,
     network_config_path: str,
     eval_config_path: str,
-    usdz_glob: str,
     validate_config_scenes: bool = True,
 ) -> RuntimeContext:
     """Build the RuntimeContext by parsing configs, probing services, and validating scenarios.
@@ -157,23 +187,24 @@ async def build_runtime_context(
         1. Parse user and network configs.
         2. Probe all service addresses for version IDs.
         3. Validate scenario compatibility (unless *validate_config_scenes* is False).
-        4. Discover scene artifacts from *usdz_glob*.
+        4. Build the scene loader from scene_provider config.
         5. Create address pools and compute max in-flight concurrency.
 
     Args:
         user_config_path: Path to user YAML config.
         network_config_path: Path to network YAML config.
         eval_config_path: Path to evaluation YAML config.
-        usdz_glob: Glob pattern for USDZ artifact discovery.
         validate_config_scenes: If False, skip scene compatibility checks
             (useful for daemon mode where scenes come from requests).
     """
     config = parse_simulator_config(user_config_path, network_config_path)
     eval_config = typed_parse_config(eval_config_path, EvalConfig)
 
+    # Validate configuration
     version_ids = await gather_versions_from_addresses(
         config.network,
         config.user.endpoints,
+        renderer_kind=config.user.renderer.kind,
         timeout_s=config.user.endpoints.startup_timeout_s,
     )
     config_for_validation = config
@@ -186,13 +217,8 @@ async def build_runtime_context(
         )
     await validate_scenarios(config_for_validation)
 
-    scene_id_to_artifact_path = {
-        scene_id: artifact.source
-        for scene_id, artifact in Artifact.discover_from_glob(
-            usdz_glob,
-            smooth_trajectories=config.user.smooth_trajectories,
-        ).items()
-    }
+    scene_loader = build_scene_loader(config.user)
+
     pools = create_address_pools(config)
     max_in_flight = compute_max_in_flight(pools, config)
 
@@ -200,7 +226,7 @@ async def build_runtime_context(
         config=config,
         eval_config=eval_config,
         version_ids=version_ids,
-        scene_id_to_artifact_path=scene_id_to_artifact_path,
+        scene_loader=scene_loader,
         pools=pools,
         max_in_flight=max_in_flight,
     )

@@ -74,6 +74,23 @@ impl Pose {
         }
     }
 
+    /// Blend position linearly and rotation spherically toward another pose.
+    ///
+    /// Alpha is clamped to [0, 1].
+    #[inline]
+    pub fn blend_with(&self, other: &Pose, alpha: f32) -> Pose {
+        if alpha <= 0.0 {
+            return *self;
+        }
+        if alpha >= 1.0 {
+            return *other;
+        }
+        Pose {
+            position: self.position.lerp(other.position, alpha),
+            quaternion: self.quaternion.slerp(other.quaternion, alpha),
+        }
+    }
+
     /// Get rotation as 3x3 matrix (row-major).
     #[inline]
     pub fn rotation_matrix(&self) -> [[f32; 3]; 3] {
@@ -164,6 +181,19 @@ impl Pose {
         self.inv()
     }
 
+    /// Blend this pose with another pose.
+    ///
+    /// Positions are linearly interpolated and rotations use spherical linear
+    /// interpolation. Alpha is clamped to [0, 1].
+    fn blend(&self, other: &Pose, alpha: f32) -> PyResult<Pose> {
+        if !alpha.is_finite() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "alpha must be finite",
+            ));
+        }
+        Ok(self.blend_with(other, alpha))
+    }
+
     /// Extract yaw angle (rotation around Z axis) in radians.
     fn yaw(&self) -> f32 {
         let q = self.quaternion;
@@ -244,7 +274,13 @@ impl Pose {
     }
 
     /// Support pickling by returning (constructor, args) tuple.
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(PyObject, (Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>))> {
+    fn __reduce__<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(
+        PyObject,
+        (Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>),
+    )> {
         let cls = PyModule::import(py, "utils_rs")?.getattr("Pose")?;
         let vec3 = self.vec3(py);
         let quat = self.quat(py);

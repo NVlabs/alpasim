@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 # Trivial comment to trigger CI build-services (for test-slurm dependency).
 [project]
 name = "alpasim-runtime"
-version = "1.98.0"
+version = "1.109.0"
 description = "Runtime of the Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 authors = [{name = "Michal Tyszkiewicz", email = "mtyszkiewicz@nvidia.com"}]
@@ -29,7 +29,7 @@ dependencies = [
     "scipy>=1.15.0",
     "seaborn>=0.13.0",  # Metrics plotting
     "csaps>=1.2.0",
-    "trajdata-alpasim==1.4.3",
+    "trajdata-alpasim",
     "pandas<3",  # pandas 3.x breaks trajdata
     "pytest>=7.0.0",
     "pytest-asyncio>=0.20.0",
@@ -45,10 +45,6 @@ dependencies = [
 alpasim-eval = {workspace = true}
 alpasim-grpc = {workspace = true}
 alpasim-utils = {workspace = true}
-
-[tool.uv.sources.trajdata-alpasim]
-git = "https://github.com/NVlabs/trajdata"
-branch = "alpasim"
 
 [tool.setuptools.packages.find]
 include = [ "alpasim_runtime", "tests" ]

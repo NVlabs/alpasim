@@ -16,6 +16,7 @@
 !src/wizard/**
 !plugins/internal/**
 !plugins/transfuser_driver/**
+!plugins/video_model/**
 !pyproject.toml
 
 # Exclude specific runtime directories/files we don't need

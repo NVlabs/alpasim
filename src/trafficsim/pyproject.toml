@@ -1,0 +1,5 @@
+[project]
+name = "alpasim-trafficsim"
+version = "0.1.0"
+description = "Traffic simulation micro-service for Alpasim"
+requires-python = ">=3.11,<3.13"

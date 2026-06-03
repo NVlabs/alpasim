@@ -128,20 +128,38 @@ class OffRoadScorer(Scorer):
     def calculate(self, simulation_result: SimulationResult) -> list[MetricReturn]:
         offroad = []
         wrong_lane = []
+        lane_boundary_dist = []
 
         ego_traj = simulation_result.actor_trajectories["EGO"]
         ego_poses = ego_traj.interpolate_poses_list(
             np.asarray(simulation_result.timestamps_us, dtype=np.uint64)
         )
 
-        for ts, ego_pose in zip(simulation_result.timestamps_us, ego_poses):
+        for ts, ego_pose in zip(
+            simulation_result.timestamps_us, ego_poses, strict=True
+        ):
             res = _compute_off_lane(simulation_result, ts, ego_pose=ego_pose)
             ego_polygon = res["ego_polygon"]
+            possible_lanes = res["possible_current_lanes"]
 
             wrong_lane.append(
                 # Heuristic value taken from Yulong's implementation
                 any(np.abs(res["rel_ego_yaw_to_center_line"]) > np.pi * 2 / 3)
             )
+
+            # Lane boundary distance: 0.0 when off-road, positive gap when on-road.
+            lane_union = (
+                shapely.ops.unary_union(
+                    [_get_lane_polygon(lane) for lane in possible_lanes]
+                )
+                if possible_lanes
+                else None
+            )
+            if lane_union is not None and lane_union.contains(ego_polygon):
+                lane_boundary_dist.append(ego_polygon.distance(lane_union.boundary))
+            else:
+                lane_boundary_dist.append(0.0)
+
             # Check if we're on at least one lane fully containing the ego polygon
             if len(res["curr_lanes_containing_polygon"]) > 0:
                 offroad.append(False)
@@ -151,13 +169,13 @@ class OffRoadScorer(Scorer):
             # across a dashed line), no single lane fully contains the ego
             # polygon.  Check whether the union of all nearby lane polygons
             # covers it instead (see GitHub issue #61).
-            if len(res["possible_current_lanes"]) > 1:
-                lane_union = shapely.ops.unary_union(
-                    [_get_lane_polygon(lane) for lane in res["possible_current_lanes"]]
-                )
-                if lane_union.contains(ego_polygon):
-                    offroad.append(False)
-                    continue
+            if (
+                lane_union is not None
+                and len(possible_lanes) > 1
+                and lane_union.contains(ego_polygon)
+            ):
+                offroad.append(False)
+                continue
 
             # Check if we're too close to the road edge. This will still miss
             # offroad cases when we're far outside the road - but then either
@@ -184,6 +202,13 @@ class OffRoadScorer(Scorer):
                 valid=[True] * len(wrong_lane),
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
+            ),
+            MetricReturn(
+                name="min_distance_to_lane_boundary_m",
+                values=lane_boundary_dist,
+                valid=[True] * len(lane_boundary_dist),
+                timestamps_us=list(simulation_result.timestamps_us),
+                time_aggregation=AggregationType.MIN,
             ),
         ]
 

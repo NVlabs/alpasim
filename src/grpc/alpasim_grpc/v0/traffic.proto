@@ -12,7 +12,6 @@ service TrafficService {
     rpc close_session (TrafficSessionCloseRequest) returns (common.Empty);
     rpc simulate (TrafficRequest) returns (TrafficReturn);
     rpc get_metadata (common.Empty) returns (TrafficModuleMetadata);
-    rpc shut_down (common.Empty) returns (common.Empty);
 }
 
 message ObjectTrajectory {

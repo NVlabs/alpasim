@@ -7,9 +7,59 @@ Defines the omegaconf .yaml configuration format for Alpasim runtime.
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict
 
 from alpasim_utils.scenario import VehicleConfig
 from omegaconf import MISSING
+
+BASE_SERVICE_NAMES = (
+    "driver",
+    "physics",
+    "trafficsim",
+    "controller",
+)
+CORE_SERVICE_NAMES = (*BASE_SERVICE_NAMES, "renderer")
+
+
+@dataclass
+class UsdzProviderConfig:
+    """Configuration for the USDZ artifact-backed scene provider."""
+
+    data_dir: str | None = None
+    # Max worker-local USDZ artifact cache size.
+    # None = unlimited, 0 = disable cache and always reload artifacts.
+    artifact_cache_size: int | None = None
+
+
+@dataclass
+class TrajdataDatasetConfig:
+    """Configuration for a single trajdata dataset source."""
+
+    name: str | None = None
+    data_dir: str | None = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TrajdataProviderConfig:
+    """Configuration for a trajdata-backed scene provider."""
+
+    cache_location: str = MISSING
+    desired_dt: float = 0.1
+    load_vector_map: bool = True
+    rebuild_cache: bool = False
+    rebuild_maps: bool = False
+    num_workers: int = 1
+    dataset: TrajdataDatasetConfig | None = None
+
+
+@dataclass
+class SceneProviderConfig:
+    """Runtime scene provider configuration for one backend family."""
+
+    kind: str = "usdz"  # Literal["usdz", "trajdata"]
+    usdz: UsdzProviderConfig | None = field(default_factory=UsdzProviderConfig)
+    trajdata: TrajdataProviderConfig | None = None
 
 
 @dataclass
@@ -45,11 +95,80 @@ class NetworkSimulatorConfig:
     wizard.
     """
 
-    sensorsim: EndpointAddresses = MISSING
     driver: EndpointAddresses = MISSING
     physics: EndpointAddresses = MISSING
     trafficsim: EndpointAddresses = MISSING
     controller: EndpointAddresses = MISSING
+    renderer: EndpointAddresses = MISSING
+
+
+@dataclass
+class VideoModelConfig:
+    """Configuration for the video model renderer."""
+
+    fps: int = 30
+    # Chunk sizes must match the external server's --num_frames_per_block and
+    # initial-frame contract. Config group chunking/<N>frame.yaml keeps these
+    # in sync for the common 8/12/16-frame variants.
+    first_chunk_frames: int = 5
+    chunk_frames: int = 8
+    text_prompt_positive: str = ""
+    text_prompt_negative: str = ""
+
+    # Request debug streams from the video model server. Forwarding them to the
+    # driver is opt-in because most policies expect RGB camera inputs only.
+    return_hdmap_frames: bool = False
+    return_bev_map: bool = False
+    forward_hdmap_to_driver: bool = False
+    forward_bev_to_driver: bool = False
+
+    bev_height_m: float = 40.0
+    bev_fov_deg: float = 50.0
+
+    # "all" forwards every generated frame to the driver. "subsample" forwards
+    # the nearest frames matching subsample_count/subsample_interval_us within
+    # each returned chunk. Prefer driver.inference.subsample_factor for policy
+    # input-rate matching because it operates on the continuous frame cache.
+    frame_forwarding_mode: str = "all"
+    subsample_count: int = 4
+    subsample_interval_us: int = 100_000
+
+    def __post_init__(self) -> None:
+        # Numeric guards: fps=0 trips ZeroDivisionError in
+        # VideoModelService.__init__ (1_000_000 // config.fps); zero or
+        # negative chunk sizes break trajectory building.
+        if self.fps <= 0:
+            raise ValueError(f"fps must be positive, got {self.fps}")
+        if self.first_chunk_frames <= 0:
+            raise ValueError(
+                f"first_chunk_frames must be positive, got {self.first_chunk_frames}"
+            )
+        if self.chunk_frames <= 0:
+            raise ValueError(f"chunk_frames must be positive, got {self.chunk_frames}")
+        if self.forward_hdmap_to_driver and not self.return_hdmap_frames:
+            raise ValueError(
+                "forward_hdmap_to_driver=True requires return_hdmap_frames=True."
+            )
+        if self.frame_forwarding_mode not in {"all", "subsample"}:
+            raise ValueError(
+                f"frame_forwarding_mode must be 'all' or 'subsample', "
+                f"got {self.frame_forwarding_mode!r}"
+            )
+        if self.forward_bev_to_driver and not self.return_bev_map:
+            raise ValueError("forward_bev_to_driver=True requires return_bev_map=True.")
+
+
+class RendererKind(Enum):
+    sensorsim = "sensorsim"
+    video_model = "video_model"
+
+
+@dataclass
+class RendererConfig:
+    """Configuration for the active renderer implementation."""
+
+    kind: RendererKind = MISSING
+    video_model_config: VideoModelConfig | None = None
 
 
 @dataclass
@@ -61,7 +180,6 @@ class RuntimeCameraConfig:
     width: int = 256
     frame_interval_us: int = 33_000  # about 30fps
     shutter_duration_us: int = 17_000
-    first_frame_offset_us: int = 0
 
 
 @dataclass
@@ -165,9 +283,7 @@ class SimulationConfig:
     control_timestep_us: int = 100_000
     pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
     force_gt_duration_us: int = 500_000  # 0.5s
-    time_start_offset_us: int = (
-        250_000  # 0.25s: there are often weird artifacts at the very start of a scene
-    )
+    skip_driver_during_force_gt: bool = False
 
     # if true, we assert that each call to policy happens immediately after a frame has been
     # provided for each camera and the latest egomotion update. This flag does not modify
@@ -216,11 +332,11 @@ class SceneConfig:
 class UserEndpointConfig:
     """User-provided configuration for each of the endpoints"""
 
-    sensorsim: SingleUserEndpointConfig = MISSING
     driver: SingleUserEndpointConfig = MISSING
     physics: SingleUserEndpointConfig = MISSING
     trafficsim: SingleUserEndpointConfig = MISSING
     controller: SingleUserEndpointConfig = MISSING
+    renderer: SingleUserEndpointConfig = MISSING
 
     sensorsim_cache_size: int | None = None  # Scene cache size for sensorsim
     startup_timeout_s: int = 2 * 60  # 2 minutes by default
@@ -237,15 +353,17 @@ class UserSimulatorConfig:
     endpoints: UserEndpointConfig = MISSING
 
     smooth_trajectories: bool = True  # whether to smooth trajectories with cubic spline
-    # Max worker-local artifact cache size.
-    # None = unlimited, 0 = disable cache and always reload artifacts.
-    artifact_cache_size: int | None = None
     extra_cameras: list[CameraDefinitionConfig] = field(default_factory=list)
 
     # Number of worker processes for parallel rollout execution.
     # 1 = inline mode, all in one process, good for debugging
     # >1 = multi-worker mode with subprocess-based parallelism
     nr_workers: int = MISSING
+
+    renderer: RendererConfig = MISSING
+
+    # Runtime scene provider configuration.
+    scene_provider: SceneProviderConfig = MISSING
 
 
 @dataclass

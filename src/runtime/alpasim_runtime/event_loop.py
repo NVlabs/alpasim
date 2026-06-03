@@ -28,29 +28,34 @@ from alpasim_runtime.events.base import (
     EventQueue,
     SimulationEndEvent,
 )
-from alpasim_runtime.events.camera import GroupedRenderEvent
 from alpasim_runtime.events.controller import ControllerEvent
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import PolicyEvent
-from alpasim_runtime.events.state import RolloutState, ServiceBundle
-from alpasim_runtime.events.step import StepEvent
+from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
+from alpasim_runtime.events.step import InitialStepEvent, StepEvent
 from alpasim_runtime.events.traffic import TrafficEvent
+from alpasim_runtime.force_gt_blend import (
+    force_gt_physics_blend_alpha,
+    force_gt_physics_blend_hold_end_us,
+)
 from alpasim_runtime.route_generator import RouteGenerator
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
-from alpasim_runtime.services.sensorsim_service import SensorsimService
+from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.session_configs import (
     DriverSessionConfig,
+    RendererSessionConfig,
     TrafficSessionConfig,
 )
 from alpasim_runtime.services.traffic_service import TrafficService
-from alpasim_runtime.telemetry.telemetry_context import tag_telemetry, try_get_context
-from alpasim_runtime.types import Clock, RuntimeCamera
+from alpasim_runtime.telemetry.telemetry_context import try_get_context
+from alpasim_runtime.types import RuntimeCamera
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_utils import geometry
 from alpasim_utils.logs import LogWriter
 from alpasim_utils.scenario import TrafficObjects
+from alpasim_utils.scene_data_source import SceneDataSource
 
 from eval.runtime_evaluator import RuntimeEvaluator
 from eval.scenario_evaluator import ScenarioEvalResult
@@ -62,8 +67,8 @@ logger = logging.getLogger(__name__)
 def _build_traffic_session_trajectory(unbound: UnboundRollout) -> geometry.Trajectory:
     """Build the ego AABB trajectory used for traffic session initialization."""
     return unbound.gt_ego_trajectory.clip(
-        unbound.control_timestamps_us[0],
-        unbound.control_timestamps_us[-1] + 1,
+        unbound.egomotion_context_start_us,
+        unbound.end_timestamp_us + 1,
     ).transform(
         unbound.transform_ego_coords_ds_to_aabb,
         is_relative=True,
@@ -71,8 +76,8 @@ def _build_traffic_session_trajectory(unbound: UnboundRollout) -> geometry.Traje
 
 
 def _simulated_duration_us(unbound: UnboundRollout) -> int:
-    """Return the effective simulated span covered by control timestamps."""
-    return unbound.control_timestamps_us[-1] - unbound.control_timestamps_us[0]
+    """Return the effective simulated span covered by this rollout."""
+    return unbound.end_timestamp_us - unbound.egomotion_context_start_us
 
 
 @dataclass
@@ -81,11 +86,17 @@ class EventBasedRollout:
 
     Processes events sequentially in timestamp order, with priority
     determining order at the same timestamp.
+
+    The renderer is pluggable: ``renderer_service`` is the active renderer's
+    service client (built-in sensorsim/video_model or a plugin service). Core is
+    renderer-agnostic at the rollout level; all renderer-specific behavior
+    lives in the service and the render event subclass.
     """
 
     unbound: UnboundRollout
+    data_source: SceneDataSource
     driver: DriverService
-    sensorsim: SensorsimService
+    renderer_service: RendererService
     physics: PhysicsService
     trafficsim: TrafficService
     controller: ControllerService
@@ -96,6 +107,9 @@ class EventBasedRollout:
     # Mutable state (initialized in __post_init__)
     ego_trajectory: geometry.DynamicTrajectory = field(init=False)
     ego_trajectory_estimate: geometry.DynamicTrajectory = field(init=False)
+    force_gt_ego_trajectory: geometry.Trajectory | None = field(
+        init=False, default=None
+    )
     traffic_objs: TrafficObjects = field(init=False)
 
     broadcaster: MessageBroadcaster = field(init=False)
@@ -107,35 +121,34 @@ class EventBasedRollout:
 
     def __post_init__(self) -> None:
         """Initialize mutable state."""
-        prerun_start_us = self.unbound.control_timestamps_us[0]
-        prerun_end_us = self.unbound.control_timestamps_us[1]
+        context_start_us = self.unbound.egomotion_context_start_us
+        first_policy_timestamp_us = self.unbound.first_policy_timestamp_us
 
         asl_log_writer = LogWriter(file_path=self._asl_log_path())
 
-        # Match legacy loop behavior: start with prerun [t0, t1] and extend as
-        # each policy step produces future traffic updates.
+        # Seed all recorded ego context through the first policy decision.
+        # The first policy call then receives dense egomotion history rather
+        # than a synthetic two-point shortcut.
         self.traffic_objs = self.unbound.traffic_objs.clip_trajectories(
-            prerun_start_us, prerun_end_us + 1
+            context_start_us, first_policy_timestamp_us + 1
         )
 
-        # Initialize ego trajectories with prerun history [t0, t1], matching the
-        # original loop contract used by sensorsim/driver warm-up.
         gt = self.unbound.gt_ego_trajectory
-        prerun_timestamps = np.array([prerun_start_us, prerun_end_us], dtype=np.uint64)
-        ego_traj = gt.interpolate(prerun_timestamps)
+        ego_traj = gt.clip(context_start_us, first_policy_timestamp_us + 1)
+        context_timestamps = ego_traj.timestamps_us
 
-        # Build initial dynamics from GT derivatives at each prerun timestamp.
+        # Build initial dynamics from GT derivatives at each context timestamp.
         gt_velocities = gt.velocities()
         gt_yaw_rates = gt.yaw_rates()
         gt_ts = gt.timestamps_us
 
-        n_prerun = len(prerun_timestamps)
-        initial_dynamics = np.zeros((n_prerun, 12), dtype=np.float64)
+        n_context = len(context_timestamps)
+        initial_dynamics = np.zeros((n_context, 12), dtype=np.float64)
         for i in range(3):
             initial_dynamics[:, i] = np.interp(
-                prerun_timestamps, gt_ts, gt_velocities[:, i]
+                context_timestamps, gt_ts, gt_velocities[:, i]
             )
-        initial_dynamics[:, 5] = np.interp(prerun_timestamps, gt_ts, gt_yaw_rates)
+        initial_dynamics[:, 5] = np.interp(context_timestamps, gt_ts, gt_yaw_rates)
 
         self.ego_trajectory = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
             ego_traj, initial_dynamics
@@ -206,40 +219,6 @@ class EventBasedRollout:
             )
         )
 
-    async def _warmup_sensorsim(self) -> None:
-        """Send a single render request to warm up sensorsim."""
-        camera = self.runtime_cameras[0]
-        gt_traj = self.unbound.gt_ego_trajectory
-        traj_range = gt_traj.time_range_us
-
-        trigger_start_us = traj_range.start
-        trigger_end_us = min(
-            traj_range.start + camera.clock.duration_us, traj_range.stop - 1
-        )
-        trigger = Clock.Trigger(
-            time_range_us=range(trigger_start_us, trigger_end_us + 1),
-            sequential_idx=-1,
-        )
-
-        traffic_trajs: dict[str, geometry.Trajectory] = {}
-
-        logger.info("Warming up sensorsim with initial render request...")
-        warmup_start = time.perf_counter()
-
-        with tag_telemetry("warmup"):
-            await self.sensorsim.render(
-                ego_trajectory=gt_traj,
-                traffic_trajectories=traffic_trajs,
-                camera=camera,
-                trigger=trigger,
-                scene_id=self.unbound.scene_id,
-                image_format=self.unbound.image_format,
-                ego_mask_rig_config_id=self.unbound.ego_mask_rig_config_id,
-            )
-
-        warmup_duration = time.perf_counter() - warmup_start
-        logger.info(f"Sensorsim warmup complete in {warmup_duration:.3f}s")
-
     async def _apply_physics_to_trajectory(
         self,
         trajectory: geometry.Trajectory,
@@ -269,6 +248,75 @@ class EventBasedRollout:
 
         return corrected_aabb.transform(aabb_to_ds, is_relative=True)
 
+    async def _build_force_gt_physics_blend_trajectory(self) -> geometry.Trajectory:
+        """Build force-GT fallback that eases from recorded GT to physics."""
+        unbound = self.unbound
+        gt_hold_end_us = force_gt_physics_blend_hold_end_us(unbound)
+        configured_blend_end_us = (
+            unbound.render_start_timestamp_us + unbound.force_gt_duration_us
+        )
+        blend_end_us = min(configured_blend_end_us, unbound.end_timestamp_us)
+
+        if blend_end_us <= gt_hold_end_us:
+            return unbound.gt_ego_trajectory.clip(
+                unbound.egomotion_context_start_us,
+                min(gt_hold_end_us, unbound.end_timestamp_us) + 1,
+            )
+
+        dt_us = unbound.control_timestep_us
+        clipped_gt_timestamps = unbound.gt_ego_trajectory.clip(
+            unbound.egomotion_context_start_us,
+            blend_end_us + 1,
+        ).timestamps_us
+        timestamps = list(
+            range(unbound.first_policy_timestamp_us, blend_end_us + 1, dt_us)
+        )
+        if not timestamps or timestamps[-1] != blend_end_us:
+            timestamps.append(blend_end_us)
+        timestamps = sorted(
+            set(
+                [
+                    unbound.egomotion_context_start_us,
+                    gt_hold_end_us,
+                    blend_end_us,
+                    *clipped_gt_timestamps.tolist(),
+                    *timestamps,
+                ]
+            )
+        )
+        timestamps_us = np.array(timestamps, dtype=np.uint64)
+
+        gt_trajectory = unbound.gt_ego_trajectory.interpolate(timestamps_us)
+        physics_trajectory = await self._apply_physics_to_trajectory(gt_trajectory)
+
+        alphas = np.array(
+            [
+                force_gt_physics_blend_alpha(unbound, timestamp_us)
+                for timestamp_us in timestamps
+            ],
+            dtype=np.float32,
+        )
+
+        return gt_trajectory.blend(physics_trajectory, alphas)
+
+    def _apply_force_gt_blend_to_seeded_ego_trajectory(self) -> None:
+        """Replace seeded GT poses with the blended force-GT poses."""
+        if self.force_gt_ego_trajectory is None:
+            return
+
+        timestamps_us = self.ego_trajectory.timestamps_us
+        blended_seed = self.force_gt_ego_trajectory.interpolate(timestamps_us)
+        self.ego_trajectory = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
+            blended_seed,
+            self.ego_trajectory.dynamics,
+        )
+        self.ego_trajectory_estimate = (
+            geometry.DynamicTrajectory.from_trajectory_and_dynamics(
+                blended_seed,
+                self.ego_trajectory_estimate.dynamics,
+            )
+        )
+
     def _create_rollout_state(self) -> RolloutState:
         """Create the RolloutState from the current rollout."""
         return RolloutState(
@@ -276,6 +324,9 @@ class EventBasedRollout:
             ego_trajectory=self.ego_trajectory,
             ego_trajectory_estimate=self.ego_trajectory_estimate,
             traffic_objs=self.traffic_objs,
+            force_gt_ego_trajectory=self.force_gt_ego_trajectory,
+            step_context=StepContext(),
+            last_egopose_update_us=None,
         )
 
     def _create_service_bundle(self) -> ServiceBundle:
@@ -290,36 +341,49 @@ class EventBasedRollout:
         )
 
     def _create_initial_events(self) -> EventQueue:
-        """Create and schedule the initial set of events."""
+        """Create and schedule the initial set of events.
+
+        The rig start seeds/logs context state. Rendering starts at the
+        centralized first-camera frame anchor, while the policy/control
+        pipeline starts on the renderer-aligned force-GT grid.
+        """
         unbound = self.unbound
         queue = EventQueue()
         services = self._create_service_bundle()
 
-        scene_start_us = unbound.control_timestamps_us[0]
-        simulation_end_us = unbound.control_timestamps_us[-1]
-        first_control_us = unbound.control_timestamps_us[1]
+        scene_start_us = unbound.egomotion_context_start_us
+        simulation_end_us = unbound.end_timestamp_us
+        closed_loop_start_us = unbound.closed_loop_start_us
+        first_policy_timestamp_us = unbound.first_policy_timestamp_us
 
         camera_ids = [cam.logical_id for cam in self.runtime_cameras]
 
-        # === Camera events ===
-        queue.submit(
-            GroupedRenderEvent(
-                timestamp_us=scene_start_us + unbound.control_timestep_us,
-                control_timestep_us=unbound.control_timestep_us,
-                cameras=list(self.runtime_cameras),
-                sensorsim=self.sensorsim,
-                driver=self.driver,
-                scene_start_us=scene_start_us,
-                use_aggregated_render=unbound.group_render_requests,
-            )
+        # === Render event (selected by the active renderer service) ===
+        render_events = self.renderer_service.make_initial_render_event(
+            scene_start_us=scene_start_us,
+            render_start_timestamp_us=unbound.render_start_timestamp_us,
+            closed_loop_start_us=closed_loop_start_us,
+            simulation_end_us=simulation_end_us,
+            control_timestep_us=unbound.control_timestep_us,
+            runtime_cameras=list(self.runtime_cameras),
+            driver=self.driver,
+            broadcaster=self.broadcaster,
+            use_aggregated_render=unbound.group_render_requests,
         )
+        if isinstance(render_events, list):
+            for event in render_events:
+                queue.submit(event)
+        else:
+            queue.submit(render_events)
 
-        # === Pipeline events — all start at first_control_us ===
+        # === Pipeline events — all start at first_policy_timestamp_us ===
         dt = unbound.control_timestep_us
+
+        queue.submit(InitialStepEvent(timestamp_us=scene_start_us, services=services))
 
         queue.submit(
             PolicyEvent(
-                timestamp_us=first_control_us,
+                timestamp_us=first_policy_timestamp_us,
                 policy_timestep_us=dt,
                 services=services,
                 camera_ids=camera_ids,
@@ -329,14 +393,14 @@ class EventBasedRollout:
         )
         queue.submit(
             ControllerEvent(
-                timestamp_us=first_control_us,
+                timestamp_us=first_policy_timestamp_us,
                 control_timestep_us=dt,
                 services=services,
             )
         )
         queue.submit(
             PhysicsEvent(
-                timestamp_us=first_control_us,
+                timestamp_us=first_policy_timestamp_us,
                 control_timestep_us=dt,
                 services=services,
                 target=PhysicsTarget.EGO,
@@ -344,14 +408,14 @@ class EventBasedRollout:
         )
         queue.submit(
             TrafficEvent(
-                timestamp_us=first_control_us,
+                timestamp_us=first_policy_timestamp_us,
                 control_timestep_us=dt,
                 services=services,
             )
         )
         queue.submit(
             PhysicsEvent(
-                timestamp_us=first_control_us,
+                timestamp_us=first_policy_timestamp_us,
                 control_timestep_us=dt,
                 services=services,
                 target=PhysicsTarget.TRAFFIC,
@@ -359,7 +423,7 @@ class EventBasedRollout:
         )
         queue.submit(
             StepEvent(
-                timestamp_us=scene_start_us,
+                timestamp_us=first_policy_timestamp_us,
                 control_timestep_us=dt,
                 services=services,
             )
@@ -387,8 +451,38 @@ class EventBasedRollout:
                 version_ids=self.unbound.version_ids,
             )
 
-            # Initialize service sessions
-            for service in [self.sensorsim, self.physics, self.controller]:
+            # Build runtime cameras from user config (no camera-catalog
+            # dependency at this point — the renderer's session init below is
+            # responsible for populating camera_catalog for this scene).
+            self.runtime_cameras = [
+                RuntimeCamera.from_camera_config(
+                    camera_cfg,
+                    first_frame_range_us=self.unbound.first_camera_frame_ranges_us[
+                        camera_cfg.logical_id
+                    ],
+                )
+                for camera_cfg in self.unbound.camera_configs
+            ]
+
+            # Enter the renderer's session: owns scene-specific camera
+            # registration and any warmup / session-bootstrap work (sensorsim
+            # does a warmup render; the video model opens a remote session
+            # with hdmap + initial frames).
+            await async_stack.enter_async_context(
+                self.renderer_service.rollout_session(
+                    uuid=str(self.unbound.rollout_uuid),
+                    broadcaster=self.broadcaster,
+                    session_config=RendererSessionConfig(
+                        data_source=self.data_source,
+                        runtime_cameras=self.runtime_cameras,
+                        gt_ego_trajectory=self.unbound.gt_ego_trajectory,
+                        image_format=self.unbound.image_format,
+                        ego_mask_rig_config_id=self.unbound.ego_mask_rig_config_id,
+                    ),
+                )
+            )
+
+            for service in [self.physics, self.controller]:
                 await async_stack.enter_async_context(
                     service.rollout_session(
                         uuid=str(self.unbound.rollout_uuid),
@@ -396,28 +490,7 @@ class EventBasedRollout:
                     )
                 )
 
-            # Get available cameras and merge
-            sensorsim_cameras = await self.sensorsim.get_available_cameras(
-                self.unbound.scene_id
-            )
-            await self.camera_catalog.merge_local_and_sensorsim_cameras(
-                self.unbound.scene_id, sensorsim_cameras
-            )
-
-            # Build runtime cameras
-            self.runtime_cameras = []
-            rig_start_us = self.unbound.gt_ego_trajectory.time_range_us.start
-            for camera_cfg in self.unbound.camera_configs:
-                self.camera_catalog.ensure_camera_defined(
-                    self.unbound.scene_id, camera_cfg.logical_id
-                )
-                self.runtime_cameras.append(
-                    RuntimeCamera.from_camera_config(
-                        camera_cfg, rig_start_us=rig_start_us
-                    )
-                )
-
-            # Send cameras to driver
+            # camera_catalog is now populated by the renderer's session init.
             available_camera_protos = [
                 self.camera_catalog.get_camera_definition(
                     self.unbound.scene_id, camera_cfg.logical_id
@@ -448,21 +521,16 @@ class EventBasedRollout:
                         scene_id=self.unbound.scene_id,
                         ego_aabb=self.unbound.ego_aabb,
                         gt_ego_aabb_trajectory=gt_ego_aabb_trajectory,
-                        start_timestamp_us=self.unbound.start_timestamp_us,
+                        start_timestamp_us=self.unbound.egomotion_context_start_us,
                     ),
                 )
             )
 
-            # Apply physics to initial trajectory (corrects poses, keeps dynamics)
             if self.unbound.physics_update_mode != PhysicsUpdateMode.NONE:
-                corrected_traj = await self._apply_physics_to_trajectory(
-                    self.ego_trajectory.trajectory()
+                self.force_gt_ego_trajectory = (
+                    await self._build_force_gt_physics_blend_trajectory()
                 )
-                self.ego_trajectory = (
-                    geometry.DynamicTrajectory.from_trajectory_and_dynamics(
-                        corrected_traj, self.ego_trajectory.dynamics
-                    )
-                )
+                self._apply_force_gt_blend_to_seeded_ego_trajectory()
 
             logger.info(
                 "Session STARTING: uuid=%s scene=%s steps=%d",
@@ -470,10 +538,6 @@ class EventBasedRollout:
                 self.unbound.scene_id,
                 self.unbound.n_sim_steps,
             )
-
-            # Warmup sensorsim
-            if self.runtime_cameras and not self.sensorsim.skip:
-                await self._warmup_sensorsim()
 
             # Start timing the main loop
             loop_start_time = time.perf_counter()
@@ -540,3 +604,31 @@ class EventBasedRollout:
             )
 
         return eval_result
+
+
+def create_event_rollout(
+    *,
+    unbound: UnboundRollout,
+    data_source: SceneDataSource,
+    driver: DriverService,
+    renderer_service: RendererService,
+    physics: PhysicsService,
+    trafficsim: TrafficService,
+    controller: ControllerService,
+    camera_catalog: CameraCatalog,
+    eval_config: EvalConfig,
+    eval_executor: ProcessPoolExecutor,
+) -> EventBasedRollout:
+    """Construct :class:`EventBasedRollout` with the active renderer service."""
+    return EventBasedRollout(
+        unbound=unbound,
+        data_source=data_source,
+        driver=driver,
+        renderer_service=renderer_service,
+        physics=physics,
+        trafficsim=trafficsim,
+        controller=controller,
+        camera_catalog=camera_catalog,
+        eval_config=eval_config,
+        eval_executor=eval_executor,
+    )

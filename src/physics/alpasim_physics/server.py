@@ -42,13 +42,11 @@ logger = logging.getLogger(__name__)
 class PhysicsSimService(PhysicsServiceServicer):
     def __init__(
         self,
-        server: grpc.Server,
         artifact_glob: str,
         cache_size: int = 2,
         use_ground_mesh: bool = False,
         visualize: bool = False,
     ) -> None:
-        self.server = server
         self.artifacts = Artifact.discover_from_glob(
             artifact_glob, use_ground_mesh=use_ground_mesh
         )
@@ -152,14 +150,6 @@ class PhysicsSimService(PhysicsServiceServicer):
         logger.info("get_available_scenes")
         return AvailableScenesReturn(scene_ids=list(self.artifacts.keys()))
 
-    def shut_down(self, request: Empty, context: grpc.ServicerContext) -> Empty:
-        logger.info("shut_down")
-        context.add_callback(self._shut_down)
-        return Empty()
-
-    def _shut_down(self) -> None:
-        self.server.stop(0)
-
 
 def parse_args(
     arg_list: list[str] | None = None,
@@ -207,7 +197,6 @@ def main(arg_list: list[str] | None = None) -> None:
     server.add_insecure_port(address)
 
     service = PhysicsSimService(
-        server,
         args.artifact_glob,
         cache_size=args.cache_size,
         use_ground_mesh=args.use_ground_mesh,

@@ -4,7 +4,6 @@
 runtime:
   simulation_config:
     control_timestep_us: 250_000        # 4Hz (halved from 500_000)
-    time_start_offset_us: 250_000       # Keep in sync with above
 
     cameras:
       - height: 1080
@@ -12,7 +11,6 @@ runtime:
         logical_id: camera_front_wide_120fov
         frame_interval_us: 250_000      # 4Hz (halved from 500_000)
         shutter_duration_us: 30_000
-        first_frame_offset_us: -30_000
 
 driver:
   inference:

@@ -22,6 +22,14 @@ from .utils import save_loadable_wizard_config, write_yaml
 
 logger = logging.getLogger(__name__)
 
+CORE_SERVICE_NAMES = (
+    "driver",
+    "renderer",
+    "physics",
+    "trafficsim",
+    "controller",
+)
+
 
 class ConfigurationManager:
     """Manages all configuration generation and writing."""
@@ -71,6 +79,20 @@ class ConfigurationManager:
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)
 
+        sceneset_path = getattr(getattr(cfg, "scenes", None), "sceneset_path", None)
+        if sceneset_path is not None:
+            scene_provider = runtime_config.get("scene_provider")
+            if (
+                isinstance(scene_provider, dict)
+                and scene_provider.get("kind") == "usdz"
+                and isinstance(scene_provider.get("usdz"), dict)
+            ):
+                scene_provider["usdz"]["data_dir"] = (
+                    "/mnt/nre-data"
+                    if sceneset_path == "."
+                    else f"/mnt/nre-data/{sceneset_path}"
+                )
+
         # Write simulation params directly (was: fan out per scene)
         simulation_config = runtime_config.pop("simulation_config", {})
         runtime_config["simulation_config"] = simulation_config
@@ -102,7 +124,7 @@ class ConfigurationManager:
         network_config: Dict[str, Any] = {
             "driver": {"endpoints": []},
             "physics": {"endpoints": []},
-            "sensorsim": {"endpoints": []},
+            "renderer": {"endpoints": []},
             "trafficsim": {"endpoints": []},
             "controller": {"endpoints": []},
         }
@@ -133,27 +155,27 @@ class ConfigurationManager:
                 elif inst.address is None:
                     continue
 
-                if c.name in network_config:
+                network_service_name = "renderer" if c.name == "sensorsim" else c.name
+                if network_service_name in network_config:
                     address = str(inst.address)
-                    network_config[c.name]["endpoints"].append(
+                    network_config[network_service_name]["endpoints"].append(
                         {"address": address, "managed": True}
                     )
 
-        # Add external service addresses (for services running outside the deployment)
+        # Add external service addresses (for services running outside the deployment).
         external_services = cfg.wizard.external_services
         if external_services is not None:
             for service_name, addresses in external_services.items():
-                if service_name in network_config:
-                    network_config[service_name]["endpoints"].extend(
-                        {"address": address, "managed": False} for address in addresses
+                if service_name not in CORE_SERVICE_NAMES:
+                    raise ValueError(
+                        f"Unknown external service {service_name!r}; expected one of "
+                        f"{CORE_SERVICE_NAMES}"
                     )
-                    logger.info(
-                        "Added external %s addresses: %s", service_name, addresses
-                    )
-                else:
-                    logger.warning(
-                        "Unknown external service '%s', skipping", service_name
-                    )
+                target = network_config[service_name]
+                target["endpoints"].extend(
+                    {"address": address, "managed": False} for address in addresses
+                )
+                logger.info("Added external %s addresses: %s", service_name, addresses)
 
         self._write_config("generated-network-config.yaml", network_config)
         logger.debug("Generated network config")

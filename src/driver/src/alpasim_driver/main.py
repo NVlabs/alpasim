@@ -62,6 +62,7 @@ from .models import DriveCommand
 from .models.base import (
     BaseTrajectoryModel,
     CameraImages,
+    ModelInputValidationError,
     ModelPrediction,
     PredictionInput,
 )
@@ -453,7 +454,6 @@ class EgoDriverService(EgodriverServiceServicer):
         self,
         cfg: DriverConfig,
         loop: asyncio.AbstractEventLoop,
-        grpc_server: grpc.aio.Server,
     ) -> None:
         """Initialize the Ego Driver service.
 
@@ -464,13 +464,11 @@ class EgoDriverService(EgodriverServiceServicer):
             cfg: Hydra configuration containing model paths and inference settings
             loop: Asyncio event loop for coordinating async operations and scheduling
                 futures from the worker thread back to the async gRPC handlers
-            grpc_server: gRPC server instance for service registration
         """
 
         # Private members
         self._cfg = cfg
         self._loop = loop
-        self._grpc_server = grpc_server
 
         # Determine device
         self._device = torch.device(
@@ -903,7 +901,13 @@ class EgoDriverService(EgodriverServiceServicer):
         )
         self._job_queue.put_nowait(job)
 
-        prediction = await future
+        try:
+            prediction = await future
+        except ModelInputValidationError as exc:
+            logger.error("Driver input validation failed: %s", exc)
+            if context is not None:
+                await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+            raise
 
         # Convert model prediction to Alpasim trajectory format
         alpasim_traj: Trajectory = self._convert_prediction_to_alpasim_trajectory(
@@ -1024,27 +1028,6 @@ class EgoDriverService(EgodriverServiceServicer):
 
         return trajectory
 
-    @async_log_call
-    async def shut_down(
-        self, request: Empty, context: grpc.aio.ServicerContext
-    ) -> Empty:
-        logger.info("shut_down requested, scheduling deferred shutdown")
-        # Schedule shutdown to happen after RPC completes to avoid CancelledError
-        asyncio.create_task(self._deferred_shutdown())
-        return Empty()
-
-    async def _deferred_shutdown(self) -> None:
-        """Shutdown the server and worker after the shut_down RPC completes.
-
-        This deferred approach prevents the shut_down RPC from cancelling itself
-        when stopping the server, which would result in asyncio.exceptions.CancelledError.
-        """
-        # Small delay to ensure the shut_down RPC response is sent first
-        await asyncio.sleep(0.1)
-        logger.info("Executing deferred shutdown")
-        await self._grpc_server.stop(grace=None)
-        await self.stop_worker()
-
 
 async def serve(cfg: DriverConfig) -> None:
     """Start the gRPC server with the driver service."""
@@ -1054,7 +1037,6 @@ async def serve(cfg: DriverConfig) -> None:
     service = EgoDriverService(
         cfg=cfg,
         loop=loop,
-        grpc_server=server,
     )
     add_EgodriverServiceServicer_to_server(service, server)
 
@@ -1094,7 +1076,6 @@ def _run_grpc_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None
         service = EgoDriverService(
             cfg=cfg,
             loop=loop,
-            grpc_server=server,
         )
         add_EgodriverServiceServicer_to_server(service, server)
 

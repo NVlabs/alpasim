@@ -1,0 +1,77 @@
+# @package _global_
+# Deploy for an EXTERNAL video model renderer with a LOCAL driver.
+#
+# The driver config (driver=vavam / driver=alpamayo1_5 / ...) owns the
+# camera rig and rectification calibration; do NOT inject a
+# +cameras=<...> override -- that breaks the driver's rectifier and the
+# policy starts producing garbage decisions.
+#
+# See docs/VIDEO_MODEL.md for server commands, scene setup, and
+# driver-specific notes such as Alpamayo image-history subsampling.
+
+defaults:
+  - _self_
+
+defines:
+  filesystem: ${repo-relative:"data"}
+
+wizard:
+  debug_flags:
+    use_localhost: true
+
+  run_sim_services:
+    ["driver", "physics", "trafficsim", "controller", "runtime"]
+
+  external_services:
+    renderer: ???
+
+services:
+  driver:
+    replicas_per_container: 1
+    gpus: [0]
+  physics:
+    replicas_per_container: 1
+    gpus: [0]
+  controller:
+    replicas_per_container: 1
+    gpus: null
+
+  # plugins/internal is co-installed because most exp=... configs live there.
+  runtime:
+    environments:
+      - UV_LINK_MODE=copy
+    command:
+      - "uv run python -m alpasim_runtime.simulate"
+      - "--user-config=/mnt/log_dir/{runtime_config_name}"
+      - "--network-config=/mnt/log_dir/generated-network-config.yaml"
+      - "--log-dir=/mnt/log_dir"
+      - "--log-level=${wizard.log_level}"
+      - "--array-job-dir=/mnt/array_job_dir"
+      - "--eval-config=/mnt/log_dir/eval-config.yaml"
+
+# Default to the public OmniDreams scene pack; see
+# docs/VIDEO_MODEL.md for download/setup notes.
+scenes:
+  local_usdz_dir: ${repo-relative:"data/omni-dreams-scenes/scenes"}
+  nre_version_string: "25.7.9-b85d0efd"
+  scene_ids:
+    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554
+
+runtime:
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 1
+      skip: false
+    controller:
+      skip: true
+
+  renderer:
+    kind: video_model
+    video_model_config:
+      fps: 30
+      text_prompt_positive: "Wide-angle urban street scene from a low, dashboard-level viewpoint. A straight two-lane road with a faded center line and curbside parking on both sides. Parked sedans and SUVs in neutral colors line the curbs. On the right, a white stucco mid-rise building with blue fabric awnings, rectangular windows, and small storefronts at street level. On the left, a low commercial strip with dark trim, glass fronts, signage, and shaded sidewalks. Mature green trees punctuate both sides. Clear blue sky with sparse soft clouds. Bright midday sunlight, natural colors, realistic materials, crisp shadows, clean asphalt texture."
+      text_prompt_negative: ""
+
+  simulation_config:
+    planner_delay_us: 0
+    assert_zero_decision_delay: true

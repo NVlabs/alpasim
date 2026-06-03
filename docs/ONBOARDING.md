@@ -15,8 +15,9 @@ Alpasim depends on access to the following:
     [nvidia/PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec).
     Without this, scene downloads will fail with a `GatedRepoError`.
   - Once you have the token, set it as an environment variable: `export HF_TOKEN=<token>`
-- A version of `uv` installed (see [here](https://docs.astral.sh/uv/getting-started/installation/))
+- `uv` version `0.9.17` or newer installed (see [here](https://docs.astral.sh/uv/getting-started/installation/))
   - Example installation command for Ubuntu: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+  - If `uv` is already installed, you can upgrade it with `uv self update`.
 - Rust toolchain (`cargo`) for building `utils_rs`, a compiled extension that accelerates trajectory
   transformations and interpolations in the runtime. Install via
   [rustup](https://rustup.rs/) or interactively let `setup_local_env.sh` install it for you.
@@ -85,6 +86,16 @@ ensure no other process is using the assigned ports.
 **`setup_local_env.sh` fails silently in non-interactive environments**
 The script only installs Rust when a TTY is detected. To install Rust manually,
 use: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`
+
+**`uv` parse error on `exclude-newer = "3 days"`**
+Your `uv` is older than 0.9.17 and can't parse the relative cooldown in the root
+`pyproject.toml`. Don't delete the line (it's an intentional supply-chain
+safeguard); upgrade instead with `uv self update`.
+
+**`ModuleNotFoundError` (e.g. `alpasim_grpc.v0.*_pb2`) in the service containers**
+The git-ignored gRPC stubs are missing on the host, and the volume-mounted source
+tree shadows the stubs baked into the images. Run `source setup_local_env.sh` (or
+`cd src/grpc && uv run compile-protos`) to generate them.
 
 ## Next steps
 

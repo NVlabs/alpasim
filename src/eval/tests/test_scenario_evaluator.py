@@ -17,7 +17,7 @@ from conftest import SimpleScenarioEvaluator, create_test_eval_config
 
 from eval.accumulator import EvalDataAccumulator
 from eval.asl_loader import load_scenario_eval_input_from_asl
-from eval.data import AggregationType, MetricReturn, ScenarioEvalInput
+from eval.data import AggregationType, MetricReturn, ScenarioEvalInput, SimulationResult
 from eval.scenario_evaluator import ScenarioEvalResult
 from eval.schema import EvalConfig
 
@@ -139,6 +139,24 @@ class SimpleScenarioEvaluatorClass:
 
         # With only EGO and no other actors, there should be no collisions
         assert result.aggregated_metrics.get("collision_any", 0.0) == 0.0
+
+    def test_first_driven_timestamp_uses_force_gt_duration(
+        self,
+        minimal_eval_input: ScenarioEvalInput,
+        default_eval_config: EvalConfig,
+    ) -> None:
+        """Force-GT filtering starts one control step after the force-GT window."""
+        minimal_eval_input.force_gt_duration_us = 200_000
+
+        simulation_result = SimulationResult.from_scenario_input(
+            minimal_eval_input, default_eval_config
+        )
+
+        assert simulation_result.first_driven_timestamp_us == (
+            minimal_eval_input.session_metadata.start_timestamp_us
+            + minimal_eval_input.force_gt_duration_us
+            + minimal_eval_input.session_metadata.control_timestep_us
+        )
 
 
 class TestScenarioEvalResult:
@@ -367,6 +385,16 @@ def _build_actor_poses_messages(simulation_data: dict[str, Any]) -> list[ActorPo
     return messages
 
 
+def _build_driver_request_message(simulation_data: dict[str, Any]) -> LogEntry:
+    """Build the first policy driver request for synthetic rollout data."""
+    first_policy_us = int(simulation_data["timestamps"][0])
+    control_timestep_us = int(simulation_data["session_metadata"].control_timestep_us)
+    entry = LogEntry()
+    entry.driver_request.time_now_us = first_policy_us
+    entry.driver_request.time_query_us = first_policy_us + control_timestep_us
+    return entry
+
+
 def _populate_accumulator(
     accumulator: EvalDataAccumulator, simulation_data: dict[str, Any]
 ) -> None:
@@ -378,6 +406,7 @@ def _populate_accumulator(
     # Feed rollout_metadata
     metadata = _build_rollout_metadata(simulation_data)
     accumulator.handle_message(LogEntry(rollout_metadata=metadata))
+    accumulator.handle_message(_build_driver_request_message(simulation_data))
 
     # Feed actor_poses
     for actor_poses in _build_actor_poses_messages(simulation_data):
@@ -466,6 +495,7 @@ class TestRuntimeVsPostEvalEquivalence:
             # Write rollout metadata (must be first message)
             metadata = _build_rollout_metadata(simulation_data)
             await log_writer.on_message(LogEntry(rollout_metadata=metadata))
+            await log_writer.on_message(_build_driver_request_message(simulation_data))
 
             # Write actor poses for each timestep
             for actor_poses in _build_actor_poses_messages(simulation_data):

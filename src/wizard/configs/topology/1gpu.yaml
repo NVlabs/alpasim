@@ -2,7 +2,7 @@
 # Minimal topology: all services share a single GPU. For local development.
 
 defines:
-  nre_cache_size: 5 # sensorsim.n_concurrent_rollouts + 1
+  nre_cache_size: 5 # renderer.n_concurrent_rollouts + 1
 
 services:
   sensorsim:
@@ -29,11 +29,11 @@ runtime:
   nr_workers: 1
   endpoints:
     # Total capacity per service = nr_gpus x replicas_per_container x n_concurrent_rollouts
-    # SENS: 1 x 1 x 4 = 4
+    # REND: 1 x 1 x 4 = 4
     # DRIV: 1 x 1 x 4 = 4
     # PHYS: 1 x 1 x 4 = 4
     # CONT: 1 (CPU) x 1 x 4 = 4
-    sensorsim:
+    renderer:
       n_concurrent_rollouts: 4
     driver:
       n_concurrent_rollouts: 4

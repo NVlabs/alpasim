@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import multiprocessing as mp
 import os
 import sys
 import time
@@ -28,26 +29,27 @@ from queue import Empty as QueueEmpty
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
-from alpasim_runtime.config import UserSimulatorConfig
-from alpasim_runtime.event_loop import EventBasedRollout
+from alpasim_runtime.config import RendererKind, UserSimulatorConfig
+from alpasim_runtime.event_loop import create_event_rollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
+from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
+from alpasim_runtime.services.video_model_service import VideoModelService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
 from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
 from alpasim_runtime.unbound_rollout import UnboundRollout
-from alpasim_runtime.worker.artifact_cache import make_artifact_loader
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
     JobResult,
     WorkerArgs,
     _ShutdownSentinel,
 )
-from alpasim_utils.artifact import Artifact
+from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.schema import EvalConfig
@@ -63,7 +65,7 @@ def _is_orphaned(parent_pid: int) -> bool:
 async def run_single_rollout(
     job: AssignedRolloutJob,
     user_config: UserSimulatorConfig,
-    artifacts: dict[str, Artifact],
+    data_source: SceneDataSource,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
@@ -80,11 +82,6 @@ async def run_single_rollout(
             ep.driver.address,
             skip=ep.driver.skip,
         )
-        sensorsim = SensorsimService(
-            ep.sensorsim.address,
-            skip=ep.sensorsim.skip,
-            camera_catalog=camera_catalog,
-        )
         physics = PhysicsService(
             ep.physics.address,
             skip=ep.physics.skip,
@@ -98,6 +95,28 @@ async def run_single_rollout(
             skip=ep.controller.skip,
         )
 
+        # Resolve the renderer service from the typed runtime config.
+        if user_config.renderer.kind == RendererKind.sensorsim:
+            renderer_service = SensorsimService(
+                ep.renderer.address,
+                skip=ep.renderer.skip,
+                camera_catalog=camera_catalog,
+            )
+        elif user_config.renderer.kind == RendererKind.video_model:
+            if user_config.renderer.video_model_config is None:
+                raise ValueError(
+                    "runtime.renderer.video_model_config is required when "
+                    "runtime.renderer.kind=video_model"
+                )
+            renderer_service = VideoModelService(
+                address=ep.renderer.address,
+                config=user_config.renderer.video_model_config,
+                skip=ep.renderer.skip,
+                camera_catalog=camera_catalog,
+            )
+        else:
+            raise ValueError(f"Unknown renderer kind: {user_config.renderer.kind!r}")
+
         # Offload CPU-bound rollout preparation to thread
         loop = asyncio.get_running_loop()
         rollout = await loop.run_in_executor(
@@ -107,15 +126,18 @@ async def run_single_rollout(
                 simulation_config=user_config.simulation_config,
                 scene_id=job.scene_id,
                 version_ids=version_ids,
-                available_artifacts=artifacts,
+                data_source=data_source,
                 rollouts_dir=rollouts_dir,
+                session_uuid=job.session_uuid,
+                renderer_service=renderer_service,
             ),
         )
 
-        eval_result = await EventBasedRollout(
+        eval_result = await create_event_rollout(
             unbound=rollout,
+            data_source=data_source,
             driver=driver,
-            sensorsim=sensorsim,
+            renderer_service=renderer_service,
             physics=physics,
             trafficsim=traffic,
             controller=controller,
@@ -163,8 +185,7 @@ async def run_worker_loop(
     result_queue: Queue,
     num_consumers: int,
     user_config: UserSimulatorConfig,
-    smooth_trajectories: bool,
-    artifact_cache_size: int | None,
+    scene_loader: SceneLoader,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
@@ -180,9 +201,7 @@ async def run_worker_loop(
         result_queue: Queue to push JobResult to.
         num_consumers: Number of concurrent consumer tasks.
         user_config: User simulator configuration.
-        smooth_trajectories: Whether to smooth trajectories when loading artifacts.
-        artifact_cache_size: Max worker-local artifact cache size.
-            None = unlimited cache, 0 = disable cache.
+        scene_loader: Worker-local SceneLoader for loading scenes by scene_id.
         camera_catalog: Camera catalog for sensorsim.
         version_ids: Canonical version IDs from the parent process.
         rollouts_dir: Directory for rollout outputs.
@@ -211,14 +230,13 @@ async def run_worker_loop(
     # telemetry excludes the startup sweep.
     setup_gc_pressure_profiler()
 
-    load_artifact = make_artifact_loader(
-        smooth_trajectories=smooth_trajectories,
-        max_cache_size=artifact_cache_size,
-    )
-
     # Create a process pool for offloading CPU-bound eval computation.
     # One slot per consumer so no consumer blocks waiting for a pool slot.
-    eval_executor = ProcessPoolExecutor(max_workers=num_consumers)
+    # spawn (not fork) so we don't fork with live gRPC client threads.
+    eval_executor = ProcessPoolExecutor(
+        max_workers=num_consumers,
+        mp_context=mp.get_context("spawn"),
+    )
 
     async def job_consumer() -> None:
         """
@@ -257,13 +275,11 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
-            artifact = load_artifact(job.scene_id, job.artifact_path)
-
             # Process the job
             result = await run_single_rollout(
                 job=job,
                 user_config=user_config,
-                artifacts={job.scene_id: artifact},
+                data_source=scene_loader.get_data_source(job.scene_id),
                 camera_catalog=camera_catalog,
                 version_ids=version_ids,
                 rollouts_dir=rollouts_dir,
@@ -305,6 +321,7 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     # Load user config (for scenarios, endpoints, etc.)
     user_config = typed_parse_config(args.user_config_path, UserSimulatorConfig)
+    scene_loader = build_scene_loader(user_config)
 
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
@@ -358,8 +375,7 @@ async def worker_async_main(args: WorkerArgs) -> None:
             result_queue=args.result_queue,
             num_consumers=args.num_consumers,
             user_config=user_config,
-            smooth_trajectories=user_config.smooth_trajectories,
-            artifact_cache_size=user_config.artifact_cache_size,
+            scene_loader=scene_loader,
             camera_catalog=camera_catalog,
             version_ids=args.version_ids,
             rollouts_dir=rollouts_dir,

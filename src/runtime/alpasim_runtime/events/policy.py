@@ -13,7 +13,13 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from alpasim_runtime.events.base import EventPriority, EventQueue, RecurringEvent
+from alpasim_runtime.events.base import (
+    EndSimulationException,
+    EventPriority,
+    EventQueue,
+    RecurringEvent,
+)
+from alpasim_runtime.events.force_gt_utils import controller_reference_trajectory
 from alpasim_runtime.events.state import RolloutState, ServiceBundle
 from alpasim_runtime.route_generator import RouteGenerator
 from alpasim_utils import geometry
@@ -70,7 +76,10 @@ class PolicyEvent(RecurringEvent):
         # produces intermediate poses that StepEvent appends to the estimated
         # trajectory.  The driver should receive every one of them.
         all_ts = state.ego_trajectory_estimate.timestamps_us
-        mask = (all_ts > state.last_egopose_update_us) & (all_ts <= step_start_us)
+        if state.last_egopose_update_us is None:
+            mask = all_ts <= step_start_us
+        else:
+            mask = (all_ts > state.last_egopose_update_us) & (all_ts <= step_start_us)
         ts_arr = all_ts[mask]
         if len(ts_arr) == 0:
             ts_arr = np.array([step_start_us], dtype=np.uint64)
@@ -113,13 +122,26 @@ class PolicyEvent(RecurringEvent):
         await ctx.drain_outstanding_tasks()
         state.last_egopose_update_us = step_start_us
 
+        if ctx.force_gt and state.unbound.skip_driver_during_force_gt:
+            state.data_sensorsim_to_driver = None
+            state.step_context.driver_trajectory = controller_reference_trajectory(
+                state.force_gt_trajectory, step_start_us
+            )
+            return
+
         # --- Driver query ---
-        drive_trajectory_noisy = await svc.driver.drive(
+        drive_trajectory_noisy, terminate_session = await svc.driver.drive(
             time_now_us=step_start_us,
             time_query_us=target_time_us,
             renderer_data=state.data_sensorsim_to_driver,
         )
         state.data_sensorsim_to_driver = None  # Consumed
+
+        if terminate_session:
+            logger.info(
+                "Driver requested session termination at sim_time=%d us", step_start_us
+            )
+            raise EndSimulationException()
 
         # --- Transform from noisy to true local frame ---
         drive_trajectory = transform_trajectory_from_noisy_to_true_local_frame(
@@ -146,14 +168,11 @@ def assert_sensors_up_to_date(
         )
 
     # --- camera freshness ---
-    if not state.last_camera_frame_us:
-        return  # First step — no cameras have fired yet
-
-    stale = [
-        cid
-        for cid in camera_ids
-        if state.last_camera_frame_us.get(cid, 0) != step_start_us
-    ]
+    stale = []
+    for cid in camera_ids:
+        frame_us = state.last_camera_frame_us.get(cid)
+        if frame_us is None or frame_us > step_start_us:
+            stale.append(cid)
     if stale:
         raise ValueError(f"Cameras not up to date at {step_start_us}: {stale}")
 

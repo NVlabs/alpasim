@@ -21,7 +21,9 @@ scenarios:
     control_timestep_us: 99_000 # a multiple of camera's `frame_interval_us`
     pose_reporting_interval_us: 0 # 0 = report at `control_timestep_us` rate (default)
 
-    time_start_offset_us: 297_000 # a multiple of `control_timestep_us`
+    # The runtime starts from the rig egomotion start, anchors rendering at
+    # the first configured USDZ camera frame, and starts policy after
+    # force_gt_duration_us.
 
     assert_zero_decision_delay: true # adds an assertion to error out if something is misconfigured
 
@@ -29,5 +31,4 @@ scenarios:
       - # ...
         frame_interval_us: 33_000
         shutter_duration_us: 15_000
-        first_frame_offset_us: -15_000 # negative `shutter_duration_us`
 ```

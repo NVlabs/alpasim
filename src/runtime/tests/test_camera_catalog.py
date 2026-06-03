@@ -126,7 +126,6 @@ async def test_ensure_camera_defined_missing_definition_raises() -> None:
         width=512,
         frame_interval_us=40_000,
         shutter_duration_us=20_000,
-        first_frame_offset_us=1_000,
     )
 
     with pytest.raises(KeyError):
