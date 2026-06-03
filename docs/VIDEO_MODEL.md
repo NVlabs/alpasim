@@ -96,6 +96,8 @@ uv run --project src/wizard alpasim_wizard \
   wizard.log_dir=$PWD/outputs/managed-flashdreams-vavam-run
 ```
 
+> :warning: the initial run will download large model checkpoints to a local cache. Consider setting `+runtime.endpoints.startup_timeout_s=600` or more to prevent premature timeout on your first run.
+
 `driver=vavam_video_model` uses the same VaVam model and camera selection as
 `driver=vavam`, but skips the local camera calibration override that is only
 valid for the default NuRec renderer. Video-model sessions use the recorded

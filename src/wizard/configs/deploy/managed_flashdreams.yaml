@@ -45,7 +45,6 @@ services:
 # Default to the public OmniDreams scene pack; see docs/VIDEO_MODEL.md for
 # download/setup notes.
 scenes:
-  local_usdz_dir: ${repo-relative:"data/omni-dreams-scenes/scenes"}
   nre_version_string: "25.7.9-b85d0efd"
   scene_ids:
     - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554
