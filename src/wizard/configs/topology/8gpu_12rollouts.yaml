@@ -6,7 +6,7 @@ defines:
   physics_cache_size: 16
 
 services:
-  sensorsim:
+  renderer:
     replicas_per_container: 1
     gpus: [0, 1, 2, 3]
 
@@ -43,6 +43,5 @@ runtime:
       skip: false
     controller:
       n_concurrent_rollouts: 6
-      skip: false
     trafficsim:
       skip: true

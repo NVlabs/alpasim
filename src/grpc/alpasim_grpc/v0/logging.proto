@@ -21,6 +21,7 @@ message RolloutMetadata {
         common.VersionId physics_version = 4;
         common.VersionId traffic_version = 5;
         common.VersionId controller_version = 6;
+        common.VersionId video_model_version = 7;
     }
 
     message SessionMetadata {
@@ -65,6 +66,8 @@ message ActorPoses {
 }
 
 message LogEntry {
+    reserved 27; // unused, used to be video model session close return
+
     oneof log_entry {
         // always at the start of a rollout
         RolloutMetadata rollout_metadata = 1;
@@ -109,10 +112,10 @@ message LogEntry {
         common.Empty available_ego_masks_request = 22;
         nre.grpc.protos.sensorsim.AvailableEgoMasksReturn available_ego_masks_return = 23;
 
-        alpadreams.video_model.SessionRequest video_model_session_request = 24;
-        alpadreams.video_model.SessionId video_model_session_id = 25;
-        alpadreams.video_model.SessionCloseRequest video_model_session_close_request = 26;
-        alpadreams.video_model.VideoChunkRequest video_model_chunk_request = 28;
-        alpadreams.video_model.VideoChunkReturn video_model_chunk_return = 29;
+        omnidreams.video_model.SessionRequest video_model_session_request = 24;
+        omnidreams.video_model.SessionId video_model_session_id = 25;
+        omnidreams.video_model.SessionCloseRequest video_model_session_close_request = 26;
+        omnidreams.video_model.VideoChunkRequest video_model_chunk_request = 28;
+        omnidreams.video_model.VideoChunkReturn video_model_chunk_return = 29;
     }
 }

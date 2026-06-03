@@ -33,9 +33,20 @@ import pytest
 import pytest_asyncio
 import yaml
 from alpasim_grpc.v0 import sensorsim_pb2, video_model_pb2_grpc
-from alpasim_grpc.v0.common_pb2 import Empty, Pose, PoseAtTime, Quat, Trajectory, Vec3
+from alpasim_grpc.v0.common_pb2 import (
+    Empty,
+    Pose,
+    PoseAtTime,
+    Quat,
+    Trajectory,
+    Vec3,
+    VersionId,
+)
 from alpasim_grpc.v0.video_model_pb2 import (
+    ActorClassId,
     CameraOutput,
+    DynamicActor,
+    DynamicWorldState,
     Image,
     ImageFormat,
     SessionCloseRequest,
@@ -62,6 +73,7 @@ from alpasim_runtime.video_model.utils import (
     extract_hdmap_for_video_model,
 )
 from alpasim_utils import geometry
+from alpasim_utils.scenario import AABB
 
 import grpc
 import grpc.aio
@@ -669,6 +681,10 @@ class _RecordingWorldModelServicer(video_model_pb2_grpc.WorldModelServiceService
 
         self.close_session_request: SessionCloseRequest | None = None
 
+    async def get_version(self, request: Empty, context):
+        del request, context
+        return VersionId(version_id="fake-video-model", git_hash="test")
+
     async def start_session(self, request: SessionRequest, context):
         self.start_session_request = request
         return self.start_session_response
@@ -814,11 +830,13 @@ async def test_render_chunk_round_trip_per_camera_dispatch(grpc_world_model) -> 
                 rgb_frames=[Image(data=b"LEFT_RGB_0", format=ImageFormat.JPEG)],
             ),
         ],
-        bev_map_frames=[Image(data=b"BEV_0", format=ImageFormat.JPEG)],
     )
 
     service._session_id = SessionId(session_id="active-session")
-    chunk = await service.render_chunk(trajectory_local_to_rig=request_traj)
+    chunk = await service.render_chunk(
+        trajectory_local_to_rig=request_traj,
+        dynamic_state=DynamicWorldState(),
+    )
     service.session_info = None
     await service._close_connection()
 
@@ -849,10 +867,45 @@ async def test_render_chunk_round_trip_per_camera_dispatch(grpc_world_model) -> 
     assert hdmap_front[0].camera_logical_id == "hdmap_camera_front_wide_120fov"
     assert hdmap_front[0].image_bytes == b"FRONT_HDMAP_0"
 
-    # BEV.
-    assert len(chunk.bev_frames) == 1
-    assert chunk.bev_frames[0].image_bytes == b"BEV_0"
-    assert chunk.bev_frames[0].camera_logical_id == "bev_map"
+
+@pytest.mark.asyncio
+async def test_render_chunk_serializes_dynamic_world_state(grpc_world_model) -> None:
+    """Dynamic actor conditioning is forwarded on the chunk request."""
+    servicer, address = grpc_world_model
+    service = VideoModelService(address=address, config=VideoModelConfig(fps=10))
+    await service._open_connection()
+
+    actor_trajectory = Trajectory(
+        poses=[
+            _pose_at(100_000, x=4.0),
+            _pose_at(200_000, x=5.0),
+        ]
+    )
+    dynamic_state = DynamicWorldState(
+        actors=[
+            DynamicActor(
+                class_id=ActorClassId.CAR,
+                bbox_dims=AABB(4.5, 2.0, 1.6).to_grpc(),
+                trajectory=actor_trajectory,
+            )
+        ]
+    )
+
+    service._session_id = SessionId(session_id="active-session")
+    await service.render_chunk(
+        trajectory_local_to_rig=_trajectory([100_000, 200_000]),
+        dynamic_state=dynamic_state,
+    )
+    await service._close_connection()
+
+    captured = servicer.render_request
+    assert captured is not None
+    assert len(captured.dynamic_state.actors) == 1
+    actor = captured.dynamic_state.actors[0]
+    assert actor.class_id == ActorClassId.CAR
+    assert actor.bbox_dims.size_x == pytest.approx(4.5)
+    assert [p.timestamp_us for p in actor.trajectory.poses] == [100_000, 200_000]
+    assert [p.pose.vec.x for p in actor.trajectory.poses] == pytest.approx([4.0, 5.0])
 
 
 @pytest.mark.asyncio
@@ -879,7 +932,10 @@ async def test_render_chunk_uses_request_trajectory_for_frame_timestamps(
         ],
     )
     service._session_id = SessionId(session_id="s")
-    chunk = await service.render_chunk(trajectory_local_to_rig=request_traj)
+    chunk = await service.render_chunk(
+        trajectory_local_to_rig=request_traj,
+        dynamic_state=DynamicWorldState(),
+    )
     await service._close_connection()
 
     rgb = chunk.rgb_frames_per_camera["camera_front_wide_120fov"]

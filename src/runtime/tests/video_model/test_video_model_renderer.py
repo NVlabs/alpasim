@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Quat, Trajectory, Vec3
+from alpasim_grpc.v0.video_model_pb2 import DynamicWorldState
 from alpasim_runtime.config import SimulationConfig, VideoModelConfig
 from alpasim_runtime.events.base import EventQueue
 from alpasim_runtime.events.video_model.prefetch import (
@@ -182,6 +183,7 @@ async def test_skipped_video_model_render_chunk_returns_placeholder_frames() -> 
 
     chunk = await service.render_chunk(
         trajectory_local_to_rig=_trajectory([100_000, 200_000]),
+        dynamic_state=DynamicWorldState(),
     )
 
     assert set(chunk.rgb_frames_per_camera) == {"camera_front", "camera_left"}

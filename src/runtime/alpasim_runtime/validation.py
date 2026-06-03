@@ -34,15 +34,6 @@ T = TypeVar("T")
 
 _PENDING_PROBE_LOG_INTERVAL_S = 10.0
 
-# Service name -> RolloutMetadata.VersionIds field name mapping.
-_SERVICE_TO_VERSION_FIELD = {
-    "driver": "egodriver_version",
-    "renderer": "sensorsim_version",
-    "physics": "physics_version",
-    "trafficsim": "traffic_version",
-    "controller": "controller_version",
-}
-
 # Sentinel VersionId for skipped services.
 _SKIP_VERSION = VersionId(
     version_id="<skip>",
@@ -226,14 +217,31 @@ async def gather_versions_from_addresses(
     results = await asyncio.gather(*tasks)
     canonical = _assert_consistent_versions(list(results))
 
-    # Build VersionIds: use canonical version for probed services, skip sentinel for others.
-    version_kwargs = {"runtime_version": runtime_version}
-    for svc_name, field_name in _SERVICE_TO_VERSION_FIELD.items():
-        if skip_flags[svc_name]:
-            version_kwargs[field_name] = _SKIP_VERSION
-        else:
-            version_kwargs[field_name] = canonical[svc_name]
+    renderer_version_field = (
+        "video_model_version"
+        if renderer_kind == RendererKind.video_model
+        else "sensorsim_version"
+    )
+    service_to_version_field = {
+        "driver": "egodriver_version",
+        "renderer": renderer_version_field,
+        "physics": "physics_version",
+        "trafficsim": "traffic_version",
+        "controller": "controller_version",
+    }
 
+    version_kwargs = {
+        "runtime_version": runtime_version,
+        "egodriver_version": _SKIP_VERSION,
+        "sensorsim_version": _SKIP_VERSION,
+        "video_model_version": _SKIP_VERSION,
+        "physics_version": _SKIP_VERSION,
+        "traffic_version": _SKIP_VERSION,
+        "controller_version": _SKIP_VERSION,
+    }
+    for svc_name, field_name in service_to_version_field.items():
+        if not skip_flags[svc_name]:
+            version_kwargs[field_name] = canonical[svc_name]
     return RolloutMetadata.VersionIds(**version_kwargs)
 
 

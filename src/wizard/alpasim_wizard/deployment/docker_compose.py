@@ -22,6 +22,11 @@ from ..utils import LiteralStr, write_yaml
 logger = logging.getLogger(__name__)
 
 
+def _netrc_secret_file() -> Path | None:
+    netrc_path = Path.home() / ".netrc"
+    return netrc_path if netrc_path.is_file() else None
+
+
 class DockerComposeDeployment:
     """Deployment strategy using Docker Compose."""
 
@@ -107,7 +112,7 @@ class DockerComposeDeployment:
         else:
             ret["networks"] = ["microservices_network"]
         ret["volumes"] = [v.to_str() for v in container.volumes]
-        ret["pull_policy"] = "missing"
+        ret["pull_policy"] = container.service_config.pull_policy
         ret["image"] = container.service_config.image
 
         repo_root = str(find_repo_root(__file__))
@@ -118,7 +123,7 @@ class DockerComposeDeployment:
                 "dockerfile": "Dockerfile",
                 "tags": [container.service_config.image],
             }
-            if Path.home().joinpath(".netrc").exists():
+            if _netrc_secret_file() is not None:
                 build_config["secrets"] = ["netrc"]
             ret["build"] = build_config
 
@@ -182,7 +187,7 @@ class DockerComposeDeployment:
         # Simulation services (runtime should start last)
         for c in container_set.sim or []:
             if c.command == "noop":
-                # Special logic to support sensorsim/physics combined process
+                # Special logic to support renderer/physics combined process.
                 continue
             service = self._to_docker_compose_service(c)
             services[c.uuid] = service
@@ -213,7 +218,7 @@ class DockerComposeDeployment:
             "networks": {"microservices_network": {"driver": "bridge"}},
             "services": services,  # Services maintain insertion order in Python 3.7+
         }
-        if Path.home().joinpath(".netrc").exists():
+        if _netrc_secret_file() is not None:
             compose["secrets"] = {"netrc": {"file": "${HOME}/.netrc"}}
 
         # Write to file

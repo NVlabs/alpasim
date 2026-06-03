@@ -49,6 +49,7 @@ SERVICE_VERSION_MAP = {
     "controller": "controller_version",
     "sensorsim": "sensorsim_version",
     "runtime": "runtime_version",
+    "video_model": "video_model_version",
 }
 
 

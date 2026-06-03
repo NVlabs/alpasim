@@ -418,7 +418,7 @@ class CameraCatalog:
         """Register camera definitions for a scene without querying sensorsim.
 
         This is useful for renderer backends that provide their own camera
-        definitions (for example, the internal video model renderer) and do not
+        definitions (for example, the video-model renderer) and do not
         rely on sensorsim for camera discovery.
         """
         self._scene_definitions[scene_id] = {

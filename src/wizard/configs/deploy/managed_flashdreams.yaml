@@ -1,0 +1,68 @@
+# @package _global_
+# Deploy for a wizard-managed FlashDreams/OmniDreams video-model renderer.
+#
+# Build the image manually from the FlashDreams workspace as `flashdreams-alpasim:local`
+# before launching Alpasim. The wizard treats it as an external image and only
+# manages the renderer process.
+
+defaults:
+  - _self_
+
+defines:
+  filesystem: ${repo-relative:"data"}
+  torch_cache: "${oc.env:TORCH_HOME,${oc.env:HOME}/.cache/torch}"
+  flashdreams_cache: "${oc.env:FLASHDREAMS_CACHE_DIR,${oc.env:HOME}/.cache/flashdreams}"
+
+wizard:
+  debug_flags:
+    use_localhost: false
+
+  run_sim_services:
+    ["driver", "renderer", "physics", "trafficsim", "controller", "runtime"]
+
+services:
+  renderer:
+    image: flashdreams-alpasim:local
+    external_image: true
+    pull_policy: never
+    volumes:
+      - "${defines.hf_cache}:/root/.cache/huggingface"
+      - "${defines.torch_cache}:/root/.cache/torch"
+      - "${defines.flashdreams_cache}:/root/.cache/flashdreams"
+    environments:
+      - HF_TOKEN
+      - HF_HOME=/root/.cache/huggingface
+      - TORCH_HOME=/root/.cache/torch
+      - TORCH_EXTENSIONS_DIR=/root/.cache/torch/extensions
+      - FLASHDREAMS_CACHE_DIR=/root/.cache/flashdreams
+    workdir: /workspace/flashdreams
+    command:
+      - "uv run --no-sync --package flashdreams-omnidreams python -m omnidreams.grpc.server"
+      - "--pipeline_config_name omnidreams-sv-2steps-chunk2-loc6-lightvae-lighttae-perf"
+      - "--host 0.0.0.0"
+      - "--port {port}"
+
+# Default to the public OmniDreams scene pack; see docs/VIDEO_MODEL.md for
+# download/setup notes.
+scenes:
+  local_usdz_dir: ${repo-relative:"data/omni-dreams-scenes/scenes"}
+  nre_version_string: "25.7.9-b85d0efd"
+  scene_ids:
+    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554
+
+runtime:
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 1
+      skip: false
+
+  renderer:
+    kind: video_model
+    video_model_config:
+      fps: 30
+      text_prompt_positive: "Wide-angle urban street scene from a low, dashboard-level viewpoint. A straight two-lane road with a faded center line and curbside parking on both sides. Parked sedans and SUVs in neutral colors line the curbs. On the right, a white stucco mid-rise building with blue fabric awnings, rectangular windows, and small storefronts at street level. On the left, a low commercial strip with dark trim, glass fronts, signage, and shaded sidewalks. Mature green trees punctuate both sides. Clear blue sky with sparse soft clouds. Bright midday sunlight, natural colors, realistic materials, crisp shadows, clean asphalt texture."
+      text_prompt_negative: ""
+
+  simulation_config:
+    planner_delay_us: 0
+    assert_zero_decision_delay: true

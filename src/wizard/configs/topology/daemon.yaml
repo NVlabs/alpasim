@@ -8,7 +8,7 @@ defines:
   nre_cache_size: 5
 
 services:
-  sensorsim:
+  renderer:
     replicas_per_container: 1
 
   driver:
@@ -37,6 +37,5 @@ runtime:
       skip: false
     controller:
       n_concurrent_rollouts: 1
-      skip: false
     trafficsim:
       skip: true

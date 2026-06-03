@@ -22,6 +22,8 @@ def _context(tmp_path: Path, *, dry_run: bool = False) -> WizardContext:
             nr_retries=1,
             run_mode=RunMode.ONESHOT,
             slurm_job_id=123,
+            sqshcaches=[],
+            slurm_cpu_bind_none=False,
             debug_flags=DebugFlags(use_localhost=False),
         )
     )
@@ -41,6 +43,49 @@ def _deployment(tmp_path: Path, *, dry_run: bool = False) -> SlurmDeployment:
 
 def _container(uuid: str) -> SimpleNamespace:
     return SimpleNamespace(uuid=uuid)
+
+
+def _slurm_container(deployment: SlurmDeployment, gpu: int | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        uuid="driver-0",
+        context=deployment.context,
+        service_config=SimpleNamespace(image="driver-image", remap_root=False),
+        gpu=gpu,
+        environments=[],
+        volumes=[],
+        workdir=None,
+        command="echo ok",
+    )
+
+
+@pytest.mark.parametrize(
+    ("gpu", "expected"),
+    [
+        (0, "export CUDA_VISIBLE_DEVICES=0;"),
+        (2, "export CUDA_VISIBLE_DEVICES=2;"),
+        (None, None),
+    ],
+)
+def test_slurm_run_exports_explicit_gpu_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gpu: int | None,
+    expected: str | None,
+) -> None:
+    deployment = _deployment(tmp_path)
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: f"{image}.sqsh",
+    )
+
+    command = deployment._to_slurm_run(
+        _slurm_container(deployment, gpu), RunMode.ONESHOT
+    )
+
+    if expected is None:
+        assert "CUDA_VISIBLE_DEVICES" not in command
+    else:
+        assert expected in command
 
 
 def test_slurm_cleanup_runs_after_blocking_runtime_srun(
@@ -93,7 +138,7 @@ def test_slurm_cleanup_targets_only_launched_non_runtime_steps(
 ) -> None:
     deployment = _deployment(tmp_path)
     driver = _container("driver-0")
-    sensorsim = _container("sensorsim-0")
+    renderer = _container("renderer-0")
     runtime = _container("runtime-0")
     cleaned_up = []
 
@@ -126,7 +171,7 @@ def test_slurm_cleanup_targets_only_launched_non_runtime_steps(
         ),
     )
 
-    deployment.deploy([driver, sensorsim], containers_to_start_last=[runtime])
+    deployment.deploy([driver, renderer], containers_to_start_last=[runtime])
 
     assert cleaned_up == ["driver-0"]
 

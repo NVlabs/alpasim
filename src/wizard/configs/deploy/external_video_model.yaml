@@ -6,8 +6,8 @@
 # +cameras=<...> override -- that breaks the driver's rectifier and the
 # policy starts producing garbage decisions.
 #
-# See docs/VIDEO_MODEL.md for server commands, scene setup, and
-# driver-specific notes such as Alpamayo image-history subsampling.
+# See docs/VIDEO_MODEL.md for server commands and driver-specific notes such as
+# Alpamayo image-history subsampling.
 
 defaults:
   - _self_
@@ -36,7 +36,6 @@ services:
     replicas_per_container: 1
     gpus: null
 
-  # plugins/internal is co-installed because most exp=... configs live there.
   runtime:
     environments:
       - UV_LINK_MODE=copy
@@ -49,21 +48,13 @@ services:
       - "--array-job-dir=/mnt/array_job_dir"
       - "--eval-config=/mnt/log_dir/eval-config.yaml"
 
-# Default to the public OmniDreams scene pack; see
-# docs/VIDEO_MODEL.md for download/setup notes.
-scenes:
-  local_usdz_dir: ${repo-relative:"data/omni-dreams-scenes/scenes"}
-  nre_version_string: "25.7.9-b85d0efd"
-  scene_ids:
-    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554
-
 runtime:
   endpoints:
     renderer:
       n_concurrent_rollouts: 1
       skip: false
     controller:
-      skip: true
+      skip: false
 
   renderer:
     kind: video_model

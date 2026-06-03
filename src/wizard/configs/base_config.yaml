@@ -9,7 +9,7 @@ defaults:
   - topology: null # Must be overridden (e.g., topology=1gpu)
   - trafficsim: null # Optional override
   - controller: default # Defaults to linear MPC; override with controller=nonlinear etc.
-  - sensorsim: null # Optional override
+  - renderer: null # Optional override
   - optional scenes_catalog: internal # auto-override when internal plugin installed
   - optional image_defaults: internal # auto-override when internal plugin installed
 
@@ -31,7 +31,7 @@ defines:
   sensordata: "${defines.filesystem}/nre-artifacts"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
-  sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
+  renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
   helper: scripts
   vscode: sources/remote-vscode-server
   physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
@@ -71,9 +71,9 @@ wizard:
   # Does not need to be touched. For slurm runs (wizard.run_method=SLURM) this will be replaced with the slurm job ID
   slurm_job_id: null
 
-  # Services to run for simulation (e.g., ["driver", "sensorsim", "physics", "trafficsim", "controller", "runtime"])
+  # Services to run for simulation (e.g., ["driver", "renderer", "physics", "trafficsim", "controller", "runtime"])
   run_sim_services:
-    ["driver", "sensorsim", "physics", "trafficsim", "controller", "runtime"]
+    ["driver", "renderer", "physics", "trafficsim", "controller", "runtime"]
 
   # TODO: undocumented options
   run_mode: "ONESHOT"
@@ -98,7 +98,7 @@ wizard:
 scenes:
   # Selection method (set one of these two)
   scene_ids:
-    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554 # default OSS scene from huggingface (26.02 dataset)
+    - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554 # default OSS scene from huggingface (26.01 dataset)
   test_suite_id: null # Test suite ID to use (from suites_csv)
 
   # Limit the number of scenes to run (0 or negative means no limit)
@@ -115,8 +115,8 @@ scenes:
 # each item is similar. For the services that pull in local code (e.g., controller, runtime, eval) we mount the repo-relative
 # `src/` directory into `/mnt/src` in the container and run from there. The virtual environment is reused from the container.
 services:
-  # \/ sensor simulator for now is just NRE. We'll use it as an example on the structure of a container definition
-  sensorsim:
+  # \/ renderer defaults to NRE. It can be overridden with another renderer implementation.
+  renderer:
     image: nvcr.io/nvidia/nre/nre-ga:26.02
     external_image: true
     # \/ volumes lets us mount host (ORD/local) containers to the running container
@@ -130,7 +130,7 @@ services:
       - OMP_NUM_THREADS=1
     # \/ command is like docker entrypoint + command combined
     command:
-      - "${defines.sensorsim_entrypoint}"
+      - "${defines.renderer_entrypoint}"
       - "serve-grpc"
       - "--port={port}" # {port} is a wizard-generated unique variable which enumerates {baseport}, {baseport+1}, ...
       - "--host=0.0.0.0" # the default container IP
@@ -141,7 +141,7 @@ services:
       - "--cache-size=${defines.nre_cache_size}" # as a rule of thumb n_concurrent_rollouts + 1 allows to avoid premature evictions
       - "--max-workers=4"
       - "--enable-editing-actors"
-      # - "--enable-timing" # uncomment to enable timing information on the sensor simulator side
+      # - "--enable-timing" # uncomment to enable timing information on the renderer side
 
   # \/ services.drive is the driving policy (Alpamayo/HydraMDP, etc)
   driver:
@@ -201,7 +201,7 @@ services:
     # \/ only starts if all the dependencies started correctly
     depends_on:
       - driver
-      - sensorsim
+      - renderer
       - physics
       - trafficsim
       - controller
@@ -259,6 +259,8 @@ runtime:
     sensorsim_cache_size: ${defines.nre_cache_size}
     renderer:
       n_concurrent_rollouts: 1
+      skip: false
+    controller:
       skip: false
 
   renderer:

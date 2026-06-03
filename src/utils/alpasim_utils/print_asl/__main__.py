@@ -22,8 +22,6 @@ def _redact_video_model_payloads(log_entry: LogEntry) -> None:
                 image.data = b"<image data redacted>"
             for image in camera_output.hdmap_condition_frames:
                 image.data = b"<image data redacted>"
-        for image in response.bev_map_frames:
-            image.data = b"<image data redacted>"
 
 
 async def print_asl(

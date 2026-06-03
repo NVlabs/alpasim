@@ -63,7 +63,7 @@ class ScenesConfig:
     # all scenes in the directory will be simulated.
     local_usdz_dir: str | None = None
 
-    # used to override services.sensorsim.image for the USDZ database service if NRE is not enabled
+    # Used to override services.renderer.image for the USDZ database service if NRE is not enabled.
     nre_version_string: str | None = None
 
 
@@ -140,7 +140,7 @@ class WizardConfig:
 @dataclass
 class ServicesConfig:
     driver: ServiceConfig | None = MISSING
-    sensorsim: ServiceConfig | None = MISSING
+    renderer: ServiceConfig | None = MISSING
     physics: ServiceConfig | None = MISSING
     trafficsim: ServiceConfig | None = MISSING
     controller: ServiceConfig | None = MISSING
@@ -154,6 +154,7 @@ class ServiceConfig:
     # Images that don't correspond to a service in the repo.
     # No Dockerfile path is added to the docker-compose.yaml.
     external_image: bool = False
+    pull_policy: str = "missing"
     command: list[str] = MISSING
     # Number of service replicas to run per container.
     # If gpus is None or empty, creates a single container with this many replicas.

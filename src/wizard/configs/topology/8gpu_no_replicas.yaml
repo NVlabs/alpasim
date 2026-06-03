@@ -8,7 +8,7 @@ defines:
   nre_cache_size: 3  # renderer.n_concurrent_rollouts + 1
 
 services:
-  sensorsim:
+  renderer:
     environments:
       - OMP_NUM_THREADS=1
 
@@ -52,7 +52,6 @@ runtime:
 
     controller:
       n_concurrent_rollouts: 10
-      skip: false
 
     trafficsim:
       n_concurrent_rollouts: 10

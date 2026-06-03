@@ -9,6 +9,23 @@ from alpasim_driver.rectification import (
 from alpasim_grpc.v0 import sensorsim_pb2
 
 
+def test_unset_max_angle_does_not_zero_fov() -> None:
+    """Proto default max_angle=0 means unset, not a zero-degree camera."""
+
+    intrinsics = sensorsim_pb2.FthetaCameraParam()
+    intrinsics.principal_point_x = 500.0
+    intrinsics.principal_point_y = 250.0
+    intrinsics.angle_to_pixeldist_poly.extend([0.0, 1000.0])
+
+    theta = 0.2
+    ray = np.array([[np.sin(theta), 0.0, np.cos(theta)]], dtype=np.float64)
+
+    camera = _FthetaCamera(intrinsics, (500, 1000))
+    _pixels, valid = camera.ray_to_pixel(ray)
+
+    assert valid[0]
+
+
 def test_resolution_scaling_is_not_applied_twice() -> None:
     """Scaling intrinsics to a lower resolution should scale pixel radii once."""
 

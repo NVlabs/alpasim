@@ -1,0 +1,15 @@
+# Should be used in defaults list, e.g.
+# - /driver: alpamayo1_5_1cam
+# Type validation happens at driver runtime via OmegaConf.structured merge
+
+defaults:
+  - alpamayo1_5
+  - /cameras: 1cam
+  - _self_
+
+# Alpamayo 1.5 single-camera preset for public single-view video-model runs.
+
+inference:
+  use_cameras:
+    - camera_front_wide_120fov
+  subsample_factor: 3

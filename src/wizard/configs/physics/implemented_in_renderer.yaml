@@ -2,5 +2,5 @@
 #
 services:
   physics:
-    image: "*sensorsim*" # Special handling in: configuration.py
+    image: "*renderer*" # Special handling in: configuration.py
     command: ["noop"] # Special handling in: deployment/docker_compose.py

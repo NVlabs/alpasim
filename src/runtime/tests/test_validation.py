@@ -25,7 +25,6 @@ from alpasim_runtime.config import (
     UserEndpointConfig,
     UserSimulatorConfig,
 )
-from alpasim_runtime.endpoints import VideoModelVersionProbeStub
 from alpasim_runtime.validation import (
     _log_awaitable_progress,
     gather_versions_from_addresses,
@@ -189,7 +188,19 @@ async def test_validate_scenarios_accepts_headless_rollout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gather_versions_returns_rollout_version_ids(monkeypatch):
+@pytest.mark.parametrize(
+    ("renderer_kind", "expected_sensorsim_version", "expected_video_model_version"),
+    [
+        (RendererKind.sensorsim, "renderer-v1", "<skip>"),
+        (RendererKind.video_model, "<skip>", "renderer-v1"),
+    ],
+)
+async def test_gather_versions_returns_rollout_version_ids(
+    monkeypatch,
+    renderer_kind,
+    expected_sensorsim_version,
+    expected_video_model_version,
+):
     """gather_versions_from_addresses should return a populated VersionIds proto."""
 
     async def fake_probe(svc_name, stub_class, address, timeout_s):
@@ -210,45 +221,18 @@ async def test_gather_versions_returns_rollout_version_ids(monkeypatch):
     version_ids = await gather_versions_from_addresses(
         _make_network_config(),
         _make_user_endpoints(),
-        renderer_kind=RendererKind.sensorsim,
+        renderer_kind=renderer_kind,
     )
 
     assert isinstance(version_ids, RolloutMetadata.VersionIds)
     assert version_ids.egodriver_version.version_id == "driver-v1"
-    assert version_ids.sensorsim_version.version_id == "renderer-v1"
+    assert version_ids.sensorsim_version.version_id == expected_sensorsim_version
+    assert version_ids.video_model_version.version_id == expected_video_model_version
     assert version_ids.physics_version.version_id == "physics-v1"
     assert version_ids.traffic_version.version_id == "trafficsim-v1"
     assert version_ids.controller_version.version_id == "controller-v1"
     # runtime version should be set from the runtime package
     assert version_ids.runtime_version.version_id != ""
-
-
-@pytest.mark.asyncio
-async def test_video_model_version_probe_stub_returns_validation_version(monkeypatch):
-    class FakeWorldModelServiceStub:
-        def __init__(self, channel):
-            self.channel = channel
-
-    class FakeChannel:
-        def __init__(self) -> None:
-            self.ready = False
-
-        async def channel_ready(self) -> None:
-            self.ready = True
-
-    monkeypatch.setattr(
-        "alpasim_runtime.endpoints.WorldModelServiceStub",
-        FakeWorldModelServiceStub,
-    )
-
-    channel = FakeChannel()
-    stub = VideoModelVersionProbeStub(channel)
-    version = await stub.get_version(timeout=1)
-
-    assert channel.ready is True
-    assert version.version_id == "0.0.0"
-    assert version.git_hash == "<video-model-unreported>"
-    assert version.grpc_api_version == API_VERSION_MESSAGE
 
 
 @pytest.mark.asyncio

@@ -303,8 +303,7 @@ def build_container_set(
         # Check if service should be skipped (skip: true in runtime config)
         if runtime_cfg:
             endpoints = getattr(runtime_cfg, "endpoints", {})
-            endpoint_name = "renderer" if service_name == "sensorsim" else service_name
-            service_endpoint = endpoints.get(endpoint_name, {})
+            service_endpoint = endpoints.get(service_name, {})
             if service_endpoint.get("skip", False):
                 logger.debug(f"Skipping service {service_name} (marked as skip)")
                 return []

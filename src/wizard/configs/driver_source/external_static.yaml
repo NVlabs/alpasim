@@ -4,7 +4,7 @@
 
 wizard:
   run_sim_services:
-    ["sensorsim", "physics", "trafficsim", "controller", "runtime"]
+    ["renderer", "physics", "trafficsim", "controller", "runtime"]
 
 runtime:
   endpoints:

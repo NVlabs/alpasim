@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import pytest
-from alpasim_grpc.v0.logging_pb2 import LogEntry
+from alpasim_grpc.v0.common_pb2 import VersionId
+from alpasim_grpc.v0.logging_pb2 import LogEntry, RolloutMetadata
 from alpasim_grpc.v0.video_model_pb2 import (
     CameraOutput,
     Image,
@@ -72,6 +73,21 @@ async def test_asl_reader_pairs_video_model_exchanges(tmp_path) -> None:
     assert len(reader.get_exchanges("video_model", "close_session")) == 1
 
 
+def test_asl_reader_returns_video_model_version_from_metadata() -> None:
+    reader = ASLReader("dummy.asl")
+    reader.asl_metadata["rollout_metadata"] = RolloutMetadata(
+        version_ids=RolloutMetadata.VersionIds(
+            video_model_version=VersionId(version_id="omnidreams", git_hash="abc123")
+        )
+    )
+
+    version = reader.get_service_version("video_model")
+
+    assert version is not None
+    assert version.version_id == "omnidreams"
+    assert version.git_hash == "abc123"
+
+
 @pytest.mark.asyncio
 async def test_print_asl_redacts_video_model_payloads(tmp_path, capsys) -> None:
     asl_path = tmp_path / "video-model.asl"
@@ -93,7 +109,6 @@ async def test_print_asl_redacts_video_model_payloads(tmp_path, capsys) -> None:
                             hdmap_condition_frames=[Image(data=b"secret-hdmap")],
                         )
                     ],
-                    bev_map_frames=[Image(data=b"secret-bev")],
                 )
             )
         )

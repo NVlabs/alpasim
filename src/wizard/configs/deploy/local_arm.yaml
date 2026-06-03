@@ -18,7 +18,7 @@ services:
     image: alpasim-base:arm64
   eval:
     image: alpasim-base:arm64
-  sensorsim:
+  renderer:
     image: nvcr.io/nvidia/nre/nre-ga:26.02
     external_image: true
     environments:

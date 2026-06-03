@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import re
 import zipfile
 from pathlib import Path
 from typing import Any, Optional, Union, cast
@@ -15,11 +16,41 @@ from typing import Any, Optional, Union, cast
 import numpy as np
 import yaml
 from alpasim_grpc.v0 import common_pb2, sensorsim_pb2, video_model_pb2
+from alpasim_grpc.v0.video_model_pb2 import (
+    ActorClassId,
+    DynamicActor,
+    DynamicWorldState,
+)
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.types import RuntimeCamera
 from alpasim_utils import geometry
+from alpasim_utils.scenario import TrafficObjects
 
 logger = logging.getLogger(__name__)
+
+_LABEL_SEPARATOR_PATTERN = re.compile(r"[\s\-/]+")
+_ACTOR_CLASS_ID_BY_LABEL: dict[str, int] = {
+    "animal": ActorClassId.OTHER,
+    "auto": ActorClassId.CAR,
+    "automobile": ActorClassId.CAR,
+    "bicycle": ActorClassId.CYCLIST,
+    "bike": ActorClassId.CYCLIST,
+    "bus": ActorClassId.TRUCK,
+    "car": ActorClassId.CAR,
+    "cyclist": ActorClassId.CYCLIST,
+    "heavy_truck": ActorClassId.TRUCK,
+    "other_vehicle": ActorClassId.OTHER,
+    "passenger_car": ActorClassId.CAR,
+    "pedestrian": ActorClassId.PEDESTRIAN,
+    "person": ActorClassId.PEDESTRIAN,
+    "protruding_object": ActorClassId.OTHER,
+    "rider": ActorClassId.CYCLIST,
+    "stroller": ActorClassId.PEDESTRIAN,
+    "trailer": ActorClassId.TRUCK,
+    "train_or_tram_car": ActorClassId.OTHER,
+    "truck": ActorClassId.TRUCK,
+}
+_UNKNOWN_ACTOR_LABELS_LOGGED: set[str] = set()
 
 
 def populate_default_equidistant_ftheta(
@@ -83,6 +114,66 @@ def build_trajectory_for_video_model(
         )
 
     return common_pb2.Trajectory(poses=poses_at_time)
+
+
+def build_dynamic_world_state_for_video_model(
+    traffic_objects: TrafficObjects,
+    start_us: int,
+    num_frames: int,
+    frame_interval_us: int,
+) -> DynamicWorldState:
+    """Build dynamic actor conditioning for a video model chunk request."""
+    timestamps_us = np.array(
+        [start_us + i * frame_interval_us for i in range(num_frames)], dtype=np.uint64
+    )
+    actors: list[DynamicActor] = []
+
+    for track_id in sorted(traffic_objects):
+        traffic_obj = traffic_objects[track_id]
+        if traffic_obj.is_static:
+            continue
+
+        valid_timestamps_us = np.array(
+            [
+                ts
+                for ts in timestamps_us
+                if int(ts) in traffic_obj.trajectory.time_range_us
+            ],
+            dtype=np.uint64,
+        )
+        if len(valid_timestamps_us) == 0:
+            continue
+
+        sampled_trajectory = traffic_obj.trajectory.interpolate(valid_timestamps_us)
+        actors.append(
+            DynamicActor(
+                class_id=_actor_class_id_from_label(traffic_obj.label_class),
+                bbox_dims=traffic_obj.aabb.to_grpc(),
+                trajectory=geometry.trajectory_to_grpc(sampled_trajectory),
+            )
+        )
+
+    return DynamicWorldState(actors=actors)
+
+
+def _actor_class_id_from_label(label: str) -> int:
+    normalized = _LABEL_SEPARATOR_PATTERN.sub("_", label.strip().lower()).strip("_")
+
+    if normalized in _ACTOR_CLASS_ID_BY_LABEL:
+        return _ACTOR_CLASS_ID_BY_LABEL[normalized]
+
+    label_tokens = set(normalized.split("_"))
+    if label_tokens & {"pedestrian", "person"}:
+        return ActorClassId.PEDESTRIAN
+    if label_tokens & {"cyclist", "bicycle", "bike"}:
+        return ActorClassId.CYCLIST
+    if label_tokens & {"truck", "trailer", "bus"}:
+        return ActorClassId.TRUCK
+
+    if normalized not in _UNKNOWN_ACTOR_LABELS_LOGGED:
+        _UNKNOWN_ACTOR_LABELS_LOGGED.add(normalized)
+        logger.warning("Unknown dynamic actor label %r; using OTHER", label)
+    return ActorClassId.OTHER
 
 
 def build_camera_specs_and_initial_frames(

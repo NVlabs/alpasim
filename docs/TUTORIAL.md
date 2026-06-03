@@ -347,11 +347,11 @@ the predictions of a policy, you can set
 The scene in AlpaSim is a NuRec reconstruction of a real-world driving log.
 
 Publicly available NuRec scenes are stored on
-[Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/25.05/sample_set/25.07_release)
+[Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release)
 and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
 their uuid, rather than their filenames, to prevent versioning issues. The list of currently
-available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available suites
-exists in [scene suites](/data/scenes/sim_suites.csv).
+available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available
+suites exists in [scene suites](/data/scenes/sim_suites.csv).
 
 #### Selecting Individual Scenes
 
@@ -374,13 +374,13 @@ instructions.
 #### Using Scene Suites
 
 Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
-with 910 validated scenes (:warning: this will download all the scenes):
+with 916 validated scenes (:warning: this will download all the scenes):
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=vavam scenes.test_suite_id=public_2507 wizard.log_dir=$PWD/tutorial_suite
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam scenes.test_suite_id=public_2601 wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across all 910 scenes in the `public_2507` suite from the 25.07 release dataset.
+This will run simulations across all 916 scenes in the `public_2601` suite from the 26.01 release dataset.
 
 ## Custom components
 
@@ -442,7 +442,7 @@ the context of a full simulation.
 1. (Terminal 1) `cd` to the generated directory (`tutorial_dbg`) and note the command/port of the
    component to be replaced in `docker-compose.yaml`. For the simulation case, we are looking for
    components in the `sim` profile, which includes `controller-0`, `driver-0`, `physics-0`,
-   `runtime-0`, and `sensorsim-0`. Here we will replace `controller-0`, which in this case has been
+   `runtime-0`, and `renderer-0`. Here we will replace `controller-0`, which in this case has been
    allocated port 6003.
 
 1. (Terminal 2) `cd` into the the controller src directory (`<repo_root>/src/controller/`) and
@@ -462,7 +462,7 @@ the context of a full simulation.
    ```bash
    docker compose -f docker-compose.yaml --profile sim up \
      --exit-code-from runtime-0 \
-     runtime-0 driver-0 physics-0 sensorsim-0
+     runtime-0 driver-0 physics-0 renderer-0
    ```
 
    `--exit-code-from runtime-0` is required for manual Docker Compose runs that include the
@@ -518,7 +518,7 @@ separately and remain running until you stop the Docker Compose process.
    services:
    ```bash
    docker compose -f docker-compose.yaml --profile sim up \
-     driver-0 controller-0 physics-0 sensorsim-0
+     driver-0 controller-0 physics-0 renderer-0
    ```
 1. (Terminal 2) `cd` into the the runtime src directory (`<repo_root>/src/runtime/`) and prepare to
    start the runtime. The exact command paths will vary, but, to use the configuration generated

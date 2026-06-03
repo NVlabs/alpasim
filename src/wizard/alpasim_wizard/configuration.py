@@ -78,6 +78,7 @@ class ConfigurationManager:
         """Generate runtime configuration."""
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
         runtime_config = self._remove_none_values(runtime_config)
+        assert isinstance(runtime_config, dict)
 
         sceneset_path = getattr(getattr(cfg, "scenes", None), "sceneset_path", None)
         if sceneset_path is not None:
@@ -131,31 +132,31 @@ class ConfigurationManager:
 
         for c in service_containers:
             for inst in c.service_instances:
-                # A special configuration has been requested, where the sensorsim and
+                # A special configuration has been requested, where the renderer and
                 # physics service exist in the same process/at the same port. This logical
                 # branch handles that mapping.
-                if c.name == "physics" and inst.service_config.image == "*sensorsim*":
-                    logger.info("Mapping the physics service to sensorsim addresses")
-                    # get the sensorsim container
-                    sensorsim_containers = [
-                        sc for sc in service_containers if sc.name == "sensorsim"
+                if c.name == "physics" and inst.service_config.image == "*renderer*":
+                    logger.info("Mapping the physics service to renderer addresses")
+                    renderer_containers = [
+                        sc for sc in service_containers if sc.name == "renderer"
                     ]
-                    if (len(sensorsim_containers) != 1) or (
-                        len(sensorsim_containers[0].get_all_addresses()) != 1
+                    if (len(renderer_containers) != 1) or (
+                        len(renderer_containers[0].get_all_addresses()) != 1
                     ):
                         raise ValueError(
-                            "Expected exactly one sensorsim container/address"
+                            "Expected exactly one renderer container/address"
                         )
-                    sensorsim_address = sensorsim_containers[0].get_all_addresses()[0]
+                    renderer_address = renderer_containers[0].get_all_addresses()[0]
                     if inst.address is None:
                         raise ValueError("Physics service must have an address defined")
-                    inst.address.port = sensorsim_address.port
-                    logger.info("Mapped physics to sensorsim at %s", inst.address)
+                    inst.address.host = renderer_address.host
+                    inst.address.port = renderer_address.port
+                    logger.info("Mapped physics to renderer at %s", inst.address)
 
                 elif inst.address is None:
                     continue
 
-                network_service_name = "renderer" if c.name == "sensorsim" else c.name
+                network_service_name = c.name
                 if network_service_name in network_config:
                     address = str(inst.address)
                     network_config[network_service_name]["endpoints"].append(

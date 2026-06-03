@@ -118,12 +118,7 @@ class VideoModelConfig:
     # Request debug streams from the video model server. Forwarding them to the
     # driver is opt-in because most policies expect RGB camera inputs only.
     return_hdmap_frames: bool = False
-    return_bev_map: bool = False
     forward_hdmap_to_driver: bool = False
-    forward_bev_to_driver: bool = False
-
-    bev_height_m: float = 40.0
-    bev_fov_deg: float = 50.0
 
     # "all" forwards every generated frame to the driver. "subsample" forwards
     # the nearest frames matching subsample_count/subsample_interval_us within
@@ -154,8 +149,6 @@ class VideoModelConfig:
                 f"frame_forwarding_mode must be 'all' or 'subsample', "
                 f"got {self.frame_forwarding_mode!r}"
             )
-        if self.forward_bev_to_driver and not self.return_bev_map:
-            raise ValueError("forward_bev_to_driver=True requires return_bev_map=True.")
 
 
 class RendererKind(Enum):

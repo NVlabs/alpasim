@@ -17,7 +17,7 @@ Each service has two key parameters:
 
 ```yaml
 services:
-  sensorsim:
+  renderer:
     replicas_per_container: 4 # Number of service replicas per container
     gpus: [0, 1, 2, 3] # GPUs to create containers on
 ```
@@ -45,22 +45,22 @@ Total capacity = nr_gpus * replicas_per_container * n_concurrent_rollouts
 where **`n_concurrent_rollouts`** is the number of rollouts (simulation episodes) each service
 replica can process simultaneously. This controls how many scenes can be simulated in parallel.
 
-For sensorsim/NRE, this changed in recent NRE releases: each container may run a single NRE
-process with internal worker concurrency via `--max-workers`, instead of multiple replicas per
-container. In that case, think of effective per-container capacity as:
+For NRE-backed renderer deployments, this changed in recent NRE releases: each container may run a
+single NRE process with internal worker concurrency via `--max-workers`, instead of multiple
+replicas per container. In that case, think of effective per-container capacity as:
 
 ```
-effective sensorsim capacity = nr_gpus * max_workers * n_concurrent_rollouts
+effective renderer capacity = nr_gpus * max_workers * n_concurrent_rollouts
 ```
 
-If `replicas_per_container=1` and NRE runs with `--max-workers=4`, one sensorsim container can
+If `replicas_per_container=1` and NRE runs with `--max-workers=4`, one renderer container can
 still serve four render workers internally.
 
 All services should have similar total capacity to avoid bottlenecks. Example:
 
 ```yaml
 services:
-  sensorsim:
+  renderer:
     replicas_per_container: 1
     gpus: [0, 1]
 
@@ -74,7 +74,7 @@ services:
 
 runtime:
   endpoints:
-    sensorsim:
+    renderer:
       n_concurrent_rollouts: 4 # with --max-workers=4: 2 GPUs * 4 workers * 4 concurrent = 32
 
     driver:
@@ -84,9 +84,9 @@ runtime:
       n_concurrent_rollouts: 2 # 1 CPU * 16 replicas * 2 concurrent = 32
 ```
 
-For sensorsim specifically, tune these together:
+For NRE-backed renderer deployments, tune these together:
 
-- `services.sensorsim.replicas_per_container`
+- `services.renderer.replicas_per_container`
 - the NRE container's internal `--max-workers`
 - `runtime.endpoints.renderer.n_concurrent_rollouts`
 

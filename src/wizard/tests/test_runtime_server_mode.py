@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
 
+import pytest
 import yaml
 from alpasim_wizard.configuration import ConfigurationManager
 from alpasim_wizard.context import WizardContext
@@ -18,6 +19,7 @@ from alpasim_wizard.schema import (
     ServiceConfig,
 )
 from alpasim_wizard.services import build_container_set
+from alpasim_wizard.setup_omegaconf import validate_config
 from omegaconf import OmegaConf
 
 
@@ -59,7 +61,7 @@ def _cfg(tmp_path: Path, *, run_sim_services: list[str] | None = None):
     if run_sim_services is None:
         run_sim_services = [
             "driver",
-            "sensorsim",
+            "renderer",
             "physics",
             "trafficsim",
             "controller",
@@ -87,7 +89,7 @@ def _cfg(tmp_path: Path, *, run_sim_services: list[str] | None = None):
         ),
         services=SimpleNamespace(
             driver=_service(["driver", "--port={port}"]),
-            sensorsim=_service(["sensorsim", "--port={port}"]),
+            renderer=_service(["renderer", "--port={port}"]),
             physics=_service(["physics", "--port={port}"]),
             trafficsim=_service(["trafficsim", "--port={port}"]),
             controller=_service(["controller", "--port={port}"]),
@@ -148,7 +150,7 @@ def test_external_services_are_marked_unmanaged_in_network_config(
     ]
 
 
-def test_managed_sensorsim_is_written_as_renderer_endpoint(tmp_path: Path) -> None:
+def test_managed_renderer_is_written_as_renderer_endpoint(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     context = _context(cfg, baseport=6100)
     container_set = build_container_set(context, "uuid")
@@ -158,7 +160,7 @@ def test_managed_sensorsim_is_written_as_renderer_endpoint(tmp_path: Path) -> No
 
     network = yaml.safe_load((tmp_path / "generated-network-config.yaml").read_text())
     assert network["renderer"]["endpoints"] == [
-        {"address": "sensorsim-0:6101", "managed": True}
+        {"address": "renderer-0:6101", "managed": True}
     ]
     assert "sensorsim" not in network
 
@@ -179,3 +181,36 @@ def test_external_video_model_is_first_class_network_endpoint(
     assert "sensorsim" not in network
     assert "video_model" not in network
     assert "extra_services" not in network
+
+
+def test_run_sim_services_rejects_unset_renderer_service() -> None:
+    cfg = OmegaConf.create(
+        {
+            "wizard": {"run_sim_services": ["renderer"]},
+            "services": {"renderer": None},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=r"Services \['renderer'\].*set to null"):
+        validate_config(cfg)
+
+
+def test_combined_renderer_physics_maps_physics_to_renderer_container(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path, run_sim_services=["renderer", "physics", "runtime"])
+    cfg.services.physics.image = "*renderer*"
+    cfg.services.physics.command = ["noop"]
+    context = _context(cfg, baseport=6100)
+    container_set = build_container_set(context, "uuid")
+    manager = ConfigurationManager(str(tmp_path))
+
+    manager._generate_network_config(container_set.sim, cfg)
+
+    network = yaml.safe_load((tmp_path / "generated-network-config.yaml").read_text())
+    assert network["renderer"]["endpoints"] == [
+        {"address": "renderer-0:6100", "managed": True}
+    ]
+    assert network["physics"]["endpoints"] == [
+        {"address": "renderer-0:6100", "managed": True}
+    ]

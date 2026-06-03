@@ -3,11 +3,8 @@
 
 """Central registry of gRPC service stubs and endpoint helpers."""
 
-import asyncio
 from typing import Type
 
-from alpasim_grpc import API_VERSION_MESSAGE
-from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.controller_pb2_grpc import VDCServiceStub
 from alpasim_grpc.v0.egodriver_pb2_grpc import EgodriverServiceStub
 from alpasim_grpc.v0.physics_pb2_grpc import PhysicsServiceStub
@@ -19,30 +16,6 @@ from alpasim_runtime.config import (
     NetworkSimulatorConfig,
     RendererKind,
 )
-
-
-class VideoModelVersionProbeStub:
-    """Validation-only shim until the video model reports service versions."""
-
-    def __init__(self, channel):
-        self._channel = channel
-        self._stub = WorldModelServiceStub(channel)
-
-    def __getattr__(self, name: str):
-        return getattr(self._stub, name)
-
-    async def get_version(self, *args, **kwargs) -> VersionId:
-        timeout = kwargs.get("timeout")
-        if timeout is None:
-            await self._channel.channel_ready()
-        else:
-            await asyncio.wait_for(self._channel.channel_ready(), timeout=timeout)
-        return VersionId(
-            version_id="0.0.0",
-            git_hash="<video-model-unreported>",
-            grpc_api_version=API_VERSION_MESSAGE,
-        )
-
 
 # Central mapping of service names to their gRPC stub classes.
 # The keys match the attribute names in NetworkSimulatorConfig.
@@ -58,7 +31,7 @@ def get_renderer_stub_class(renderer_kind: RendererKind) -> Type:
     if renderer_kind == RendererKind.sensorsim:
         return SensorsimServiceStub
     if renderer_kind == RendererKind.video_model:
-        return VideoModelVersionProbeStub
+        return WorldModelServiceStub
     raise ValueError(f"Unknown renderer kind: {renderer_kind!r}")
 
 

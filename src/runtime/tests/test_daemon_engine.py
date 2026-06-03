@@ -127,6 +127,7 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
     assert info.nr_workers == 3
     assert info.renderer_type == "sensorsim"
     assert info.runtime_version.version_id == "runtime"
+    assert info.video_model_version.version_id == "video-model"
     assert [scene.scene_id for scene in info.scenes] == ["clipgt-a"]
     assert info.scenes[0].provider_kind == "usdz"
     assert info.scenes[0].metadata.camera_ids == ["camera_front", "camera_left"]
@@ -434,6 +435,7 @@ def _version_ids() -> RolloutMetadata.VersionIds:
         physics_version=VersionId(version_id="physics", git_hash="c"),
         egodriver_version=VersionId(version_id="driver", git_hash="d"),
         traffic_version=VersionId(version_id="traffic", git_hash="e"),
+        video_model_version=VersionId(version_id="video-model", git_hash="f"),
     )
 
 
@@ -478,6 +480,7 @@ def test_build_simulation_return_without_eval_results() -> None:
         request=request, version_ids=_version_ids(), results=[result]
     )
 
+    assert ret.video_model_version.version_id == "video-model"
     assert len(ret.rollout_returns) == 1
     rr = ret.rollout_returns[0]
     assert rr.success is True

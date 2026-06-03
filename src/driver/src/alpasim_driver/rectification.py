@@ -153,7 +153,7 @@ class _FthetaCamera:
             [intrinsics.principal_point_x, intrinsics.principal_point_y],
             dtype=np.float64,
         )
-        self._max_angle = intrinsics.max_angle
+        self._max_angle = intrinsics.max_angle if intrinsics.max_angle > 0.0 else None
         if intrinsics.HasField("linear_cde"):
             linear_c = intrinsics.linear_cde.linear_c
             linear_d = intrinsics.linear_cde.linear_d
@@ -180,7 +180,10 @@ class _FthetaCamera:
         theta = np.zeros_like(xy_norm)
         positive_z = z > 0.0
         theta[positive_z] = np.arctan2(xy_norm[positive_z], z[positive_z])
-        within_fov = theta <= self._max_angle + 1e-6
+        if self._max_angle is None:
+            within_fov = np.ones_like(theta, dtype=bool)
+        else:
+            within_fov = theta <= self._max_angle + 1e-6
 
         radii = np.polynomial.polynomial.polyval(theta, self._angle_to_pixeldist)
         # Avoid division by zero for rays along the optical axis.

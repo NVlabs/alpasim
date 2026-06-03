@@ -1,0 +1,13 @@
+# @package _global_
+# VaVam preset for video-model rendering.
+#
+# The base VaVam config defines a local camera extrinsics override for the
+# sensorsim/NuRec renderer. Video-model sessions seed from USDZ first-frame
+# JPEGs, so calibration must come from the recorded USDZ metadata instead.
+
+defaults:
+  - vavam@driver
+  - _self_
+
+runtime:
+  extra_cameras: []

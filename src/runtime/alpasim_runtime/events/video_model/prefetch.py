@@ -24,7 +24,11 @@ from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.video_model_service import ChunkResult, VideoModelService
 from alpasim_runtime.types import RuntimeCamera
-from alpasim_runtime.video_model.utils import build_trajectory_for_video_model
+from alpasim_runtime.video_model.utils import (
+    build_dynamic_world_state_for_video_model,
+    build_trajectory_for_video_model,
+)
+from alpasim_utils.scenario import TrafficObjects
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
@@ -173,8 +177,20 @@ class VideoModelPrefetchEvent(Event):
             self.chunk_size,
             frame_interval_us,
         )
+        traffic_objects = state.traffic_objs
+        if state.unbound.hidden_traffic_objs:
+            traffic_objects = TrafficObjects(
+                {**state.traffic_objs, **state.unbound.hidden_traffic_objs}
+            )
+        dynamic_state = build_dynamic_world_state_for_video_model(
+            traffic_objects,
+            self.chunk_start_us,
+            self.chunk_size,
+            frame_interval_us,
+        )
         chunk_result = await self.video_model.render_chunk(
-            trajectory_local_to_rig=trajectory
+            trajectory_local_to_rig=trajectory,
+            dynamic_state=dynamic_state,
         )
         self._emit_frames(chunk_result, queue)
 
@@ -235,19 +251,6 @@ class VideoModelPrefetchEvent(Event):
                             should_submit_to_driver=submit,
                         )
                     )
-
-        if self.video_model.config.forward_bev_to_driver:
-            mask = self._build_forwarding_mask(chunk_result.bev_frames)
-            for frame, submit in zip(chunk_result.bev_frames, mask, strict=True):
-                queue.submit(
-                    VideoModelFrameEvent(
-                        timestamp_us=frame.start_timestamp_us,
-                        frame=frame,
-                        camera_logical_id=frame.camera_logical_id,
-                        driver=self.driver,
-                        should_submit_to_driver=submit,
-                    )
-                )
 
     def _build_forwarding_mask(self, frames: list[ImageWithMetadata]) -> list[bool]:
         if not frames:

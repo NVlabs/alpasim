@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from alpasim_wizard.deployment.docker_compose import DockerComposeDeployment
+from alpasim_wizard.schema import RunMode
 
 
 def _deployment(tmp_path: Path, *, dry_run: bool) -> DockerComposeDeployment:
@@ -18,6 +19,8 @@ def _deployment(tmp_path: Path, *, dry_run: bool) -> DockerComposeDeployment:
             wizard=SimpleNamespace(
                 dry_run=dry_run,
                 log_dir=str(tmp_path),
+                debug_flags=SimpleNamespace(use_localhost=False),
+                run_mode=RunMode.ONESHOT,
             )
         )
     )
@@ -49,3 +52,25 @@ def test_docker_compose_dry_run_does_not_execute(
         deployment.deploy_all_services()
 
     assert "[DRY-RUN] Would execute: docker compose" in caplog.text
+
+
+def test_docker_compose_service_uses_configured_pull_policy(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path, dry_run=True)
+    container = SimpleNamespace(
+        name="renderer",
+        service_config=SimpleNamespace(
+            image="flashdreams-alpasim:local",
+            external_image=True,
+            pull_policy="never",
+        ),
+        volumes=[],
+        command="",
+        workdir=None,
+        environments=[],
+        gpu=None,
+        get_all_addresses=lambda: [],
+    )
+
+    service = deployment._to_docker_compose_service(container)
+
+    assert service["pull_policy"] == "never"

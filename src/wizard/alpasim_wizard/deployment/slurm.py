@@ -185,7 +185,11 @@ class SlurmDeployment:
         # Note that we cannot use --export=CUDA_VISIBLE_DEVICES=... with srun because SLURM
         # overrides CUDA_VISIBLE_DEVICES even when exported as an environment variable.
         # Instead we set it in the command line. Use export to allow chaining commands with &&.
-        s_gpu = f"export CUDA_VISIBLE_DEVICES={container.gpu};" if container.gpu else ""
+        s_gpu = (
+            f"export CUDA_VISIBLE_DEVICES={container.gpu};"
+            if container.gpu is not None
+            else ""
+        )
 
         # Separate environment variables:
         #  - 'VAR=value' format to export in bash. The value will be logged, not secure for secrets.

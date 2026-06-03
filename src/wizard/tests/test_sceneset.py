@@ -485,7 +485,7 @@ def test_get_artifact_info_includes_hf_revision(tmp_path: Path):
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
         "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
-        "uuid-hf,clipgt-hf-scene,1.0,sample_set/26.02/file.usdz,2025-01-01 00:00:00,huggingface,26.02\n"
+        "uuid-hf,clipgt-hf-scene,1.0,sample_set/26.01/file.usdz,2025-01-01 00:00:00,huggingface,26.01\n"
     )
     suites_csv.write_text("test_suite_id,scene_id\n")
     config = ScenesConfig(
@@ -497,7 +497,7 @@ def test_get_artifact_info_includes_hf_revision(tmp_path: Path):
     info = manager.get_artifact_info(["uuid-hf"])
     path, repo, revision = info["uuid-hf"]
     assert repo == ArtifactRepository.HUGGINGFACE
-    assert revision == "26.02"
+    assert revision == "26.01"
 
 
 def test_query_by_scene_ids_duplicate_nre_versions_warns(tmp_path: Path, caplog):

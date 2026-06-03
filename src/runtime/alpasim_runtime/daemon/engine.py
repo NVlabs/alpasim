@@ -97,6 +97,7 @@ def build_simulation_return(
         physics_version=version_ids.physics_version,
         driver_version=version_ids.egodriver_version,
         traffic_version=version_ids.traffic_version,
+        video_model_version=version_ids.video_model_version,
         rollout_returns=rollout_returns,
     )
 
@@ -144,6 +145,7 @@ def build_runtime_info(
         physics_version=version_ids.physics_version,
         driver_version=version_ids.egodriver_version,
         traffic_version=version_ids.traffic_version,
+        video_model_version=version_ids.video_model_version,
     )
 
 

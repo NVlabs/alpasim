@@ -9,7 +9,7 @@ eval:
   num_processes: 32
 
 services:
-  sensorsim:
+  renderer:
     environments:
       - OMP_NUM_THREADS=1
       - PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.7
@@ -50,6 +50,5 @@ runtime:
       skip: false
     controller:
       n_concurrent_rollouts: 4
-      skip: false
     trafficsim:
       skip: true

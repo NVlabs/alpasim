@@ -197,7 +197,7 @@ position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
 
 - **Traffic service** expects all communication as `local -> AABB` transformations.
 
-- **Sensorsim service** expects the rig trajectory in `local` frame plus per-camera calibration
+- **Renderer service** expects the rig trajectory in `local` frame plus per-camera calibration
   `rig->sensor_pose`, and the `local->AABB` trajectories for rendering dynamic objects.
 
 - **Logging:** `ActorPoses` log entries store every actor in the `AABB` frame (relative to the

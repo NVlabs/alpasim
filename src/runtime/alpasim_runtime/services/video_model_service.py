@@ -14,6 +14,7 @@ from alpasim_grpc.v0.common_pb2 import Pose, Trajectory
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.video_model_pb2 import (
     DebugOptions,
+    DynamicWorldState,
     Image,
     ImageFormat,
     SessionCloseRequest,
@@ -55,7 +56,6 @@ class ChunkResult:
     hdmap_frames_per_camera: dict[str, list[ImageWithMetadata]] = field(
         default_factory=dict
     )
-    bev_frames: list[ImageWithMetadata] = field(default_factory=list)
     raw_request: VideoChunkRequest | None = None
     raw_response: VideoChunkReturn | None = None
 
@@ -217,7 +217,6 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
         camera_specs: list[sensorsim_pb2.CameraSpec],
         rig_to_camera: list[Pose],
         initial_frames: list[tuple[bytes, ImageFormat]],
-        start_frame_offset: int = 0,
         debug_options: DebugOptions | None = None,
         text_prompt_positive: str | None = None,
     ) -> SessionId:
@@ -249,7 +248,6 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
                 positive=positive_prompt,
                 negative=self.config.text_prompt_negative,
             ),
-            start_frame_offset=start_frame_offset,
             camera_specs=camera_specs,
             rig_to_camera=rig_to_camera,
             initial_frames=image_protos,
@@ -257,17 +255,10 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
 
         if debug_options is not None:
             request.debug_options.CopyFrom(debug_options)
-        elif self.config.return_hdmap_frames or self.config.return_bev_map:
+        elif self.config.return_hdmap_frames:
             request.debug_options.CopyFrom(
                 DebugOptions(
                     return_hdmap_frames=self.config.return_hdmap_frames,
-                    return_bev_map=self.config.return_bev_map,
-                    bev_height_m=(
-                        self.config.bev_height_m if self.config.return_bev_map else 0.0
-                    ),
-                    bev_fov_deg=(
-                        self.config.bev_fov_deg if self.config.return_bev_map else 0.0
-                    ),
                 )
             )
 
@@ -288,7 +279,7 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
     async def render_chunk(
         self,
         trajectory_local_to_rig: Trajectory,
-        dynamic_actors: list[Any] | None = None,
+        dynamic_state: DynamicWorldState,
     ) -> ChunkResult:
         """Render one chunk along ``trajectory_local_to_rig``.
 
@@ -297,7 +288,6 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
         from this request trajectory; the optional trajectory in the response is
         retained only for wire compatibility with existing servers.
         """
-        del dynamic_actors  # Reserved for future dynamic actor conditioning.
         if self.skip:
             result = self._placeholder_chunk_result(trajectory_local_to_rig)
             self._is_first_chunk = False
@@ -310,11 +300,13 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
             session_id=self._session_id,
             rig_trajectory=trajectory_local_to_rig,
         )
+        request.dynamic_state.CopyFrom(dynamic_state)
 
         logger.info(
-            "Requesting video chunk: chunk_size=%d, is_first=%s",
+            "Requesting video chunk: chunk_size=%d, is_first=%s, dynamic_actors=%d",
             self.chunk_size,
             self._is_first_chunk,
+            len(request.dynamic_state.actors),
         )
 
         await self._broadcast(LogEntry(video_model_chunk_request=request))
@@ -328,7 +320,6 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
 
         rgb_frames_per_camera: dict[str, list[ImageWithMetadata]] = {}
         hdmap_frames_per_camera: dict[str, list[ImageWithMetadata]] = {}
-        bev_frames: list[ImageWithMetadata] = []
 
         for camera_output in response.camera_outputs:
             cam_id = camera_output.camera_logical_id
@@ -366,23 +357,11 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
             if cam_hdmap:
                 hdmap_frames_per_camera[cam_id] = cam_hdmap
 
-        for i, bev_frame in enumerate(response.bev_map_frames):
-            ts = self._request_frame_timestamp(i, trajectory_local_to_rig)
-            bev_frames.append(
-                ImageWithMetadata(
-                    start_timestamp_us=ts,
-                    end_timestamp_us=ts,
-                    image_bytes=bev_frame.data,
-                    camera_logical_id="bev_map",
-                )
-            )
-
         self._is_first_chunk = False
 
         return ChunkResult(
             rgb_frames_per_camera=rgb_frames_per_camera,
             hdmap_frames_per_camera=hdmap_frames_per_camera,
-            bev_frames=bev_frames,
             raw_request=request,
             raw_response=response,
         )

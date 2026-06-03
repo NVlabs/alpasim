@@ -3,7 +3,7 @@
 
 syntax = "proto3";
 
-package alpadreams.video_model;
+package omnidreams.video_model;
 
 import "alpasim_grpc/v0/common.proto";
 import "alpasim_grpc/v0/sensorsim.proto";
@@ -12,19 +12,19 @@ service WorldModelService {
     rpc start_session(SessionRequest) returns (SessionId);
     rpc close_session(SessionCloseRequest) returns (common.Empty);
     rpc render_video_chunk(VideoChunkRequest) returns (VideoChunkReturn);
+    rpc get_version (common.Empty) returns (common.VersionId);
 }
-
 message StaticWorldMap {
     bytes hdmap_parquets = 1; // bytes of zip-compressed parquet files
 }
 
 message SessionId {
     string session_id = 1;
-    reserved 2;
 }
 
 enum ActorClassId {
     INVALID = 0;
+    // TODO: make sure the taxonomy makes sense w.r.t. the hdmap renderer.
     CAR = 1;
     TRUCK = 2;
     PEDESTRIAN = 3;
@@ -35,11 +35,12 @@ enum ActorClassId {
 message DynamicActor {
     ActorClassId class_id = 1;
     common.AABB bbox_dims = 2;
-    common.Trajectory trajectory = 3;
+    common.Trajectory trajectory = 3; // contains a time range
 }
 
 message DynamicWorldState {
     repeated DynamicActor actors = 1;
+    // TODO: traffic light states, etc
 }
 
 enum ImageFormat {
@@ -57,28 +58,26 @@ message Image {
     ImageFormat format = 2;
 }
 
+// Text prompt for guiding video generation
 message TextPrompt {
-    string positive = 1;
-    string negative = 2;
+    string positive = 1;  // Positive prompt describing desired content
+    string negative = 2;  // Negative prompt describing content to avoid
 }
 
+// Debug options for development and visualization
 message DebugOptions {
-    bool return_hdmap_frames = 1;
-    bool return_bev_map = 2;
-    bool skip_video_generation = 3;
-    float bev_height_m = 4;
-    float bev_fov_deg = 5;
+    bool return_hdmap_frames = 1;  // Return rendered HD map condition frames
+    bool skip_video_generation = 2;  // Skip video model inference, only render HDMap (fast exploration mode)
 }
 
 message SessionRequest {
-    reserved 2, 4;
-    StaticWorldMap static_world_map = 3;
-    TextPrompt text_prompt = 5;
-    int32 start_frame_offset = 6;
-    DebugOptions debug_options = 7;
-    repeated nre.grpc.protos.sensorsim.CameraSpec camera_specs = 8;
-    repeated Image initial_frames = 9;
-    repeated common.Pose rig_to_camera = 11;
+    StaticWorldMap static_world_map = 1;
+    TextPrompt text_prompt = 2;  // Optional text prompt for generation
+    DebugOptions debug_options = 3;      // Optional debug output options
+    repeated nre.grpc.protos.sensorsim.CameraSpec camera_specs = 4;  // One per view
+    repeated Image initial_frames = 5;            // One conditioning frame per view
+    repeated common.Pose rig_to_camera = 6; // Rig-to-camera extrinsics (one per view)
+    fixed64 random_seed = 7;  // Optional random seed for deterministic generation (0 = server chooses)
 }
 
 message SessionCloseRequest {
@@ -87,10 +86,11 @@ message SessionCloseRequest {
 
 message VideoChunkRequest {
     SessionId session_id = 1;
-    common.Trajectory rig_trajectory = 2;
-    DynamicWorldState dynamic_state = 3;
+	common.Trajectory rig_trajectory = 2;  // Ego rig trajectory
+    DynamicWorldState dynamic_state = 3; // within requested time range
 }
 
+// Per-camera output frames
 message CameraOutput {
     string camera_logical_id = 1;
     repeated Image rgb_frames = 2;
@@ -98,7 +98,6 @@ message CameraOutput {
 }
 
 message VideoChunkReturn {
-    reserved 1, 2, 3, 4;
-    repeated CameraOutput camera_outputs = 5;
-    repeated Image bev_map_frames = 6;
+    // Per-camera output frames
+    repeated CameraOutput camera_outputs = 1;
 }

@@ -68,6 +68,7 @@ message RuntimeInfo {
     common.VersionId physics_version = 8;
     common.VersionId driver_version = 9;
     common.VersionId traffic_version = 10;
+    common.VersionId video_model_version = 11;
 }
 
 // How per-timestep metric values should be reduced to a single scalar.
@@ -106,4 +107,5 @@ message SimulationReturn {
     common.VersionId traffic_version = 5;
 
     repeated RolloutReturn rollout_returns = 6;
+    common.VersionId video_model_version = 7;
 }
