@@ -369,8 +369,8 @@ jobs:
           PROJECT="gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.variant }}"
           echo "Using compose project: ${PROJECT}"
           cd "${LOCAL_OUTPUT_PATH}"
-          # --abort-on-container-failure provides a clear CI failure signal.
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --build --abort-on-container-failure --exit-code-from runtime-0 --remove-orphans
+          # runtime-0 is the one-shot service; backing services are long-running.
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" up --build --exit-code-from runtime-0 --remove-orphans
 
       - name: Collect compose logs and tear down
         if: always()
@@ -523,8 +523,8 @@ jobs:
           set -euo pipefail
           PROJECT="gha-tutorial-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cd "${LOCAL_OUTPUT_PATH}"
-          # Tutorial smoke intentionally scopes to the core simulation services.
-          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --abort-on-container-failure --exit-code-from runtime-0 --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
+          # Tutorial smoke intentionally scopes to core sim services; runtime-0 owns shutdown.
+          docker compose -f docker-compose.yaml --project-name "${PROJECT}" --profile sim up --build --exit-code-from runtime-0 --remove-orphans runtime-0 driver-0 physics-0 sensorsim-0 controller-0
 
       - name: Collect tutorial logs and tear down
         if: always()
