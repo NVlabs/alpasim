@@ -65,35 +65,17 @@ def build_trajdata_params(
     return params
 
 
-def scene_names_from_dataset_index(
+def scene_name_to_index_from_dataset(
     dataset: UnifiedDataset,
-) -> dict[str, int] | None:
-    """Resolve scene names from trajdata's ``_scene_index`` without loading.
-
-    trajdata stores scene cache paths as
-    ``{cache}/{env_name}/{scene_name}/scene_metadata_dt{dt:.2f}.dill``, so the
-    scene name is just ``path.parent.name``. Parsing the path is O(N) string
-    work instead of O(N) ``dill.load`` calls, which is 4–5 orders of magnitude
-    faster on datasets like NuPlan with 10k+ scenes.
-
-    Returns ``None`` if the index doesn't exist or the layout doesn't match the
-    expected structure, so callers can fall back to ``dataset.get_scene``.
-
-    Note: ``_scene_index`` is a trajdata-internal attribute. If trajdata changes
-    its cache layout, this returns ``None`` and we degrade to the slow path.
-    """
-    scene_index = getattr(dataset, "_scene_index", None)
-    if not scene_index:
-        return None
-
-    result: dict[str, int] = {}
-    for idx, raw_path in enumerate(scene_index):
-        path = Path(raw_path)
-        scene_name = path.parent.name
-        if not scene_name or scene_name == path.anchor:
-            return None
-        result[scene_name] = idx
-    return result
+) -> dict[str, int]:
+    """Resolve scene names through trajdata's public scene lookup API."""
+    try:
+        return dict(dataset.scene_name_to_index)
+    except AttributeError as exc:
+        raise RuntimeError(
+            "trajdata UnifiedDataset must expose scene_name_to_index. "
+            "Update trajdata-alpasim to a version with the scene lookup API."
+        ) from exc
 
 
 def trajdata_provider_config_to_params(
@@ -220,17 +202,12 @@ class TrajdataSceneProvider:
             raise UnknownSceneError(scene_id)
 
         asset_base_path = self._asset_base_path_map.get(scene.env_name)
-        map_api = getattr(self._dataset, "_map_api", None)
-        vector_map_params = getattr(self._dataset, "vector_map_params", None)
-
-        scene_cache = self._dataset.cache_class(
-            self._dataset.cache_path, scene, self._dataset.augmentations
-        )
+        scene_cache = self._dataset.get_scene_cache(scene)
 
         data_source = TrajdataDataSource(
             scene=scene,
-            map_api=map_api,
-            vector_map_params=vector_map_params,
+            map_api=self._dataset.map_api,
+            vector_map_params=self._dataset.vector_map_params,
             scene_cache=scene_cache,
             smooth_trajectories=self._smooth_trajectories,
             asset_base_path=asset_base_path,
@@ -373,20 +350,7 @@ def _build_trajdata_scene_provider(
     dataset = UnifiedDataset(**params)
     logger.info("Created UnifiedDataset with %d scenes", dataset.num_scenes())
 
-    scene_id_to_idx = scene_names_from_dataset_index(dataset)
-    if scene_id_to_idx is None:
-        logger.warning(
-            "trajdata _scene_index unavailable; falling back to per-scene "
-            "deserialization. This may be slow for large datasets."
-        )
-        scene_id_to_idx = {}
-        for idx in range(dataset.num_scenes()):
-            try:
-                scene = dataset.get_scene(idx)
-                scene_id_to_idx[scene.name] = idx
-            except Exception as e:
-                logger.warning("Failed to get scene at index %d: %s", idx, e)
-                continue
+    scene_id_to_idx = scene_name_to_index_from_dataset(dataset)
     logger.info("Built scene_id mapping for %d scenes", len(scene_id_to_idx))
 
     asset_base_path_map: dict[str, str] = {}
