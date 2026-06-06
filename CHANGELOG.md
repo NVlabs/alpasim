@@ -2,6 +2,14 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Eval Modifications (05.06.26)
+Eval aggregation now writes `results-summary.json` with per-rollout pass/fail status,
+scene scores, failed rollout rows, and driver `drive` RPC latency from telemetry.
+Ground-truth scoring adds `progress_rel_to_total` and `gt_dist_traveled_m`; tune or
+disable scoring with `eval.scene_score`, and set `eval.allow_aggregation_with_failed_rollouts=true`
+to aggregate successful rollouts while preserving failed rollout records.
+
+
 ## May/June 2026 public sync updates (02.06.26)
 
 This sync focuses on renderer unification, video-model support, scene catalog

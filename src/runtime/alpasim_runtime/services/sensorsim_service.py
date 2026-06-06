@@ -36,6 +36,7 @@ from alpasim_utils.types import ImageWithMetadata
 logger = logging.getLogger(__name__)
 
 WILDCARD_SCENE_ID = "*"
+SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S = (0.5, 2.0)
 
 
 class SensorsimService(ServiceBase[SensorsimServiceStub]):
@@ -137,6 +138,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                     "sensorsim",
                     self.stub.get_available_cameras,
                     request,
+                    unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
                 )
 
                 await session_info.broadcaster.broadcast(
@@ -177,6 +179,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 "sensorsim",
                 self.stub.get_available_ego_masks,
                 request,
+                unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
             )
 
             await session_info.broadcaster.broadcast(
@@ -338,7 +341,11 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         )
 
         response: AggregatedRenderReturn = await profiled_rpc_call(
-            "render_aggregated", "sensorsim", self.stub.render_aggregated, request
+            "render_aggregated",
+            "sensorsim",
+            self.stub.render_aggregated,
+            request,
+            unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
         images_with_metadata = []
@@ -398,7 +405,11 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         await session_info.broadcaster.broadcast(LogEntry(render_request=request))
 
         response: RGBRenderReturn = await profiled_rpc_call(
-            "render_rgb", "sensorsim", self.stub.render_rgb, request
+            "render_rgb",
+            "sensorsim",
+            self.stub.render_rgb,
+            request,
+            unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
         return ImageWithMetadata(

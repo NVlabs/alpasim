@@ -411,21 +411,32 @@ class DriverResponseAtTime:
     reasoning_text: str | None = None
 
     @staticmethod
-    def _extract_debug_extra(driver_response: DriveResponse) -> dict | None:
-        """Extract and unpickle the debug *extra* dict from a driver response.
+    def _extract_debug_extra(
+        driver_response: DriveResponse,
+        parse_unstructured_debug_info: bool = False,
+    ) -> dict | None:
+        """Extract the debug *extra* dict from a driver response when enabled.
+
+        Parsing ``unstructured_debug_info`` uses pickle-encoded driver-controlled
+        bytes, so it is disabled by default and should only be enabled for
+        trusted drivers.
 
         Args:
             driver_response: The :pyclass:`DriveResponse` containing the
+                ``unstructured_debug_info`` bytes.
+            parse_unstructured_debug_info: Whether to parse pickle-encoded
                 ``unstructured_debug_info`` bytes.
 
         Returns:
             The unpickled dictionary if available and valid, otherwise ``None``.
         """
+        if not parse_unstructured_debug_info:
+            return None
+
         try:
             dbg_bytes = driver_response.debug_info.unstructured_debug_info
             if not dbg_bytes:
-                # Only info, as this spams a lot
-                logger.info("No unstructured debug info found")
+                logger.debug("No unstructured debug info found")
                 return None
             extra = pickle.loads(dbg_bytes)
             if isinstance(extra, dict):
@@ -507,12 +518,20 @@ class DriverResponseAtTime:
         query_time_us: int,
         ego_raabb: RAABB,
         ego_coords_rig_to_aabb_center: geometry.Pose,
+        parse_unstructured_debug_info: bool = False,
     ) -> "DriverResponseAtTime":
-        """Helper function. Create DriverResponseAtTime from DriveResponse."""
+        """Create DriverResponseAtTime from DriveResponse.
+
+        ``unstructured_debug_info`` parsing is disabled by default because it
+        uses pickle-encoded driver-controlled bytes.
+        """
         safety_monitor_safe = None
         command_name = None
         reasoning_text = None
-        extra = DriverResponseAtTime._extract_debug_extra(driver_response)
+        extra = DriverResponseAtTime._extract_debug_extra(
+            driver_response,
+            parse_unstructured_debug_info=parse_unstructured_debug_info,
+        )
         if extra is not None:
             if "safe_trajectory" in extra:
                 safety_monitor_safe = extra["safe_trajectory"]
@@ -586,6 +605,9 @@ class DriverResponses:
     per_timestep_driver_responses: list[DriverResponseAtTime] = dataclasses.field(
         default_factory=list
     )
+    # Disabled by default because unstructured debug info is pickle-encoded
+    # driver-controlled data. Trusted callers can opt in explicitly.
+    parse_unstructured_debug_info: bool = False
     artists: dict[str, list[plt.Artist]] | None = None
     camera_artists_by_ax: dict[int, dict[str, list[plt.Artist] | plt.Artist | None]] = (
         dataclasses.field(default_factory=dict)
@@ -610,6 +632,7 @@ class DriverResponses:
                 query_time_us,
                 self.ego_raabb,
                 self.ego_coords_rig_to_aabb_center,
+                parse_unstructured_debug_info=self.parse_unstructured_debug_info,
             )
         )
 

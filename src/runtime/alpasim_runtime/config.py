@@ -301,6 +301,7 @@ class SimulationConfig:
     )
 
     route_generator_type: RouteGeneratorType = RouteGeneratorType.MAP
+    route_start_offset_m: float = 0.0
 
     # Whether to send optional messages to the driver
     send_recording_ground_truth: bool = False

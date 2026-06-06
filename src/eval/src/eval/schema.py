@@ -158,12 +158,29 @@ class MetricAggregationModifiersConfig:
 
 
 @dataclass
+class SceneScoreConfig:
+    # Whether to compute scene scores in results-summary.json.
+    enabled: bool = True
+    # Progress at or above this value receives full progress score.
+    progress_saturation_threshold: float = 0.8
+    # Short ground-truth clips receive full progress score.
+    min_gt_distance_for_full_score_m: float = 5.0
+
+
+@dataclass
 class EvalConfig:
     # Whether evaluation is enabled. Set to false to skip eval during simulation.
     enabled: bool = True
+    # Whether to aggregate evaluation results when one or more rollouts failed.
+    allow_aggregation_with_failed_rollouts: bool = False
+    # Whether to parse DriveResponse.debug_info.unstructured_debug_info.
+    # This field is currently pickle-encoded by some internal drivers and should
+    # be disabled for untrusted driver images.
+    parse_unstructured_debug_info: bool = True
     # Configuration for scorers that have free parameters.
     scorers: ScorersConfig = MISSING
     aggregation_modifiers: MetricAggregationModifiersConfig = MISSING
+    scene_score: SceneScoreConfig = MISSING
     # Number of processes to use for parallel processing of ASL reading and
     # metric computation.
     num_processes: int = MISSING

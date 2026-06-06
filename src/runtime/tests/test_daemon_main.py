@@ -16,6 +16,7 @@ from alpasim_runtime.errors import UnknownSceneError
 from alpasim_runtime.simulate.__main__ import _serve, create_arg_parser, run_simulation
 
 import grpc
+from eval.aggregation.failed_rollouts import FailedRollout
 
 
 class _AbortContext:
@@ -529,6 +530,139 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         (rollout_spec.scenario_id, rollout_spec.nr_rollouts)
         for rollout_spec in request.rollout_specs
     ] == [("clipgt-a", 2), ("clipgt-b", 1)]
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_does_not_aggregate_failed_rollouts_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_config = SimpleNamespace(
+        user=SimpleNamespace(nr_workers=1),
+    )
+    fake_eval_config = SimpleNamespace(run_in_runtime=True, enabled=True)
+    _patch_one_shot_inputs(
+        monkeypatch,
+        fake_config=fake_config,
+        fake_eval_config=fake_eval_config,
+        request=runtime_pb2.SimulationRequest(
+            rollout_specs=[
+                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+            ]
+        ),
+    )
+
+    simulation_return = _make_simulation_return(
+        [
+            ("clipgt-a", True, None),
+            ("clipgt-b", False, "Maximum allowed size exceeded"),
+        ]
+    )
+    fake_engine = SimpleNamespace(
+        startup=AsyncMock(),
+        simulate=AsyncMock(return_value=simulation_return),
+        shutdown=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.DaemonEngine",
+        Mock(return_value=fake_engine),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.merge_metrics_files",
+        Mock(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.generate_metrics_plot",
+        Mock(return_value="/tmp/log/metrics_plot.png"),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.get_run_name",
+        Mock(return_value="run-name"),
+    )
+    run_aggregation_from_runtime = Mock(return_value=True)
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.run_aggregation_from_runtime",
+        run_aggregation_from_runtime,
+    )
+
+    success = await run_simulation(_make_one_shot_args())
+
+    assert success is False
+    fake_engine.shutdown.assert_awaited_once()
+    run_aggregation_from_runtime.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_aggregates_failed_rollouts_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_config = SimpleNamespace(
+        user=SimpleNamespace(nr_workers=1),
+    )
+    fake_eval_config = SimpleNamespace(
+        run_in_runtime=True,
+        enabled=True,
+        allow_aggregation_with_failed_rollouts=True,
+    )
+    _patch_one_shot_inputs(
+        monkeypatch,
+        fake_config=fake_config,
+        fake_eval_config=fake_eval_config,
+        request=runtime_pb2.SimulationRequest(
+            rollout_specs=[
+                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+            ]
+        ),
+    )
+
+    simulation_return = _make_simulation_return(
+        [
+            ("clipgt-a", True, None),
+            ("clipgt-b", False, "Maximum allowed size exceeded"),
+        ]
+    )
+    fake_engine = SimpleNamespace(
+        startup=AsyncMock(),
+        simulate=AsyncMock(return_value=simulation_return),
+        shutdown=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.DaemonEngine",
+        Mock(return_value=fake_engine),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.merge_metrics_files",
+        Mock(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.generate_metrics_plot",
+        Mock(return_value="/tmp/log/metrics_plot.png"),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.get_run_name",
+        Mock(return_value="run-name"),
+    )
+    run_aggregation_from_runtime = Mock(return_value=True)
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.run_aggregation_from_runtime",
+        run_aggregation_from_runtime,
+    )
+
+    success = await run_simulation(_make_one_shot_args())
+
+    assert success is True
+    fake_engine.shutdown.assert_awaited_once()
+    failed_rollouts = run_aggregation_from_runtime.call_args.kwargs["failed_rollouts"]
+    assert failed_rollouts == [
+        FailedRollout(
+            run_name="run-name",
+            run_uuid=None,
+            clipgt_id="clipgt-b",
+            rollout_id="failed-1",
+            error="Maximum allowed size exceeded",
+        )
+    ]
 
 
 @pytest.mark.asyncio

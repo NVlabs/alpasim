@@ -2,6 +2,8 @@
 *
 
 # Only include what's needed for the runtime
+!src/
+!src/grpc/
 !src/runtime/**
 !src/grpc/**
 !src/utils/**
@@ -16,6 +18,9 @@
 !src/wizard/**
 !plugins/internal/**
 !plugins/transfuser_driver/**
+!e2e_challenge/
+!e2e_challenge/starter_kit/
+!e2e_challenge/starter_kit/**
 !pyproject.toml
 
 # Exclude specific runtime directories/files we don't need

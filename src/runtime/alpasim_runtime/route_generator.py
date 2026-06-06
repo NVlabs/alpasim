@@ -21,11 +21,13 @@ class RouteGenerator(ABC):
     the responsibility of the subclasses to populate the local-frame waypoints and optionally
     to extend the waypoints when the end of the recorded trajectory is reached. The RouteGenerator
     is responsible for generating the waypoints for the provided pose, populating waypoints up to
-    80m from the current position.
+    80m from the current position. Optionally, one can specify a starting offset for the generated
+    route, which drops waypoints before the offset distance from the current position.
     """
 
     NUM_WAYPOINTS: int = 20
-    DISTANCE_BETWEEN_WAYPOINTS: float = 80.0 / (
+    ROUTE_LOOKAHEAD_DISTANCE_M: float = 80.0
+    DISTANCE_BETWEEN_WAYPOINTS: float = ROUTE_LOOKAHEAD_DISTANCE_M / (
         NUM_WAYPOINTS - 1.0
     )  # 80 m desired length of traj
     BAD_LANE_CONNECTION_ANGLE_THRESHOLD_DEG: float = (
@@ -38,6 +40,7 @@ class RouteGenerator(ABC):
         recorded_waypoints_in_local: np.ndarray,
         vector_map: VectorMap,
         route_generator_type: RouteGeneratorType,
+        route_start_offset_m: float = 0.0,
     ) -> "RouteGenerator":
         """
         Factory method to create a RouteGenerator
@@ -45,24 +48,38 @@ class RouteGenerator(ABC):
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
           vector_map: the map data
           route_generator_type: the type of route generator to create
+          route_start_offset_m: approximate distance ahead of the ego projection where routes start
         Returns:
           A route generator of the specified type
         """
         if route_generator_type == RouteGeneratorType.RECORDED:
-            return RouteGeneratorRecorded(recorded_waypoints_in_local)
+            return RouteGeneratorRecorded(
+                recorded_waypoints_in_local,
+                route_start_offset_m=route_start_offset_m,
+            )
         elif route_generator_type == RouteGeneratorType.MAP:
-            return RouteGeneratorMap(recorded_waypoints_in_local, vector_map)
+            return RouteGeneratorMap(
+                recorded_waypoints_in_local,
+                vector_map,
+                route_start_offset_m=route_start_offset_m,
+            )
         else:
             raise ValueError(f"Invalid route generator type: {route_generator_type}")
 
-    def __init__(self, rig_waypoints_in_local: np.ndarray) -> None:
+    def __init__(
+        self, rig_waypoints_in_local: np.ndarray, route_start_offset_m: float = 0.0
+    ) -> None:
         """
         Initialize the route generator with the rig waypoints in the local frame
         Args:
           rig_waypoints_in_local: the waypoints in the local frame. (N, 3) array
+          route_start_offset_m: distance ahead of the ego projection where routes start
         """
         if len(rig_waypoints_in_local) < 2:
             raise ValueError("At least two waypoints are required")
+        if route_start_offset_m < 0.0:
+            raise ValueError("route_start_offset_m must be non-negative")
+        self._route_start_offset_m = route_start_offset_m
         self._route_polyline_in_local = Polyline(points=rig_waypoints_in_local.copy())
         # Note: downsample to remove redundant/noisy waypoints, especially when the vehicle is
         # approximately stationary during recording
@@ -115,7 +132,23 @@ class RouteGenerator(ABC):
 
         route_polyline_in_rig = route_polyline_in_rig.zero_out_z()
 
-        return route_polyline_in_rig
+        return self._trim_route_start(route_polyline_in_rig)
+
+    def _trim_route_start(self, polyline: Polyline) -> Polyline:
+        """Drop route waypoints before the configured start offset."""
+        if self._route_start_offset_m == 0.0 or len(polyline) == 0:
+            return polyline
+
+        cumulative_distances = np.concatenate(
+            ([0.0], np.cumsum(polyline.segment_lengths))
+        )
+        first_index = int(
+            np.searchsorted(cumulative_distances, self._route_start_offset_m)
+        )
+        if first_index >= len(polyline):
+            return Polyline.create_empty(dimension=polyline.dimension)
+
+        return Polyline(points=polyline.waypoints[first_index:].copy())
 
     def _ensure_sufficient_waypoints(self, current_position: np.ndarray) -> None:
         """
@@ -138,7 +171,7 @@ class RouteGenerator(ABC):
         remaining_distance = cumulative_from_point[-1]
 
         # Required distance for our waypoints
-        required_distance = self.DISTANCE_BETWEEN_WAYPOINTS * (self.NUM_WAYPOINTS - 1)
+        required_distance = self.ROUTE_LOOKAHEAD_DISTANCE_M
 
         # Keep extending until we have enough distance
         while remaining_distance < required_distance:
@@ -231,13 +264,21 @@ class RouteGeneratorRecorded(RouteGenerator):
     determine the route.
     """
 
-    def __init__(self, recorded_waypoints_in_local: np.ndarray) -> None:
+    def __init__(
+        self,
+        recorded_waypoints_in_local: np.ndarray,
+        route_start_offset_m: float = 0.0,
+    ) -> None:
         """
         Initialize the route generator (recorded waypoints are passed through unmodified)
         Args:
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
+          route_start_offset_m: distance ahead of the ego projection where routes start
         """
-        super().__init__(recorded_waypoints_in_local)
+        super().__init__(
+            recorded_waypoints_in_local,
+            route_start_offset_m=route_start_offset_m,
+        )
 
     def _extend_waypoints(self) -> bool:
         """Recorded routes cannot be extended beyond the recording."""
@@ -256,7 +297,10 @@ class RouteGeneratorMap(RouteGenerator):
     OFF_MAP_THRESHOLD_M: float = 10.0  # [m] maximum distance to the original trajectory
 
     def __init__(
-        self, recorded_waypoints_in_local: np.ndarray, vector_map: VectorMap
+        self,
+        recorded_waypoints_in_local: np.ndarray,
+        vector_map: VectorMap,
+        route_start_offset_m: float = 0.0,
     ) -> None:
         """
         Initialize the route generator with the rig waypoints in the local frame
@@ -264,10 +308,14 @@ class RouteGeneratorMap(RouteGenerator):
         Args:
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
           vector_map: the map data
+          route_start_offset_m: distance ahead of the ego projection where routes start
         """
         self._map = vector_map
         self._current_lane = None
-        super().__init__(self._determine_waypoints(recorded_waypoints_in_local))
+        super().__init__(
+            self._determine_waypoints(recorded_waypoints_in_local),
+            route_start_offset_m=route_start_offset_m,
+        )
 
     def _determine_waypoints(
         self, recorded_waypoints_in_local: np.ndarray

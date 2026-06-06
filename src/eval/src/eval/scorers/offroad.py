@@ -10,6 +10,7 @@ import shapely.ops
 from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from shapely import plotting as shapely_plotting
+from shapely.geometry.base import BaseGeometry
 from trajdata.maps import vec_map_elements
 
 from eval.data import AggregationType, MetricReturn, SimulationResult
@@ -32,21 +33,54 @@ def _get_center_line_yaw_at_projection(
     return np.arctan2(delta_xy[1], delta_xy[0])
 
 
+def _repair_polygonal_geometry(geom: BaseGeometry) -> BaseGeometry:
+    """Return valid polygonal geometry for map lanes.
+
+    Some lane boundaries produce slightly self-intersecting rings. GEOS
+    operations such as unary_union can throw TopologyException on those
+    polygons, breaking evaluation, so we repair if needed before further
+    processing.
+    """
+    if geom.is_valid:
+        return geom
+
+    repaired = shapely.make_valid(geom)
+    if repaired.geom_type == "GeometryCollection":
+        polygonal_parts = [
+            part
+            for part in repaired.geoms
+            if part.geom_type in {"Polygon", "MultiPolygon"}
+        ]
+        if polygonal_parts:
+            repaired = shapely.ops.unary_union(polygonal_parts)
+        else:
+            repaired = geom.buffer(0)
+
+    if not repaired.is_valid:
+        repaired = repaired.buffer(0)
+
+    return repaired
+
+
 def _get_lane_polygon(
     lane: vec_map_elements.RoadLane, road_width_m: float = 3.7
-) -> shapely.Polygon:
+) -> BaseGeometry:
     if lane.left_edge is not None:
-        return shapely.Polygon(
-            np.concatenate(
-                [
-                    lane.left_edge.points[..., :2],
-                    np.flip(lane.right_edge.points[..., :2], axis=0),
-                ],
-                axis=0,
+        return _repair_polygonal_geometry(
+            shapely.Polygon(
+                np.concatenate(
+                    [
+                        lane.left_edge.points[..., :2],
+                        np.flip(lane.right_edge.points[..., :2], axis=0),
+                    ],
+                    axis=0,
+                )
             )
         )
     else:
-        return shapely.LineString(lane.center.points[..., :2]).buffer(road_width_m / 2)
+        return _repair_polygonal_geometry(
+            shapely.LineString(lane.center.points[..., :2]).buffer(road_width_m / 2)
+        )
 
 
 def _compute_off_lane(

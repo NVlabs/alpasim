@@ -160,6 +160,7 @@ class EventBasedRollout:
             self.unbound.gt_ego_trajectory.positions,
             vector_map=self.unbound.vector_map,
             route_generator_type=self.unbound.route_generator_type,
+            route_start_offset_m=self.unbound.route_start_offset_m,
         )
 
         self._runtime_evaluator = RuntimeEvaluator(
@@ -465,9 +466,8 @@ class EventBasedRollout:
             ]
 
             # Enter the renderer's session: owns scene-specific camera
-            # registration and any warmup / session-bootstrap work (sensorsim
-            # does a warmup render; the video model opens a remote session
-            # with hdmap + initial frames).
+            # registration and any session-bootstrap work. The video model
+            # opens a remote session with hdmap + initial frames here.
             await async_stack.enter_async_context(
                 self.renderer_service.rollout_session(
                     uuid=str(self.unbound.rollout_uuid),

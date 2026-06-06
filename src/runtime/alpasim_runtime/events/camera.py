@@ -13,7 +13,6 @@ from alpasim_runtime.events.base import Event, EventPriority, EventQueue
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.sensorsim_service import SensorsimService
-from alpasim_runtime.telemetry.telemetry_context import tag_telemetry
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils import geometry
 
@@ -94,12 +93,7 @@ class CameraFrameEvent(Event):
             image_format=state.unbound.image_format,
             ego_mask_rig_config_id=state.unbound.ego_mask_rig_config_id,
         )
-        if state.did_warmup_render:
-            image = await render_coro
-        else:
-            with tag_telemetry("warmup"):
-                image = await render_coro
-            state.did_warmup_render = True
+        image = await render_coro
 
         state.step_context.track_task(self.driver.submit_image(image))
 
@@ -164,12 +158,7 @@ class CameraRenderFlushEvent(Event):
             image_format=rollout_state.unbound.image_format,
             ego_mask_rig_config_id=rollout_state.unbound.ego_mask_rig_config_id,
         )
-        if rollout_state.did_warmup_render:
-            images_with_metadata, driver_data = await render_coro
-        else:
-            with tag_telemetry("warmup"):
-                images_with_metadata, driver_data = await render_coro
-            rollout_state.did_warmup_render = True
+        images_with_metadata, driver_data = await render_coro
 
         for image in images_with_metadata:
             rollout_state.step_context.track_task(self.driver.submit_image(image))

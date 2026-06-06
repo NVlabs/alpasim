@@ -74,6 +74,26 @@ def minimal_eval_input(
     )
 
 
+def test_gt_dist_traveled_is_full_recording_distance(
+    minimal_eval_input: ScenarioEvalInput,
+    default_eval_config: EvalConfig,
+) -> None:
+    evaluator = SimpleScenarioEvaluator(default_eval_config)
+    result = evaluator.evaluate(minimal_eval_input)
+
+    gt_dist_metric = next(
+        metric
+        for metric in result.timestep_metrics
+        if metric.name == "gt_dist_traveled_m"
+    )
+
+    # The fixture is a 10-point straight line from x=0 through x=9.
+    # This value must be invariant per timestep so downstream row-removal
+    # modifiers cannot turn a long scene into a short-scene score override.
+    assert gt_dist_metric.values == pytest.approx([9.0] * 10)
+    assert result.aggregated_metrics["gt_dist_traveled_m"] == pytest.approx(9.0)
+
+
 class SimpleScenarioEvaluatorClass:
     """Test the ScenarioEvaluator class.
 
@@ -115,6 +135,26 @@ class SimpleScenarioEvaluatorClass:
         assert isinstance(result.timestep_metrics, list)
         assert isinstance(result.aggregated_metrics, dict)
         assert result.metrics_df is not None
+
+    def test_ground_truth_progress_metrics_are_additive(
+        self, minimal_eval_input: ScenarioEvalInput, default_eval_config: EvalConfig
+    ) -> None:
+        """Test that legacy progress metrics remain alongside scene-score progress."""
+        evaluator = SimpleScenarioEvaluator(default_eval_config)
+        result = evaluator.evaluate(minimal_eval_input)
+
+        metrics_by_name = {metric.name: metric for metric in result.timestep_metrics}
+
+        assert metrics_by_name["progress"].time_aggregation == AggregationType.LAST
+        assert (
+            metrics_by_name["progress_rel_to_total"].time_aggregation
+            == AggregationType.LAST
+        )
+        assert metrics_by_name["progress_rel"].time_aggregation == AggregationType.MIN
+        assert (
+            metrics_by_name["progress"].values
+            == metrics_by_name["progress_rel_to_total"].values
+        )
 
     def test_evaluate_returns_collision_metrics(
         self, minimal_eval_input: ScenarioEvalInput, default_eval_config: EvalConfig

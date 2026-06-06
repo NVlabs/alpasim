@@ -2,7 +2,9 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import hashlib
+import json
 import logging
+import math
 import os
 import pathlib
 from collections import Counter
@@ -15,6 +17,10 @@ import seaborn_polars as snl
 from rich.console import Console
 from rich.table import Table
 
+from eval.aggregation.failed_rollouts import (
+    FailedRolloutInput,
+    failed_rollout_summary_rows,
+)
 from eval.aggregation.modifiers import (
     AddCombinedEvent,
     MetricAggregationModifiers,
@@ -23,7 +29,9 @@ from eval.aggregation.modifiers import (
     RemoveTrajectoryWithEvent,
     get_removed_rows,
 )
+from eval.aggregation.scene_score import score_rollout
 from eval.data import AggregationType
+from eval.schema import SceneScoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +64,30 @@ DEFAULT_MODIFIERS = [
     RemoveTrajectoryWithEvent(pl.col("img_is_black") > 0.0),
     RemoveTimestepsAfterEvent(pl.col("offroad_or_collision") > 0.0),
 ]
+
+
+def _add_progress_clipped_rel_metric(
+    df_wide: pl.DataFrame,
+    agg_function_df: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    if "progress_rel_to_total" not in df_wide.columns:
+        return df_wide, agg_function_df
+    if "progress_clipped_rel" in df_wide.columns:
+        return df_wide, agg_function_df
+
+    df_wide = df_wide.with_columns(
+        pl.col("progress_rel_to_total").alias("progress_clipped_rel")
+    )
+    agg_function_df = pl.concat(
+        [
+            agg_function_df,
+            pl.DataFrame(
+                {"name": ["progress_clipped_rel"], "time_aggregation": ["last"]}
+            ),
+        ],
+        how="vertical",
+    )
+    return df_wide, agg_function_df
 
 
 def _combine_run_uuids_deterministically(run_uuids: pl.Series) -> str:
@@ -223,6 +255,117 @@ def write_metrics_results_txt(
     console.save_text(output_file)
 
     print(f"Results saved to {output_file}.")
+
+
+def _json_safe(value: object) -> object:
+    """Convert values from Polars rows into strict JSON-compatible values."""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def write_results_summary_json(
+    df_wide_avg_t: pl.DataFrame,
+    df_wide_avg_t_clip_rollout: pl.DataFrame,
+    output_path: str,
+    failed_rollouts: list[FailedRolloutInput] | None = None,
+    telemetry_summary: dict[str, object] | None = None,
+    scene_score_config: SceneScoreConfig | None = None,
+) -> None:
+    """Write per-rollout scoring results with run-level aggregate metrics."""
+    scene_score_config = scene_score_config or SceneScoreConfig()
+    scene_score_enabled = scene_score_config.enabled
+    if scene_score_enabled and scene_score_config.progress_saturation_threshold <= 0.0:
+        raise ValueError("progress_saturation_threshold must be positive")
+
+    metadata_columns = {"trajectory_uid", "rollout_uid"}
+    rollout_rows = []
+    sort_columns = [
+        col
+        for col in ["run_name", "run_uuid", "clipgt_id", "rollout_id"]
+        if col in df_wide_avg_t.columns
+    ]
+    df_rollouts = df_wide_avg_t.sort(sort_columns) if sort_columns else df_wide_avg_t
+    for row in df_rollouts.to_dicts():
+        metrics = {k: v for k, v in row.items() if k not in metadata_columns}
+        rollout_row = {
+            "run_uuid": row.get("run_uuid"),
+            "run_name": row.get("run_name"),
+            "clipgt_id": row.get("clipgt_id"),
+            "rollout_id": row.get("rollout_id"),
+            "metrics": metrics,
+        }
+        if scene_score_enabled:
+            score_result = score_rollout(
+                row,
+                scene_score_config,
+            )
+            passed = score_result.failure_reason is None
+            rollout_row.update(
+                {
+                    "status": "pass" if passed else "fail",
+                    "passed": passed,
+                    "score": score_result.score,
+                    "failure_reason": score_result.failure_reason,
+                    "score_metrics": {
+                        "progress_clipped_rel": row.get("progress_clipped_rel"),
+                        "progress_rel": row.get("progress_rel"),
+                        "progress_score": score_result.progress_score,
+                        "collision_at_fault": row.get("collision_at_fault"),
+                        "offroad": row.get("offroad"),
+                        "dist_to_gt_trajectory": row.get("dist_to_gt_trajectory"),
+                        "gt_dist_traveled_m": row.get("gt_dist_traveled_m"),
+                    },
+                }
+            )
+        else:
+            rollout_row.update(
+                {
+                    "status": "unscored",
+                    "passed": None,
+                    "score": None,
+                    "failure_reason": None,
+                    "score_metrics": None,
+                }
+            )
+        rollout_rows.append(rollout_row)
+
+    rollout_rows.extend(
+        failed_rollout_summary_rows(
+            failed_rollouts,
+            scene_score_enabled=scene_score_enabled,
+        )
+    )
+
+    payload = {
+        "schema_version": 1,
+        "scene_score_enabled": scene_score_enabled,
+        "rollouts": rollout_rows,
+        "metrics_results": df_wide_avg_t_clip_rollout.to_dicts(),
+    }
+    if scene_score_enabled:
+        payload["score_criteria"] = {
+            "progress_score": (
+                f"min(clamp(progress_clipped_rel, 0, 1) / "
+                f"{scene_score_config.progress_saturation_threshold}, 1.0)"
+            ),
+            "short_gt_distance_override": (
+                "progress_score = 1.0 when gt_dist_traveled_m "
+                f"< {scene_score_config.min_gt_distance_for_full_score_m}"
+            ),
+            "collision_at_fault": "== 0",
+            "offroad": "== 0",
+        }
+    if telemetry_summary:
+        payload["telemetry"] = telemetry_summary
+
+    output_file = os.path.join(output_path, "results-summary.json")
+    with open(output_file, "w") as f:
+        json.dump(_json_safe(payload), f, indent=2, sort_keys=True, allow_nan=False)
 
 
 def rename_legend_handles(ax: plt.Axes, trajectory_uid_df: pl.DataFrame) -> None:
@@ -546,6 +689,10 @@ def aggregate_and_write_metrics_results_txt(
     force_same_run: bool = False,
     output_path: str | None = None,
     additional_modifiers: list[MetricAggregationModifiers] | None = None,
+    failed_rollouts: list[FailedRolloutInput] | None = None,
+    run_level_metrics: dict[str, object] | None = None,
+    telemetry_summary: dict[str, object] | None = None,
+    scene_score_config: SceneScoreConfig | None = None,
 ) -> ProcessedMetricDFs:
     """
     Evaluate the eval parquet file.
@@ -609,6 +756,10 @@ def aggregate_and_write_metrics_results_txt(
     additional_modifiers = DEFAULT_MODIFIERS + (additional_modifiers or [])
     for modifier in additional_modifiers:
         df_wide_modified, agg_function_df = modifier(df_wide_modified, agg_function_df)
+    df_wide_modified, agg_function_df = _add_progress_clipped_rel_metric(
+        df_wide_modified,
+        agg_function_df,
+    )
 
     # Aggregate over time
     df_wide_avg_t = df_wide_modified.group_by(["trajectory_uid"]).agg(
@@ -639,18 +790,21 @@ def aggregate_and_write_metrics_results_txt(
         how="left",
     )
 
-    if output_path:
-        write_metrics_results_txt(
-            df_wide_avg_t_clip_rollout,
-            agg_function_df,
-            output_path,
-            additional_modifiers,
-            processing_warnings,
-        )
-        df_wide_avg_t_clip_rollout.write_parquet(
-            pathlib.Path(output_path) / "metrics_results.parquet"
-        )
-        plot_metrics_results(df_wide_avg_t_clip, trajectory_uid_df, output_path)
+    if run_level_metrics:
+        scalar_metrics = {
+            key: value
+            for key, value in run_level_metrics.items()
+            if value is None or isinstance(value, (bool, int, float, str))
+        }
+        if scalar_metrics:
+            df_wide_avg_t_clip_rollout = df_wide_avg_t_clip_rollout.with_columns(
+                [pl.lit(value).alias(key) for key, value in scalar_metrics.items()]
+                + [
+                    pl.lit(None).alias(f"{key}_std")
+                    for key in scalar_metrics
+                    if not key.endswith("_std")
+                ]
+            )
 
     df_wide_avg_t = df_wide_avg_t.join(
         trajectory_uid_df.select(
@@ -664,6 +818,27 @@ def aggregate_and_write_metrics_results_txt(
         on="trajectory_uid",
         how="left",
     )
+
+    if output_path:
+        write_metrics_results_txt(
+            df_wide_avg_t_clip_rollout,
+            agg_function_df,
+            output_path,
+            additional_modifiers,
+            processing_warnings,
+        )
+        df_wide_avg_t_clip_rollout.write_parquet(
+            pathlib.Path(output_path) / "metrics_results.parquet"
+        )
+        write_results_summary_json(
+            df_wide_avg_t,
+            df_wide_avg_t_clip_rollout,
+            output_path,
+            failed_rollouts=failed_rollouts,
+            telemetry_summary=telemetry_summary,
+            scene_score_config=scene_score_config,
+        )
+        plot_metrics_results(df_wide_avg_t_clip, trajectory_uid_df, output_path)
 
     return ProcessedMetricDFs(
         unprocessed_df=metrics_df,

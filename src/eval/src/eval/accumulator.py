@@ -282,6 +282,7 @@ class EvalDataAccumulator:
         driver_responses = DriverResponses(
             ego_coords_rig_to_aabb_center=self._ego_coords_rig_to_aabb_center,
             ego_trajectory_local=ego_renderable,
+            parse_unstructured_debug_info=self.cfg.parse_unstructured_debug_info,
         )
 
         # Add all accumulated driver responses

@@ -11,14 +11,21 @@ then call set_shared_rpc_tracking() in each worker with the returned values.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import threading
 import time
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from multiprocessing import Manager
 from multiprocessing.managers import SyncManager
 from typing import Any, Awaitable, Callable, MutableMapping
 
+import grpc
+
 from .telemetry_context import get_telemetry_tag, try_get_context
+
+logger = logging.getLogger(__name__)
 
 # Type alias for lock-like objects (context managers)
 LockLike = AbstractContextManager[bool]
@@ -89,6 +96,7 @@ async def profiled_rpc_call(
     service_type: str,
     stub_call: Callable[..., Awaitable[Any]],
     *args: Any,
+    unavailable_retry_delays_s: Sequence[float] = (),
     **kwargs: Any,
 ) -> Any:
     """
@@ -102,6 +110,45 @@ async def profiled_rpc_call(
     If not inside a TelemetryContext, the call still executes but no metrics
     are recorded.
     """
+    max_attempts = len(unavailable_retry_delays_s) + 1
+
+    for attempt_idx in range(1, max_attempts + 1):
+        try:
+            return await _profiled_rpc_call_once(
+                method_name,
+                service_type,
+                stub_call,
+                *args,
+                **kwargs,
+            )
+        except grpc.aio.AioRpcError as exc:
+            if exc.code() != grpc.StatusCode.UNAVAILABLE or attempt_idx == max_attempts:
+                raise
+
+            delay_s = unavailable_retry_delays_s[attempt_idx - 1]
+            logger.warning(
+                "%s RPC %s failed with %s on attempt %d/%d; retrying in %.1fs: %s",
+                service_type,
+                method_name,
+                exc.code().name,
+                attempt_idx,
+                max_attempts,
+                delay_s,
+                exc.details(),
+            )
+            await asyncio.sleep(delay_s)
+
+    raise RuntimeError("unreachable")
+
+
+async def _profiled_rpc_call_once(
+    method_name: str,
+    service_type: str,
+    stub_call: Callable[..., Awaitable[Any]],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Execute one profiled RPC attempt."""
     ctx = try_get_context()
 
     fut = stub_call(*args, **kwargs)

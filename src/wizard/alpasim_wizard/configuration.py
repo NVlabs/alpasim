@@ -11,7 +11,7 @@ import os
 import socket
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from alpasim_wizard.context import WizardContext
 from alpasim_wizard.schema import AlpasimConfig, RunMode
@@ -164,8 +164,18 @@ class ConfigurationManager:
                     )
 
         # Add external service addresses (for services running outside the deployment).
-        external_services = cfg.wizard.external_services
-        if external_services is not None:
+        # Unknown service names are routed into extra_services so plugin-owned
+        # endpoints stay out of the core public schema.
+        external_services_raw: Any = cfg.wizard.external_services
+        if external_services_raw is not None and OmegaConf.is_config(
+            external_services_raw
+        ):
+            external_services_raw = OmegaConf.to_container(
+                external_services_raw,
+                resolve=True,
+            )
+        if external_services_raw is not None:
+            external_services = cast(dict[str, list[str]], external_services_raw)
             for service_name, addresses in external_services.items():
                 if service_name not in CORE_SERVICE_NAMES:
                     raise ValueError(

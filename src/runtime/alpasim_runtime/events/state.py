@@ -133,7 +133,6 @@ class RolloutState:
         field(default_factory=dict)
     )
     pending_camera_flush_timestamps: set[int] = field(default_factory=set)
-    did_warmup_render: bool = False
 
     # === Inter-event data ===
     data_sensorsim_to_driver: bytes | None = None

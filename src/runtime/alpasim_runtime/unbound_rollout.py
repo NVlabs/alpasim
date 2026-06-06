@@ -183,6 +183,7 @@ class UnboundRollout:
     ego_aabb: AABB
     planner_delay_us: int
     route_generator_type: RouteGeneratorType
+    route_start_offset_m: float
     send_recording_ground_truth: bool
     nre_runid: str
     nre_version: str
@@ -309,6 +310,7 @@ class UnboundRollout:
             planner_delay_us=simulation_config.planner_delay_us,
             pose_reporting_interval_us=simulation_config.pose_reporting_interval_us,
             route_generator_type=simulation_config.route_generator_type,
+            route_start_offset_m=simulation_config.route_start_offset_m,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
             vehicle_config=vehicle,
             vector_map=data_source.map,

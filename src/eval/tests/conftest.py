@@ -58,6 +58,7 @@ def create_test_eval_config(
         "aggregation_modifiers": {
             "max_dist_to_gt_trajectory": float("inf"),
         },
+        "scene_score": {},
         "vec_map": {},
     }
     return OmegaConf.merge(OmegaConf.structured(EvalConfig), config_dict)

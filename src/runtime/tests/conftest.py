@@ -178,6 +178,7 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound.planner_delay_us = 0
     unbound.send_recording_ground_truth = False
     unbound.route_generator_type = "NONE"
+    unbound.route_start_offset_m = 0.0
     unbound.physics_update_mode = PhysicsUpdateMode.NONE
 
     unbound.transform_ego_coords_ds_to_aabb = _identity_pose()

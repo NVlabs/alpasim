@@ -380,6 +380,16 @@ def test_scan_local_usdz_directory(local_usdz_dir: Path):
     assert suite_ids == {LOCAL_SUITE_ID}
 
 
+def test_scan_local_usdz_directory_does_not_write_scene_database(
+    local_usdz_dir: Path,
+):
+    """Local scene catalogs stay in memory so scene mounts can be read-only."""
+    scan_local_usdz_directory(str(local_usdz_dir))
+
+    assert not (local_usdz_dir / "sim_scenes.csv").exists()
+    assert not (local_usdz_dir / "sim_suites.csv").exists()
+
+
 def test_scan_local_usdz_directory_not_exists():
     """Test that scanning a non-existent directory raises error."""
     with pytest.raises(ValueError, match="does not exist"):
@@ -417,6 +427,7 @@ def test_usdz_manager_from_cfg_with_local_usdz_dir(
 
     # Should have loaded scenes from local directory
     assert manager.sim_scenes.height == 3
+    assert manager.cache_dir == str(tmp_path)
 
     # Query by the "local" suite should work
     results = manager.query_by_suite_id(

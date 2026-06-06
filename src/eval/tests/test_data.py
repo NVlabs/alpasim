@@ -9,9 +9,11 @@ ensuring that RenderableTrajectory properly inherits from and initializes Trajec
 
 import numpy as np
 import pytest
+from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
 from alpasim_utils.geometry import Pose, Trajectory
 
-from eval.data import RAABB, DriverResponses, RenderableTrajectory
+from eval import data as eval_data
+from eval.data import RAABB, DriverResponseAtTime, DriverResponses, RenderableTrajectory
 
 
 @pytest.fixture
@@ -240,3 +242,119 @@ class TestDriverResponsesGetForTimeEmpty:
         )
         # Past last entry, but not matching the query_times_us[-1] corner case.
         assert dr.get_driver_response_for_time(500_000, "now") is None
+
+
+def _drive_response_with_debug(debug_payload: bytes) -> DriveResponse:
+    response = DriveResponse()
+    for i in range(2):
+        pose_at_time = response.trajectory.poses.add()
+        pose_at_time.timestamp_us = i * 100_000
+        pose_at_time.pose.vec.x = float(i)
+        pose_at_time.pose.vec.y = 0.0
+        pose_at_time.pose.vec.z = 0.0
+        pose_at_time.pose.quat.x = 0.0
+        pose_at_time.pose.quat.y = 0.0
+        pose_at_time.pose.quat.z = 0.0
+        pose_at_time.pose.quat.w = 1.0
+    response.debug_info.unstructured_debug_info = debug_payload
+    return response
+
+
+class TestDriverResponseDebugInfo:
+    def test_extract_debug_extra_does_not_unpickle_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = _drive_response_with_debug(b"not-a-trusted-pickle")
+
+        def fail_if_called(_payload: bytes) -> object:
+            raise AssertionError("pickle.loads should not be called")
+
+        monkeypatch.setattr(eval_data.pickle, "loads", fail_if_called)
+
+        assert DriverResponseAtTime._extract_debug_extra(response) is None
+
+    def test_from_drive_response_does_not_unpickle_by_default(
+        self, sample_raabb: RAABB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = _drive_response_with_debug(b"not-a-trusted-pickle")
+
+        def fail_if_called(_payload: bytes) -> object:
+            raise AssertionError("pickle.loads should not be called")
+
+        monkeypatch.setattr(eval_data.pickle, "loads", fail_if_called)
+
+        parsed = DriverResponseAtTime.from_drive_response(
+            response,
+            now_time_us=0,
+            query_time_us=100_000,
+            ego_raabb=sample_raabb,
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+        )
+
+        assert parsed.command_name is None
+        assert parsed.reasoning_text is None
+
+    def test_driver_responses_do_not_unpickle_by_default(
+        self, sample_raabb: RAABB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = _drive_response_with_debug(b"not-a-trusted-pickle")
+
+        def fail_if_called(_payload: bytes) -> object:
+            raise AssertionError("pickle.loads should not be called")
+
+        monkeypatch.setattr(eval_data.pickle, "loads", fail_if_called)
+        ego_traj = RenderableTrajectory.create_empty_with_bbox(sample_raabb)
+        driver_responses = DriverResponses(
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            ego_trajectory_local=ego_traj,
+        )
+
+        driver_responses.add_drive_response(
+            response,
+            now_time_us=0,
+            query_time_us=100_000,
+        )
+
+        parsed = driver_responses.per_timestep_driver_responses[0]
+        assert parsed.command_name is None
+        assert parsed.reasoning_text is None
+
+    def test_can_parse_unstructured_debug_info_when_enabled(
+        self, sample_raabb: RAABB
+    ) -> None:
+        response = _drive_response_with_debug(
+            eval_data.pickle.dumps({"command_name": "STRAIGHT"})
+        )
+
+        parsed = DriverResponseAtTime.from_drive_response(
+            response,
+            now_time_us=0,
+            query_time_us=100_000,
+            ego_raabb=sample_raabb,
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            parse_unstructured_debug_info=True,
+        )
+
+        assert parsed.command_name == "STRAIGHT"
+
+    def test_does_not_unpickle_unstructured_debug_info_when_disabled(
+        self, sample_raabb: RAABB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = _drive_response_with_debug(b"not-a-trusted-pickle")
+
+        def fail_if_called(_payload: bytes) -> object:
+            raise AssertionError("pickle.loads should not be called")
+
+        monkeypatch.setattr(eval_data.pickle, "loads", fail_if_called)
+
+        parsed = DriverResponseAtTime.from_drive_response(
+            response,
+            now_time_us=0,
+            query_time_us=100_000,
+            ego_raabb=sample_raabb,
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            parse_unstructured_debug_info=False,
+        )
+
+        assert parsed.command_name is None
+        assert parsed.reasoning_text is None

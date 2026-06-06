@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
+import json
 import os
 import pathlib
 import subprocess
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from eval.aggregation.modifiers import AddCombinedEvent
+from eval.aggregation.modifiers import AddCombinedEvent, RemoveTimestepsAfterEvent
 from eval.aggregation.processing import (
     ProcessedMetricDFs,
     UnprocessedMetricsDFs,
@@ -21,6 +22,8 @@ from eval.aggregation.processing import (
     aggregate_over_clips,
     get_avg_dist_between_incidents,
 )
+from eval.aggregation.telemetry import collect_driver_drive_rpc_latency
+from eval.schema import SceneScoreConfig
 
 
 # Fixtures for commonly used dataframes
@@ -65,6 +68,7 @@ def unified_metrics_df() -> pl.DataFrame:
     - offroad, img_is_black (max aggregation)
     - dist_traveled_m (max aggregation) - SCALED
     - progress (last aggregation)
+    - progress_rel_to_total (last aggregation)
 
     Test metrics:
     - metric_a (max aggregation) - SCALED
@@ -111,7 +115,11 @@ def unified_metrics_df() -> pl.DataFrame:
         ("offroad", "max", [0.0, 0.0, 1.0]),
         ("img_is_black", "max", [0.0, 0.0, 0.0]),
         ("dist_traveled_m", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
+        ("gt_dist_traveled_m", "last", [10.0, 10.0, 10.0]),
+        ("dist_to_gt_trajectory", "max", [0.0, 0.0, 0.0]),
         ("progress", "last", [0.1, 0.5, 0.8]),
+        ("progress_rel_to_total", "last", [0.1, 0.5, 0.8]),
+        ("progress_rel", "min", [0.9, 0.8, 0.8]),
         ("metric_a", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("metric_b", "mean", [0.5, 1.5, 2.5]),  # Will be scaled by multipliers
     ]
@@ -650,6 +658,438 @@ class TestAggregateAndWriteMetricsResultsTxt:
         # Check that output functions were called
         mock_write.assert_called_once()
         mock_plot.assert_called_once()
+        result_summary = temp_directory / "results-summary.json"
+        assert result_summary.exists()
+        summary_payload = json.loads(result_summary.read_text())
+        assert summary_payload["schema_version"] == 1
+        assert summary_payload["rollouts"]
+        assert summary_payload["metrics_results"]
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_results_summary_json_includes_driver_latency_telemetry(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test that run-level telemetry is included in aggregate outputs."""
+        del mock_plot
+
+        telemetry_summary = {
+            "driver_drive_rpc_duration_mean_s": 0.025,
+            "driver_drive_rpc_duration_sum_s": 2.5,
+            "driver_drive_rpc_duration_count": 100,
+            "source": "telemetry/metrics.prom",
+        }
+        aggregate_and_write_metrics_results_txt(
+            unified_metrics_df,
+            output_path=str(temp_directory),
+            run_level_metrics={
+                "driver_drive_rpc_duration_mean_s": 0.025,
+                "driver_drive_rpc_duration_sum_s": 2.5,
+                "driver_drive_rpc_duration_count": 100,
+            },
+            telemetry_summary=telemetry_summary,
+        )
+
+        summary_payload = json.loads(
+            (temp_directory / "results-summary.json").read_text()
+        )
+
+        assert summary_payload["telemetry"] == telemetry_summary
+        assert (
+            summary_payload["metrics_results"][0]["driver_drive_rpc_duration_mean_s"]
+            == 0.025
+        )
+        assert (
+            summary_payload["metrics_results"][0]["driver_drive_rpc_duration_count"]
+            == 100
+        )
+
+    def test_collect_driver_drive_rpc_latency_from_prometheus(
+        self,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test driver latency extraction from runtime telemetry metrics.prom."""
+        telemetry_dir = temp_directory / "job0" / "telemetry"
+        telemetry_dir.mkdir(parents=True)
+        drive_labels = 'method="drive",service="driver",tag="default",worker_id="0"'
+        warmup_labels = 'method="drive",service="driver",tag="warmup",worker_id="0"'
+        (telemetry_dir / "metrics.prom").write_text(
+            "\n".join(
+                [
+                    "# HELP rpc_duration_seconds RPC call duration in seconds",
+                    "# TYPE rpc_duration_seconds histogram",
+                    f"rpc_duration_seconds_count{{{drive_labels}}} 197.0",
+                    f"rpc_duration_seconds_sum{{{drive_labels}}} 0.26537357791676186",
+                    f"rpc_duration_seconds_count{{{warmup_labels}}} 10.0",
+                    f"rpc_duration_seconds_sum{{{warmup_labels}}} 99.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        telemetry_summary = collect_driver_drive_rpc_latency([temp_directory / "job0"])
+
+        assert telemetry_summary is not None
+        assert telemetry_summary["driver_drive_rpc_duration_count"] == 197
+        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
+            0.26537357791676186
+        )
+        assert telemetry_summary["driver_drive_rpc_duration_mean_s"] == pytest.approx(
+            0.26537357791676186 / 197.0
+        )
+
+    def test_collect_driver_drive_rpc_latency_preserves_utf8_label_escapes(
+        self,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test Prometheus label unescaping preserves UTF-8 text."""
+        telemetry_dir = temp_directory / "job0" / "telemetry"
+        telemetry_dir.mkdir(parents=True)
+        labels = 'method="drive",service="driver",tag="dev\\nβ",worker_id="0"'
+        (telemetry_dir / "metrics.prom").write_text(
+            "\n".join(
+                [
+                    f"rpc_duration_seconds_count{{{labels}}} 2.0",
+                    f"rpc_duration_seconds_sum{{{labels}}} 0.5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        telemetry_summary = collect_driver_drive_rpc_latency(
+            [temp_directory / "job0"],
+            tag="dev\nβ",
+        )
+
+        assert telemetry_summary is not None
+        assert telemetry_summary["driver_drive_rpc_duration_count"] == 2
+        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
+            0.5
+        )
+
+    def test_collect_driver_drive_rpc_latency_skips_incomplete_files(
+        self,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test files missing sum or count are not included in latency totals."""
+        complete_dir = temp_directory / "complete" / "telemetry"
+        complete_dir.mkdir(parents=True)
+        incomplete_dir = temp_directory / "incomplete" / "telemetry"
+        incomplete_dir.mkdir(parents=True)
+        labels = 'method="drive",service="driver",tag="default",worker_id="0"'
+        (complete_dir / "metrics.prom").write_text(
+            "\n".join(
+                [
+                    f"rpc_duration_seconds_count{{{labels}}} 4.0",
+                    f"rpc_duration_seconds_sum{{{labels}}} 1.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (incomplete_dir / "metrics.prom").write_text(
+            f"rpc_duration_seconds_count{{{labels}}} 100.0\n",
+            encoding="utf-8",
+        )
+
+        telemetry_summary = collect_driver_drive_rpc_latency(
+            [temp_directory / "complete", temp_directory / "incomplete"]
+        )
+
+        assert telemetry_summary is not None
+        assert telemetry_summary["driver_drive_rpc_duration_count"] == 4
+        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
+            1.0
+        )
+        assert telemetry_summary["files_used"] == [str(complete_dir / "metrics.prom")]
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_results_summary_json_contains_rollout_pass_fail_and_metrics_results(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test that results-summary.json reports per-rollout status and aggregate metrics."""
+        del mock_plot
+        metrics_df = unified_metrics_df.with_columns(
+            pl.when(
+                (pl.col("run_name") == "test_run_1")
+                & (pl.col("clipgt_id") == "clip1")
+                & (pl.col("rollout_id") == "rollout1")
+                & (pl.col("name") == "progress_rel_to_total")
+            )
+            .then(0.5)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+        metrics_df = metrics_df.with_columns(
+            pl.when(
+                (pl.col("run_name") == "test_run_1")
+                & (pl.col("clipgt_id") == "clip1")
+                & (pl.col("rollout_id") == "rollout2")
+                & (pl.col("name") == "dist_to_gt_trajectory")
+            )
+            .then(11.0)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+        processed = aggregate_and_write_metrics_results_txt(
+            metrics_df, output_path=str(temp_directory)
+        )
+
+        result_summary = temp_directory / "results-summary.json"
+        metrics_results = pl.read_parquet(temp_directory / "metrics_results.parquet")
+        payload = json.loads(result_summary.read_text())
+
+        assert len(payload["rollouts"]) == processed.df_wide_avg_t.height
+        assert len(payload["metrics_results"]) == metrics_results.height
+        assert set(payload["metrics_results"][0]).issuperset(metrics_results.columns)
+
+        partial = [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["clipgt_id"] == "clip1"
+            and row["rollout_id"] == "rollout1"
+        ][0]
+        assert partial["status"] == "pass"
+        assert partial["passed"] is True
+        assert partial["score"] == pytest.approx(0.625)
+        assert partial["score_metrics"]["progress_clipped_rel"] == 0.5
+        assert partial["metrics"]["progress_clipped_rel"] == 0.5
+        assert partial["metrics"]["progress"] == 0.5
+        assert partial["metrics"]["progress_rel_to_total"] == 0.5
+
+        diverged = [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["clipgt_id"] == "clip1"
+            and row["rollout_id"] == "rollout2"
+        ][0]
+        assert diverged["status"] == "pass"
+        assert diverged["passed"] is True
+        assert diverged["score"] == pytest.approx(0.625)
+        assert diverged["failure_reason"] is None
+
+        passed = [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["clipgt_id"] == "clip2"
+            and row["rollout_id"] == "rollout2"
+        ][0]
+        assert passed["status"] == "pass"
+        assert passed["passed"] is True
+        assert passed["score"] == pytest.approx(0.625)
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_scene_score_ignores_collision_and_offroad_after_deviation_cutoff(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        target = (
+            (pl.col("run_name") == "test_run_1")
+            & (pl.col("clipgt_id") == "clip1")
+            & (pl.col("rollout_id") == "rollout1")
+        )
+        metrics_df = unified_metrics_df.with_columns(
+            pl.when(target & (pl.col("name") == "collision_any"))
+            .then(0.0)
+            .when(target & (pl.col("name") == "dist_to_gt_trajectory"))
+            .then(pl.when(pl.col("timestamps_us") >= 2000).then(4.0).otherwise(0.0))
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            additional_modifiers=[
+                RemoveTimestepsAfterEvent(pl.col("dist_to_gt_trajectory") >= 4.0)
+            ],
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        rollout = [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["clipgt_id"] == "clip1"
+            and row["rollout_id"] == "rollout1"
+        ][0]
+
+        assert rollout["status"] == "pass"
+        assert rollout["passed"] is True
+        assert rollout["failure_reason"] is None
+        assert rollout["score"] == pytest.approx(0.625)
+        assert rollout["score_metrics"]["collision_at_fault"] == 0.0
+        assert rollout["score_metrics"]["offroad"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_scene_score_requires_score_metrics(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test that enabled scene scoring fails fast when inputs are missing."""
+        del mock_plot
+        metrics_df = unified_metrics_df.filter(pl.col("name") != "gt_dist_traveled_m")
+
+        with pytest.raises(ValueError, match="missing metric 'gt_dist_traveled_m'"):
+            aggregate_and_write_metrics_results_txt(
+                metrics_df,
+                output_path=str(temp_directory),
+            )
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_clamped_long_scene_does_not_get_short_gt_distance_override(
+        self,
+        mock_plot: MagicMock,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Large-deviation clipping must not change the full GT distance."""
+        del mock_plot
+        timestamps = [1000, 2000, 3000]
+        metrics_config = [
+            ("eval_relevant", "max", [1.0, 1.0, 1.0]),
+            ("collision_any", "max", [0.0, 0.0, 0.0]),
+            ("collision_front", "max", [0.0, 0.0, 0.0]),
+            ("collision_lateral", "max", [0.0, 0.0, 0.0]),
+            ("offroad", "max", [0.0, 0.0, 0.0]),
+            ("img_is_black", "max", [0.0, 0.0, 0.0]),
+            ("dist_traveled_m", "last", [0.0, 10.0, 100.0]),
+            ("dist_to_gt_trajectory", "max", [0.0, 11.0, 11.0]),
+            ("progress", "last", [0.0, 0.0, 1.0]),
+            ("progress_rel_to_total", "last", [0.0, 0.0, 1.0]),
+            ("progress_rel", "min", [1.0, 0.0, 1.0]),
+            ("gt_dist_traveled_m", "last", [100.0, 100.0, 100.0]),
+        ]
+        metrics_df = pl.DataFrame(
+            [
+                {
+                    "timestamps_us": ts,
+                    "values": value,
+                    "valid": True,
+                    "name": name,
+                    "time_aggregation": time_aggregation,
+                    "clipgt_id": "long-scene",
+                    "rollout_id": "rollout-1",
+                    "run_uuid": "run-uuid",
+                    "run_name": "run-name",
+                }
+                for name, time_aggregation, values in metrics_config
+                for ts, value in zip(timestamps, values)
+            ]
+        )
+
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            additional_modifiers=[
+                RemoveTimestepsAfterEvent(pl.col("dist_to_gt_trajectory") >= 4.0)
+            ],
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        rollout = payload["rollouts"][0]
+
+        assert rollout["metrics"]["gt_dist_traveled_m"] == 100.0
+        assert rollout["metrics"]["progress_clipped_rel"] == 0.0
+        assert rollout["score_metrics"]["progress_score"] == 0.0
+        assert rollout["score"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_scene_score_can_be_disabled_with_missing_score_metrics(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test that disabled scene scoring does not require score inputs."""
+        del mock_plot
+        metrics_df = unified_metrics_df.filter(
+            pl.col("name") != "progress_rel_to_total"
+        )
+
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            scene_score_config=SceneScoreConfig(enabled=False),
+            failed_rollouts=[
+                {
+                    "run_name": "test_run_1",
+                    "clipgt_id": "clip_failed",
+                    "rollout_id": "failed-0",
+                    "error": "Runtime failure",
+                }
+            ],
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        assert payload["scene_score_enabled"] is False
+        assert "score_criteria" not in payload
+        unscored = [row for row in payload["rollouts"] if row["status"] == "unscored"][
+            0
+        ]
+        assert unscored["passed"] is None
+        assert unscored["score"] is None
+        assert unscored["score_metrics"] is None
+        failed = [
+            row for row in payload["rollouts"] if row["clipgt_id"] == "clip_failed"
+        ][0]
+        assert failed["status"] == "fail"
+        assert failed["passed"] is False
+        assert "score" not in failed
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_results_summary_json_includes_failed_rollouts_without_metrics(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Test that runtime rollout failures are reported even without metrics rows."""
+        del mock_plot
+
+        aggregate_and_write_metrics_results_txt(
+            unified_metrics_df,
+            output_path=str(temp_directory),
+            failed_rollouts=[
+                {
+                    "run_name": "test_run_1",
+                    "clipgt_id": "clip_failed",
+                    "rollout_id": "failed-0",
+                    "error": "Maximum allowed size exceeded",
+                }
+            ],
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        failed = [
+            row for row in payload["rollouts"] if row["clipgt_id"] == "clip_failed"
+        ][0]
+
+        assert failed["status"] == "fail"
+        assert failed["passed"] is False
+        assert failed["failure_reason"] == "Maximum allowed size exceeded"
+        assert failed["score"] == 0.0
+        assert failed["score_metrics"] == {
+            "progress_clipped_rel": None,
+            "progress_rel": None,
+            "progress_score": 0.0,
+            "collision_at_fault": None,
+            "offroad": None,
+            "dist_to_gt_trajectory": None,
+            "gt_dist_traveled_m": None,
+        }
 
 
 class TestProcessedMetricDFs:

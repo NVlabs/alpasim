@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
 
@@ -12,6 +12,8 @@ class GroundTruthScorer(Scorer):
 
     Adds the following metrics:
     * progress: The progress along the _full_ ground truth trajectory.
+    * progress_rel_to_total: Ratio of progress along the full ground truth trajectory
+        for scene scoring.
     * progress_rel: The progress along the current ground truth trajectory up to
         the current timestamp. Gives a better sense of progression during the
         simulation.
@@ -21,6 +23,10 @@ class GroundTruthScorer(Scorer):
     """
 
     def calculate(self, simulation_result: SimulationResult) -> list[MetricReturn]:
+        full_gt_trajectory = simulation_result.ego_recorded_ground_truth_trajectory
+        full_gt_linestring = full_gt_trajectory.to_linestring()
+        full_gt_distance_traveled_m = full_gt_linestring.length
+
         # Heuristically set the first two timestamps. For
         # `progress_along_full_gt` we set them at the end by interpolation.
         progress_along_current_gt = [1.0, 1.0]
@@ -28,6 +34,9 @@ class GroundTruthScorer(Scorer):
         distance_to_gt_trajectory = [0.0, 0.0]
         distance_to_current_gt_point = [0.0, 0.0]
         distance_traveled = [0.0, 0.0]
+        gt_distance_traveled = [full_gt_distance_traveled_m] * len(
+            simulation_result.timestamps_us
+        )
 
         # Skip first two timestamps to avoid errors in shapely's project function
         for idx in range(2, len(simulation_result.timestamps_us)):
@@ -39,8 +48,6 @@ class GroundTruthScorer(Scorer):
                 )
             )
             ego_trajectory = simulation_result.actor_trajectories["EGO"].to_linestring()
-            full_gt_trajectory = simulation_result.ego_recorded_ground_truth_trajectory
-            full_gt_linestring = full_gt_trajectory.to_linestring()
             current_gt_linestring = full_gt_trajectory.interpolate_to_timestamps(
                 simulation_result.timestamps_us[: idx + 1]
             ).to_linestring()
@@ -80,6 +87,13 @@ class GroundTruthScorer(Scorer):
                 time_aggregation=AggregationType.LAST,
             ),
             MetricReturn(
+                name="progress_rel_to_total",
+                values=progress_along_full_gt,
+                valid=[True] * len(progress_along_full_gt),
+                timestamps_us=list(simulation_result.timestamps_us),
+                time_aggregation=AggregationType.LAST,
+            ),
+            MetricReturn(
                 name="progress_rel",
                 values=progress_along_current_gt,
                 valid=[True] * len(progress_along_current_gt),
@@ -104,6 +118,13 @@ class GroundTruthScorer(Scorer):
                 name="dist_traveled_m",
                 values=distance_traveled,
                 valid=[True] * len(distance_traveled),
+                timestamps_us=list(simulation_result.timestamps_us),
+                time_aggregation=AggregationType.LAST,
+            ),
+            MetricReturn(
+                name="gt_dist_traveled_m",
+                values=gt_distance_traveled,
+                valid=[True] * len(gt_distance_traveled),
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.LAST,
             ),

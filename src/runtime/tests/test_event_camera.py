@@ -63,28 +63,6 @@ async def test_non_aggregated_camera_event_renders_immediately(
 
 
 @pytest.mark.asyncio
-async def test_non_aggregated_camera_event_tags_first_render_as_warmup(
-    rollout_state: RolloutState,
-    mock_sensorsim: AsyncMock,
-    mock_driver: AsyncMock,
-):
-    camera = _make_camera("cam_front")
-    mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
-
-    event = CameraFrameEvent(
-        camera=camera,
-        trigger=camera.clock.ith_trigger(0),
-        sensorsim=mock_sensorsim,
-        driver=mock_driver,
-        use_aggregated_render=False,
-    )
-
-    await event.handle(rollout_state, EventQueue())
-
-    assert rollout_state.did_warmup_render is True
-
-
-@pytest.mark.asyncio
 async def test_aggregated_camera_events_flush_same_timestamp_together(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,

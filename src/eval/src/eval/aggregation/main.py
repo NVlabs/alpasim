@@ -13,13 +13,14 @@ import sys
 import polars as pl
 from omegaconf import OmegaConf
 
-from eval.aggregation import processing, utils
+from eval.aggregation import processing, telemetry, utils
+from eval.aggregation.failed_rollouts import FailedRolloutInput
 from eval.aggregation.modifiers import (
     MetricAggregationModifiers,
     RemoveTimestepsAfterEvent,
 )
 from eval.aggregation.processing import ProcessedMetricDFs
-from eval.schema import EvalConfig
+from eval.schema import EvalConfig, SceneScoreConfig
 from eval.video import VIDEO_FILE_NAME_FORMAT
 
 WIZARD_FILE = "wizard-config.yaml"
@@ -70,6 +71,8 @@ def _aggregate_metrics(
     job_dirs: list[pathlib.Path],
     aggregate_dir: str | pathlib.Path,
     modifiers: list[MetricAggregationModifiers],
+    failed_rollouts: list[FailedRolloutInput] | None = None,
+    scene_score_config: SceneScoreConfig | None = None,
 ) -> ProcessedMetricDFs:
     """
     Aggregate metrics from job directories.
@@ -97,12 +100,17 @@ def _aggregate_metrics(
         len(job_dirs),
     )
     df = pl.concat(all_dfs)
+    telemetry_summary = telemetry.collect_driver_drive_rpc_latency(job_dirs)
 
     return processing.aggregate_and_write_metrics_results_txt(
         df,
         force_same_run=True,
         output_path=str(aggregate_dir),
         additional_modifiers=modifiers,
+        failed_rollouts=failed_rollouts,
+        run_level_metrics=telemetry.run_level_metrics_from_summary(telemetry_summary),
+        telemetry_summary=telemetry_summary,
+        scene_score_config=scene_score_config,
     )
 
 
@@ -110,6 +118,7 @@ def _run_aggregation_core(
     job_dirs: list[pathlib.Path],
     aggregate_dir: pathlib.Path,
     cfg: EvalConfig,
+    failed_rollouts: list[FailedRolloutInput] | None = None,
 ) -> ProcessedMetricDFs:
     """
     Core aggregation logic shared between runtime and CLI entry points.
@@ -134,7 +143,13 @@ def _run_aggregation_core(
         ),
     ]
 
-    processed_dfs = _aggregate_metrics(job_dirs, aggregate_dir, modifiers)
+    processed_dfs = _aggregate_metrics(
+        job_dirs,
+        aggregate_dir,
+        modifiers,
+        failed_rollouts=failed_rollouts,
+        scene_score_config=cfg.scene_score,
+    )
     processed_dfs.save_to(aggregate_dir)
 
     logger.info("Aggregation complete. Results saved to %s", aggregate_dir)
@@ -164,6 +179,7 @@ def run_aggregation_from_runtime(
     log_dir: str | pathlib.Path,
     eval_config: EvalConfig,
     array_job_dir: str | pathlib.Path | None = None,
+    failed_rollouts: list[FailedRolloutInput] | None = None,
 ) -> bool:
     """
     Run metric aggregation from the runtime after all rollouts complete.
@@ -210,7 +226,9 @@ def run_aggregation_from_runtime(
 
     aggregate_dir = array_job_dir / "aggregate"
 
-    _run_aggregation_core(job_dirs, aggregate_dir, eval_config)
+    _run_aggregation_core(
+        job_dirs, aggregate_dir, eval_config, failed_rollouts=failed_rollouts
+    )
     return True
 
 

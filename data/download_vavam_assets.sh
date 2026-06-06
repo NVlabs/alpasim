@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CURL_RETRY_ARGS=(--retry 3)
+
 usage() {
   cat <<'USAGE'
 Usage: download_vavam_assets.sh --model <MODEL>
@@ -29,6 +31,14 @@ ensure_command() {
   if ! command -v "$cmd" >/dev/null 2>&1; then
     printf 'Error: required command "%s" not found in PATH.\n' "$cmd" >&2
     exit 1
+  fi
+}
+
+configure_curl_retry_args() {
+  if curl --retry-all-errors --version >/dev/null 2>&1; then
+    CURL_RETRY_ARGS+=(--retry-all-errors)
+  else
+    printf '[warn] curl does not support --retry-all-errors; using --retry only.\n' >&2
   fi
 }
 
@@ -79,7 +89,7 @@ download_file() {
   fi
 
   printf '[get ] %s\n' "$filename"
-  curl -fL --retry 3 --retry-all-errors --continue-at - \
+  curl -fL "${CURL_RETRY_ARGS[@]}" --continue-at - \
     --output "$dest_dir/$filename" "$url"
 }
 
@@ -127,6 +137,7 @@ main() {
 
   ensure_command curl
   ensure_command sha256sum
+  configure_curl_retry_args
 
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

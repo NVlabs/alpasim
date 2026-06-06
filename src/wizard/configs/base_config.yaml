@@ -32,6 +32,8 @@ defines:
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
   renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
+  sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
+  nre_max_workers: 4
   helper: scripts
   vscode: sources/remote-vscode-server
   physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
@@ -139,7 +141,7 @@ services:
       - "--no-enable-nrend"
       - "--download-cache-dir /tmp/nre-cache-dir" # unused
       - "--cache-size=${defines.nre_cache_size}" # as a rule of thumb n_concurrent_rollouts + 1 allows to avoid premature evictions
-      - "--max-workers=4"
+      - "--max-workers=${defines.nre_max_workers}"
       - "--enable-editing-actors"
       # - "--enable-timing" # uncomment to enable timing information on the renderer side
 
@@ -290,6 +292,7 @@ runtime:
     physics_update_mode: "EGO_ONLY"
 
     route_generator_type: "MAP" # "MAP" or "RECORDED"
+    route_start_offset_m: 0.0 # Along-route distance ahead of ego where submitted routes start
 
     vehicle: null # use values from the .usdz file (original dimensions)
 
@@ -317,6 +320,10 @@ runtime:
 eval:
   # Set to false to disable in-runtime evaluation (e.g., for debugging or performance testing)
   enabled: true
+  # Set to true to still run aggregation when one or more rollouts failed.
+  allow_aggregation_with_failed_rollouts: false
+  # Trusted in-repo drivers pickle command/reasoning debug metadata for eval/video summaries.
+  parse_unstructured_debug_info: true
   vec_map:
     incl_road_edges: true
     incl_traffic_signs: true
@@ -344,6 +351,11 @@ eval:
   aggregation_modifiers:
     max_dist_to_gt_trajectory: 4.0
 
+  scene_score:
+    enabled: True
+    progress_saturation_threshold: 0.8 # f(progress_clipped_rel) = min(1.0, progress_clipped_rel / progress_saturation_threshold)
+    min_gt_distance_for_full_score_m: 5.0 # GT distance traveled must be greater than this number to consider progress in the score
+
   video:
     render_video: True
     video_layouts: ["DEFAULT"] # ["DEFAULT", "REASONING_OVERLAY"]
@@ -364,6 +376,7 @@ eval:
       - dist_to_gt_trajectory
       - dist_to_gt_location
       - progress
+      - progress_rel_to_total
       - progress_rel
       - safety_monitor_triggered
     map_video:

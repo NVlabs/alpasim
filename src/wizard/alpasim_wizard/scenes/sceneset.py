@@ -190,14 +190,10 @@ def scan_local_usdz_directory(usdz_dir: str) -> tuple[pl.DataFrame, pl.DataFrame
     sim_scenes = pl.DataFrame(scene_rows)
     sim_suites = pl.DataFrame(suite_rows)
 
-    sim_scenes.write_csv(os.path.join(usdz_dir, "sim_scenes.csv"))
-    sim_suites.write_csv(os.path.join(usdz_dir, "sim_suites.csv"))
-
     logger.info(
         f"Found {len(scene_rows)} scenes in local directory. "
         f"Test suite '{str(ArtifactRepository.LOCAL)}' created with all scenes."
     )
-    logger.info(f"Generated sim_scenes.csv and sim_suites.csv in {usdz_dir}")
 
     return sim_scenes, sim_suites
 
@@ -235,13 +231,16 @@ class USDZManager:
 
         If cfg.local_usdz_dir is set, scans that directory for USDZ files
         instead of reading from CSV files. A "local" test suite is created
-        automatically containing all discovered scenes.
+        automatically in memory containing all discovered scenes. The local
+        USDZ directory is not used as a writable scene database/cache.
         """
         # Handle local USDZ directory mode
         if cfg.local_usdz_dir is not None:
             sim_scenes, sim_suites = scan_local_usdz_directory(cfg.local_usdz_dir)
-            # Use the local_usdz_dir as the cache directory for scenesets
-            cache_dir = cfg.local_usdz_dir
+            # The generated local scene catalog is intentionally RAM-only. Use
+            # scene_cache for any writable scratch state so local_usdz_dir can
+            # be mounted read-only.
+            cache_dir = cfg.scene_cache
         else:
             sim_scenes = _load_and_merge_csvs(cfg.scenes_csv, dedup_key="uuid")
             sim_suites = _load_and_merge_csvs(
