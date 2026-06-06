@@ -1,0 +1,45 @@
+# @package _global_
+# Direct EC2 public challenge preset.
+#
+# The runner starts the untrusted contestant driver separately, then uses the
+# trusted AlpaSim image to generate docker-compose.yaml for the simulator stack.
+# Compose itself is run on the EC2 host, not inside the generator container.
+
+defaults:
+  - override /deploy: competition_ec2
+  - override /topology: 8gpu_36rollouts
+  - override /driver: alpamayo1
+  - override /driver_source: external_static
+  - _self_
+
+defines:
+  nre_max_workers: 32
+
+wizard:
+  run_name: "e2e_challenge_ec2"
+  log_dir: ${oc.env:ALPASIM_RUN_DIR,./runs/e2e_challenge_ec2}
+  debug_flags:
+    use_localhost: true
+  external_services:
+    driver:
+      - "${oc.env:ALPASIM_DRIVER_HOST,localhost}:${oc.env:ALPASIM_DRIVER_PORT,6789}"
+
+services:
+  driver:
+    image: ${oc.env:CONTESTANT_IMAGE,???}
+    external_image: true
+    volumes: []
+    gpus: null
+
+runtime:
+  simulation_config:
+    route_start_offset_m: 40.0
+    send_recording_ground_truth: false
+
+eval:
+  allow_aggregation_with_failed_rollouts: true
+  parse_unstructured_debug_info: false
+  aggregation_modifiers:
+    max_dist_to_gt_trajectory: 4.0
+  video:
+    render_video: false

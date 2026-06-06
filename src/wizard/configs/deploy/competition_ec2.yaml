@@ -1,0 +1,44 @@
+# @package _global_
+# Direct EC2 competition runner target.
+#
+# This target is for running the wizard from the trusted AlpaSim image to
+# generate docker-compose.yaml, then running docker compose on the host. It
+# avoids developer source bind mounts and Docker build contexts so the EC2
+# runner does not need a git checkout.
+
+defines:
+  filesystem: ${oc.env:ALPASIM_DATA_DIR,/opt/dlami/nvme/alpasim-data}
+  base_image: ${oc.env:ALPASIM_IMAGE,???}
+
+wizard:
+  run_method: "NONE"
+  validate_mount_points: true
+
+services:
+  controller:
+    image: ${defines.base_image}
+    external_image: true
+    volumes:
+      - "${wizard.log_dir}/controller:/mnt/output"
+      - "${wizard.log_dir}:/mnt/config"
+
+  physics:
+    image: ${defines.base_image}
+    external_image: true
+    volumes:
+      - "${scenes.scene_cache}:/mnt/nre-data"
+
+  runtime:
+    image: ${defines.base_image}
+    external_image: true
+    volumes:
+      - "${scenes.scene_cache}:/mnt/nre-data"
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
+
+  trafficsim:
+    image: ${defines.base_image}
+    external_image: true
+
+  renderer:
+    image: ${oc.env:NRE_IMAGE,nvcr.io/nvidia/nre/nre-ga:26.02}

@@ -1,0 +1,46 @@
+# @package _global_
+# Public challenge development preset.
+#
+# This composes the normal local simulator stack with a static external
+# contestant driver. The runner owns the untrusted driver image/container and
+# passes the reachable host/port to alpasim.
+
+defaults:
+  - override /deploy: local
+  - override /topology: 1gpu
+  - override /driver_source: external_static
+  - _self_
+
+wizard:
+  run_name: "e2e_challenge_dev"
+  log_dir: "./runs/e2e_challenge_dev"
+  validate_mount_points: false
+  debug_flags:
+    use_localhost: true
+  external_services:
+    driver:
+      - "${oc.env:ALPASIM_DRIVER_HOST,localhost}:${oc.env:ALPASIM_DRIVER_PORT,6789}"
+
+services:
+  driver:
+    image: ${oc.env:CONTESTANT_IMAGE,alpasim-e2e-starter-driver:latest}
+    external_image: true
+    volumes: []
+    gpus: null
+
+runtime:
+  endpoints:
+    driver:
+      n_concurrent_rollouts: 1
+      skip: false
+  simulation_config:
+    route_start_offset_m: 40.0
+    send_recording_ground_truth: false
+
+eval:
+  allow_aggregation_with_failed_rollouts: true
+  parse_unstructured_debug_info: false
+  aggregation_modifiers:
+    max_dist_to_gt_trajectory: 4.0
+  video:
+    render_video: true

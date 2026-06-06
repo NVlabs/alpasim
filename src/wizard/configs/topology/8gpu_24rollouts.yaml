@@ -1,0 +1,59 @@
+# @package _global_
+# 8-GPU topology: 24 concurrent rollouts. Intermediate e2e challenge experiment.
+#
+# Intended for the direct EC2 challenge runner with external contestant drivers:
+# - 8 contestant containers, assigned round-robin to GPUs 4-7
+# - 3 driver rollouts per contestant endpoint
+#
+# Total capacity per service:
+# - REND: 4 GPUs x 1 replica  x 6 rollouts = 24
+# - DRIV: 8 external endpoints x 3 rollouts = 24
+# - PHYS: 6 GPUs x 1 replica  x 4 rollouts = 24
+# - CONT: 1 CPU service x 4 replicas x 6 rollouts = 24
+
+defines:
+  nre_cache_size: 32  # (renderer.n_concurrent_rollouts(=6) x 4 cameras) + buffer
+  physics_cache_size: 16
+
+eval:
+  num_processes: 16
+
+services:
+  renderer:
+    replicas_per_container: 1
+    gpus: [0, 1, 2, 3]
+
+  # Used only for non-external/local driver runs. In competition EC2 runs, the
+  # direct runner starts external contestant containers and overrides this
+  # service to point at those endpoints.
+  driver:
+    replicas_per_container: 2
+    gpus: [4, 5, 6, 7]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [2, 3, 4, 5, 6, 7]
+
+  controller:
+    replicas_per_container: 4
+    gpus: null
+
+  trafficsim:
+    replicas_per_container: 1
+    gpus: [0, 1]
+
+runtime:
+  nr_workers: 2
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 6
+    driver:
+      n_concurrent_rollouts: 3
+      skip: false
+    physics:
+      n_concurrent_rollouts: 4
+      skip: false
+    controller:
+      n_concurrent_rollouts: 6
+    trafficsim:
+      skip: true
