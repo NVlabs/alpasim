@@ -1,0 +1,11 @@
+# @package _global_
+
+wizard:
+  renderer_type: mtgs
+  run_sim_services: ["driver", "physics", "trafficsim", "controller", "runtime"]
+  external_services:
+    mtgs: ???
+
+runtime:
+  renderer_config:
+    skip_warmup: false

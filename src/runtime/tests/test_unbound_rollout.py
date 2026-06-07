@@ -239,3 +239,42 @@ def test_create_keeps_synthetic_first_exposure_inside_rollout_window(
     assert rollout.first_camera_frame_ranges_us["camera_left"] == range(50_000, 150_000)
     assert rollout.egomotion_context_start_us == 0
     assert rollout.traffic_objs["actor"].trajectory.time_range_us.start == 0
+
+
+def test_create_synthesizes_camera_ranges_when_rig_has_no_frame_timestamps(
+    tmp_path,
+) -> None:
+    artifact = _artifact()
+    artifact.rig.camera_frame_timestamps_us = {}
+    artifact.rig.camera_frame_ranges_us = {}
+
+    rollout = UnboundRollout.create(
+        simulation_config=_simulation_config(
+            time_start_offset_us=50_000,
+            cameras=[
+                RuntimeCameraConfig(
+                    logical_id="camera_front",
+                    frame_interval_us=100_000,
+                    shutter_duration_us=30_000,
+                    first_frame_offset_us=10_000,
+                ),
+                RuntimeCameraConfig(
+                    logical_id="camera_left",
+                    frame_interval_us=100_000,
+                    shutter_duration_us=40_000,
+                    first_frame_offset_us=20_000,
+                ),
+            ],
+        ),
+        scene_id="scene",
+        version_ids=RolloutMetadata.VersionIds(),
+        data_source=artifact,
+        rollouts_dir=str(tmp_path),
+        renderer_service=_sensorsim_renderer(),
+    )
+
+    assert rollout.first_camera_frame_ranges_us["camera_front"] == range(60_000, 90_000)
+    assert rollout.first_camera_frame_ranges_us["camera_left"] == range(70_000, 110_000)
+    assert rollout.render_start_timestamp_us == 90_000
+    assert rollout.first_policy_timestamp_us == 90_000
+    assert rollout.closed_loop_start_us == 190_000

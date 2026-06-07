@@ -173,6 +173,7 @@ class RuntimeCameraConfig:
     width: int = 256
     frame_interval_us: int = 33_000  # about 30fps
     shutter_duration_us: int = 17_000
+    first_frame_offset_us: int = 0
 
 
 @dataclass
@@ -276,6 +277,10 @@ class SimulationConfig:
     control_timestep_us: int = 100_000
     pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
     force_gt_duration_us: int = 500_000  # 0.5s
+    # Fallback rollout anchor for scene providers that do not include recorded
+    # camera frame timestamps, such as trajdata-backed MTGS scenes. Providers
+    # with recorded camera windows ignore this value.
+    time_start_offset_us: int = 0
     skip_driver_during_force_gt: bool = False
 
     # if true, we assert that each call to policy happens immediately after a frame has been

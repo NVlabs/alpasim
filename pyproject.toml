@@ -38,6 +38,7 @@ all = [
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
 video_model = ["alpasim-video-model"]
+mtgs = ["alpasim-mtgs"]
 
 [tool.uv.workspace]
 members = [
@@ -68,6 +69,7 @@ alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
 alpasim-video-model = { workspace = true }
+alpasim-mtgs = { workspace = true }
 trajdata-alpasim = { path = "../trajdata", editable = true }
 
 [tool.uv]

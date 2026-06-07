@@ -198,6 +198,13 @@ message RGBRenderRequest {
     bool insert_ego_mask = 11;
     // if `insert_ego_mask` is true, `ego_mask_id` has to correspond to one of the ego masks in the AvailableEgoMasksReturn
     EgoMaskId ego_mask_id = 12;
+
+    // Pose of the ego vehicle (rig frame) in world coordinates. Distinct from
+    // sensor_pose, which is the camera's pose (= ego_pose @ rig_to_camera).
+    // Renderers that compose the scene around the ego (e.g. MTGS) need the
+    // ego pose directly; they cannot recover it from sensor_pose without
+    // knowing the camera extrinsics.
+    PosePair ego_pose = 13;
 }
 
 message AvailableCamerasRequest {

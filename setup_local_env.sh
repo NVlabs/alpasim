@@ -85,6 +85,8 @@ EXTRAS=("--extra" "all")
 declare -A PLUGIN_EXTRAS=(
     ["plugins/internal"]="internal"
     ["plugins/transfuser_driver"]="transfuser"
+    ["plugins/video_model"]="video_model"
+    ["plugins/mtgs"]="mtgs"
 )
 
 echo "Detecting available plugins..."
