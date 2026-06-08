@@ -17,6 +17,10 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
     AvailableCamerasRequest,
     AvailableCamerasReturn,
     AvailableEgoMasksReturn,
+    BatchRGBRenderRequest,
+    BatchRGBRenderRequestItem,
+    BatchRGBRenderReturn,
+    BatchRGBRenderReturnItem,
     DynamicObject,
     ImageFormat,
     PosePair,
@@ -37,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 WILDCARD_SCENE_ID = "*"
 SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S = (0.5, 2.0)
+
+
+class RetryableRendererInfrastructureError(RuntimeError):
+    """Renderer-side infrastructure failure that may succeed on a fresh rollout."""
 
 
 class SensorsimService(ServiceBase[SensorsimServiceStub]):
@@ -328,6 +336,143 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 f"request camera={request_camera_id!r}, "
                 f"trigger camera={camera.logical_id!r}."
             )
+
+    @staticmethod
+    def _batch_return_to_images(
+        items: list[BatchRGBRenderReturnItem],
+        triggers_by_camera: dict[str, Clock.Trigger],
+    ) -> list[ImageWithMetadata]:
+        """Map a BatchRGBRenderReturn's items back to ImageWithMetadata.
+
+        Validates NRE's response against the request: raises if any item failed,
+        if an item names a camera we did not request, or if a requested camera is
+        missing from the response. Timestamps come from the request-side triggers
+        (NRE's RGBRenderReturn carries only image_bytes).
+        """
+        failures = [
+            (item.camera_name, item.error_message) for item in items if not item.success
+        ]
+        if failures:
+            detail = ", ".join(f"{name} ({msg})" for name, msg in failures)
+            error = f"batch_render_rgb failed for camera(s): {detail}"
+            raise RetryableRendererInfrastructureError(error)
+
+        images: list[ImageWithMetadata] = []
+        seen: set[str] = set()
+        for item in items:
+            trigger = triggers_by_camera.get(item.camera_name)
+            if trigger is None:
+                raise RuntimeError(
+                    f"batch_render_rgb returned unknown camera "
+                    f"'{item.camera_name}'; expected one of "
+                    f"{sorted(triggers_by_camera)}"
+                )
+            if item.camera_name in seen:
+                raise RuntimeError(
+                    f"batch_render_rgb returned duplicate camera '{item.camera_name}'"
+                )
+            seen.add(item.camera_name)
+            images.append(
+                ImageWithMetadata(
+                    start_timestamp_us=trigger.time_range_us.start,
+                    end_timestamp_us=trigger.time_range_us.stop,
+                    image_bytes=item.result.image_bytes,
+                    camera_logical_id=item.camera_name,
+                )
+            )
+
+        missing = set(triggers_by_camera) - seen
+        if missing:
+            raise RuntimeError(
+                f"batch_render_rgb omitted requested camera(s): {sorted(missing)}"
+            )
+        return images
+
+    async def batch_render(
+        self,
+        camera_triggers: list[tuple[RuntimeCamera, Clock.Trigger]],
+        ego_trajectory: Trajectory,
+        traffic_trajectories: Dict[str, Trajectory],
+        scene_id: str,
+        image_format: ImageFormat,
+        ego_mask_rig_config_id: str | None = None,
+    ) -> (list[ImageWithMetadata], bytes | None):
+        """
+        Render multiple RGB images from the given scene and trajectories in a
+        single ``batch_render_rgb`` RPC (NRE's batched contract).
+
+        Returns a tuple of (list[ImageWithMetadata], driver_data). NRE's
+        ``BatchRGBRenderReturn`` carries no renderer->driver payload, so the
+        second element is always ``None`` here; it is kept for signature
+        compatibility with renderers that do provide one.
+        """
+        if self.skip:
+            logger.info("Skip mode: sensorsim returning empty images")
+            return (
+                [
+                    ImageWithMetadata(
+                        start_timestamp_us=trigger.time_range_us.start,
+                        end_timestamp_us=trigger.time_range_us.stop,
+                        image_bytes=b"",
+                        camera_logical_id=camera.logical_id,
+                    )
+                    for camera, trigger in camera_triggers
+                ],
+                None,
+            )
+
+        session_info = self._require_session_info()
+        available_ego_masks = await self.get_available_ego_masks()
+
+        # camera_name -> trigger, to rebuild image metadata from the response
+        # (NRE's RGBRenderReturn carries only image_bytes, no timestamps).
+        triggers_by_camera: dict[str, Clock.Trigger] = {}
+        request = BatchRGBRenderRequest()
+
+        for camera, trigger in camera_triggers:
+            ego_mask_id = self.determine_ego_mask_id(
+                available_ego_masks, camera.logical_id, ego_mask_rig_config_id
+            )
+
+            rgb_request = self.construct_rgb_render_request(
+                ego_trajectory,
+                traffic_trajectories,
+                camera,
+                trigger,
+                scene_id,
+                image_format,
+                ego_mask_id,
+            )
+            request.items.append(
+                BatchRGBRenderRequestItem(
+                    camera_name=camera.logical_id, request=rgb_request
+                )
+            )
+            triggers_by_camera[camera.logical_id] = trigger
+
+        await session_info.broadcaster.broadcast(LogEntry(batch_render_request=request))
+
+        try:
+            response: BatchRGBRenderReturn = await profiled_rpc_call(
+                "batch_render_rgb",
+                "sensorsim",
+                self.stub.batch_render_rgb,
+                request,
+                unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
+            )
+
+            images_with_metadata = self._batch_return_to_images(
+                response.items, triggers_by_camera
+            )
+        except RetryableRendererInfrastructureError:
+            raise
+        except Exception as exc:
+            raise RetryableRendererInfrastructureError(
+                f"batch_render_rgb failed: {exc}"
+            ) from exc
+        # NRE's BatchRGBRenderReturn carries no renderer->driver payload; second
+        # element is None (kept for signature parity with renderers that do).
+        return (images_with_metadata, None)
 
     async def aggregated_render(
         self,

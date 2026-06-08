@@ -37,7 +37,10 @@ from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
-from alpasim_runtime.services.sensorsim_service import SensorsimService
+from alpasim_runtime.services.sensorsim_service import (
+    RetryableRendererInfrastructureError,
+    SensorsimService,
+)
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.services.video_model_service import VideoModelService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
@@ -159,12 +162,15 @@ async def run_single_rollout(
 
     except Exception as exc:  # noqa: BLE001
         tb = traceback.format_exc()
+        error = str(exc)
+        retryable = isinstance(exc, RetryableRendererInfrastructureError)
         module_logger = logging.getLogger(__name__)
         module_logger.warning(
-            "Rollout FAILED: job=%s scene=%s uuid=%s error=%s\n%s",
+            "Rollout FAILED: job=%s scene=%s uuid=%s retryable=%s error=%s\n%s",
             job.job_id,
             rollout.scene_id if rollout else "N/A",
             rollout.rollout_uuid if rollout else "N/A",
+            retryable,
             exc,
             tb,
         )
@@ -173,9 +179,10 @@ async def run_single_rollout(
             job_id=job.job_id,
             rollout_spec_index=job.rollout_spec_index,
             success=False,
-            error=str(exc),
+            error=error,
             error_traceback=tb,
             rollout_uuid=rollout.rollout_uuid if rollout else None,
+            retryable=retryable,
         )
 
 

@@ -25,7 +25,6 @@ def test_initial_event_schedule_uses_policy_and_end_timestamps() -> None:
         closed_loop_start_us=200,
         end_timestamp_us=300,
         control_timestep_us=100,
-        group_render_requests=False,
         send_recording_ground_truth=False,
     )
     rollout.runtime_cameras = []

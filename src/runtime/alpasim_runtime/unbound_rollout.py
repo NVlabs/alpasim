@@ -14,6 +14,7 @@ import numpy as np
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
     PhysicsUpdateMode,
+    RenderBundling,
     RouteGeneratorType,
     RuntimeCameraConfig,
     SimulationConfig,
@@ -243,7 +244,7 @@ class UnboundRollout:
     # a lowered-to-ground trajectory so we can override their rendering.
     hidden_traffic_objs: TrafficObjects | None = None
 
-    group_render_requests: bool = False
+    render_bundling: RenderBundling = RenderBundling.NONE
 
     @staticmethod
     def create(
@@ -256,7 +257,6 @@ class UnboundRollout:
         session_uuid: str | None = None,
     ) -> UnboundRollout:
         """Create UnboundRollout from SceneDataSource."""
-
         camera_configs = list(simulation_config.cameras)
         renderer_service.validate_timing_alignment(simulation_config)
         timing = _build_rollout_timing(
@@ -361,7 +361,7 @@ class UnboundRollout:
             vehicle_config=vehicle,
             vector_map=data_source.map,
             hidden_traffic_objs=hidden_traffic_objs,
-            group_render_requests=simulation_config.group_render_requests,
+            render_bundling=simulation_config.render_bundling,
         )
 
     def get_log_metadata(self) -> RolloutMetadata.SessionMetadata:

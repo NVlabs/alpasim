@@ -44,6 +44,10 @@ class PendingRolloutJob:
     rollout_spec_index: int
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
+    # Infrastructure retries are parent-managed. Retried jobs intentionally use
+    # a fresh job_id/session_uuid while keeping the same rollout_spec_index.
+    retry_attempt: int = 0
+    max_retry_attempts: int = 1
 
 
 @dataclass
@@ -62,6 +66,8 @@ class AssignedRolloutJob:
     endpoints: ServiceEndpoints
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
+    retry_attempt: int = 0
+    max_retry_attempts: int = 1
 
 
 @dataclass
@@ -81,6 +87,9 @@ class JobResult:
     # Contains timestep_metrics, aggregated_metrics, and metrics_df.
     # None if evaluation is disabled or failed.
     eval_result: ScenarioEvalResult | None = None
+    # True for infrastructure failures that are worth rerunning once with a
+    # fresh service assignment/session before exposing the result to callers.
+    retryable: bool = False
 
 
 class _ShutdownSentinel:

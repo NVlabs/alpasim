@@ -38,7 +38,7 @@ directory from the trusted AlpaSim image. The direct p5 runner starts the
 contestant containers separately and passes their external driver endpoints to
 the wizard.
 
-The EC2 preset selects the current production topology, `8gpu_36rollouts`. The
+The EC2 preset selects the current production topology, `8gpu_32rollouts`. The
 direct runner supplies the complete external driver endpoint list and any
 production-only renderer image/entrypoint overrides for official evaluation.
 

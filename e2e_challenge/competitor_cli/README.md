@@ -47,17 +47,20 @@ docker push \
   696254625193.dkr.ecr.us-east-1.amazonaws.com/teams/<team_id>:<tag>
 
 # ...and submit the image URI for evaluation:
-uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit \
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track pai \
   696254625193.dkr.ecr.us-east-1.amazonaws.com/teams/<team_id>:<tag>
 ```
 
+`submit` requires an explicit track. Use `--track pai` for the Physical AI AV
+track or `--track nuplan` for the nuPlan track.
 
 ## Inspect
 
 ```bash
 # Check competition info, limits, leaderboard, submissions, and submission status with:
 uv run e2e_challenge/competitor_cli/alpasim_challenge.py limits
-uv run e2e_challenge/competitor_cli/alpasim_challenge.py leaderboard
-uv run e2e_challenge/competitor_cli/alpasim_challenge.py submissions
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py leaderboard --track pai
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py leaderboard --track nuplan
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py submissions --track pai
 uv run e2e_challenge/competitor_cli/alpasim_challenge.py status <submission_id>
 ```

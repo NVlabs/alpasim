@@ -19,7 +19,10 @@ The competition has two tracks: the Physical AI AV Track and the nuPlan Track. F
 tracks, the image contract for submissions is the same across tracks: contestants submit only
 a driver container that serves the AlpaSim driver gRPC API. Depending upon the requested
 submission type, the evaluator starts the appropriate simulator stack and connects to the
-submitted driver image.
+submitted driver image. Use `pai` for
+the Physical AI AV track and `nuplan` for the nuPlan track. Submission limits
+are shared across tracks because both tracks use the same managed evaluator
+capacity.
 
 ### Physical AI (PAI) AV
 
@@ -44,14 +47,15 @@ Each replica receives `ALPASIM_DRIVER_HOST`, `ALPASIM_DRIVER_PORT`,
 `ALPASIM_CONTESTANT_REPLICA_INDEX`, and `ALPASIM_CONTESTANT_REPLICAS`. GPU
 access is provided during official evaluation.
 
-The PAI track evaluation uses the `+e2e_challenge=ec2`
-preset, which selects `topology=8gpu_36rollouts`. The backend starts 12 replicas
-of the submitted image across GPUs 4-7 with 3 concurrent rollouts per replica.
+Both tracks use the `ec2` preset (see `src/wizard/configs/{e2e_challenge,e2e_challenge_nuplan}`).
+The EC2 config start 16 replicas of the submitted image across GPUs 4-7 with 2 concurrent rollouts per replica.
+
 Local smoke tests use `+e2e_challenge=dev` and a 1-GPU topology.
 
 Some additional constraints of the environment:
 
 - image size limit: 40 GiB
+- each driver instance must use no more than 16 GiB of VRAM
 - outbound network access is blocked
 - the root filesystem is read-only
 - writable scratch space is limited to `/tmp` (2 GiB) and `/run` (64 MiB)

@@ -37,15 +37,23 @@ def _pending(
     )
 
 
-def _result(request_id: str, job_id: str) -> JobResult:
+def _result(
+    request_id: str,
+    job_id: str,
+    *,
+    success: bool = True,
+    error: str | None = None,
+    retryable: bool = False,
+) -> JobResult:
     return JobResult(
         request_id=request_id,
         job_id=job_id,
         rollout_spec_index=0,
-        success=True,
-        error=None,
+        success=success,
+        error=error,
         error_traceback=None,
         rollout_uuid=f"uuid-{job_id}",
+        retryable=retryable,
     )
 
 
@@ -155,6 +163,94 @@ async def test_scheduler_per_request_pool_releases_correctly() -> None:
     await scheduler.dispatch_once()
 
     assert runtime.submitted_job_ids == ["j1", "j2"]
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_retries_retryable_infrastructure_failure_once() -> None:
+    runtime = _FakeRuntime()
+    scheduler = DaemonScheduler(
+        pools=_make_pools(capacity_per_service=1),
+        runtime=runtime,
+    )
+
+    await scheduler.submit_request("req-retry", [_pending("j1"), _pending("j2")])
+    assert runtime.submitted_job_ids == ["j1"]
+
+    scheduler.on_result(
+        _result(
+            "req-retry",
+            "j1",
+            success=False,
+            error="batch_render_rgb failed for camera(s): camera_cross_left_120fov",
+            retryable=True,
+        )
+    )
+    await scheduler.dispatch_once()
+
+    assert len(runtime.submitted_jobs) == 2
+    assert runtime.submitted_job_ids == ["j1", "j2"]
+
+    scheduler.on_result(_result("req-retry", "j2"))
+    await scheduler.dispatch_once()
+
+    assert len(runtime.submitted_jobs) == 3
+    retry_job = runtime.submitted_jobs[2]
+    assert retry_job.job_id != "j1"
+    assert retry_job.scene_id == "scene-a"
+    assert retry_job.rollout_spec_index == 0
+    assert retry_job.retry_attempt == 1
+    assert retry_job.max_retry_attempts == 1
+    assert retry_job.session_uuid == ""
+
+    scheduler.on_result(_result("req-retry", retry_job.job_id))
+    completion = await scheduler.wait_request("req-retry")
+
+    assert [result.job_id for result in completion] == ["j2", retry_job.job_id]
+    assert all(result.success for result in completion)
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_records_retryable_failure_after_retry_budget_exhausted() -> (
+    None
+):
+    runtime = _FakeRuntime()
+    scheduler = DaemonScheduler(
+        pools=_make_pools(capacity_per_service=1),
+        runtime=runtime,
+    )
+
+    await scheduler.submit_request(
+        "req-exhausted",
+        [
+            PendingRolloutJob(
+                job_id="j1",
+                scene_id="scene-a",
+                rollout_spec_index=0,
+                retry_attempt=1,
+                max_retry_attempts=1,
+            )
+        ],
+    )
+
+    scheduler.on_result(
+        _result(
+            "req-exhausted",
+            "j1",
+            success=False,
+            error="still bad",
+            retryable=True,
+        )
+    )
+    completion = await scheduler.wait_request("req-exhausted")
+
+    assert runtime.submitted_job_ids == ["j1"]
+    assert len(completion) == 1
+    assert completion[0].success is False
+    assert completion[0].job_id == "j1"
 
     await scheduler.shutdown(reason="test cleanup")
 

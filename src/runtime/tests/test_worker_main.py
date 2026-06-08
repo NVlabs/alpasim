@@ -14,6 +14,9 @@ from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import ServiceAddress
 from alpasim_runtime.config import RendererConfig, RendererKind, VideoModelConfig
+from alpasim_runtime.services.sensorsim_service import (
+    RetryableRendererInfrastructureError,
+)
 from alpasim_runtime.worker.ipc import (
     SHUTDOWN_SENTINEL,
     AssignedRolloutJob,
@@ -21,6 +24,16 @@ from alpasim_runtime.worker.ipc import (
     ServiceEndpoints,
 )
 from alpasim_runtime.worker.main import run_single_rollout, run_worker_loop
+
+
+def _service_endpoints() -> ServiceEndpoints:
+    return ServiceEndpoints(
+        driver=ServiceAddress("localhost:10001", skip=False),
+        renderer=ServiceAddress("localhost:10002", skip=False),
+        physics=ServiceAddress("localhost:10003", skip=False),
+        trafficsim=ServiceAddress("localhost:10004", skip=False),
+        controller=ServiceAddress("localhost:10005", skip=False),
+    )
 
 
 @pytest.mark.asyncio
@@ -65,19 +78,12 @@ async def test_run_worker_loop_uses_parent_version_ids(
         _fake_run_single_rollout,
     )
 
-    endpoints = ServiceEndpoints(
-        driver=ServiceAddress("localhost:10001", skip=False),
-        renderer=ServiceAddress("localhost:10002", skip=False),
-        physics=ServiceAddress("localhost:10003", skip=False),
-        trafficsim=ServiceAddress("localhost:10004", skip=False),
-        controller=ServiceAddress("localhost:10005", skip=False),
-    )
     job = AssignedRolloutJob(
         request_id="req-1",
         job_id="job-1",
         scene_id="scene-1",
         rollout_spec_index=0,
-        endpoints=endpoints,
+        endpoints=_service_endpoints(),
     )
 
     job_queue: Queue = Queue()
@@ -229,3 +235,81 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
     assert captured["rollout_kwargs"]["data_source"] is data_source
     # Renderer-specific artifact access stays behind data_source.
     assert "artifact_path" not in captured["rollout_kwargs"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc", "expected_retryable"),
+    [
+        (
+            RetryableRendererInfrastructureError(
+                "batch_render_rgb failed for camera(s): cam "
+                "(UNKNOWN: NRenderer.update_model_parameters failed.)"
+            ),
+            True,
+        ),
+        (RuntimeError("contestant injected CUDA_ERROR_INVALID_PTX text"), False),
+    ],
+)
+async def test_run_single_rollout_only_retries_typed_renderer_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    exc: Exception,
+    expected_retryable: bool,
+) -> None:
+    class FakeRolloutRunner:
+        async def run(self):
+            raise exc
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.DriverService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.SensorsimService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.PhysicsService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.TrafficService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.ControllerService",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.UnboundRollout.create",
+        lambda **kwargs: SimpleNamespace(
+            rollout_uuid="rollout-uuid", scene_id="scene-1"
+        ),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.create_event_rollout",
+        lambda **kwargs: FakeRolloutRunner(),
+    )
+
+    result = await run_single_rollout(
+        job=AssignedRolloutJob(
+            request_id="req-1",
+            job_id="job-1",
+            scene_id="scene-1",
+            rollout_spec_index=0,
+            endpoints=_service_endpoints(),
+        ),
+        user_config=SimpleNamespace(
+            renderer=RendererConfig(kind=RendererKind.sensorsim),
+            simulation_config=MagicMock(),
+        ),
+        data_source=MagicMock(),
+        camera_catalog=MagicMock(),
+        version_ids=MagicMock(),
+        rollouts_dir="/tmp",
+        eval_config=MagicMock(),
+        eval_executor=MagicMock(),
+    )
+
+    assert result.success is False
+    assert result.retryable is expected_retryable

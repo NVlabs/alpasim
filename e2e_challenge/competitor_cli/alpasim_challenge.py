@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -42,13 +43,24 @@ def main() -> int:
     subparsers.add_parser(
         "limits", help="Show competition status and submission quota."
     )
-    subparsers.add_parser("leaderboard", help="Show the public leaderboard.")
+    leaderboard = subparsers.add_parser(
+        "leaderboard", help="Show the public leaderboard."
+    )
+    leaderboard.add_argument(
+        "--track", choices=("pai", "nuplan"), help="Leaderboard track."
+    )
 
     submit = subparsers.add_parser("submit", help="Submit an already-pushed image URI.")
     submit.add_argument("image_uri")
+    submit.add_argument("--track", required=True, choices=("pai", "nuplan"))
     submit.add_argument("--metadata-source", default="cli", help=argparse.SUPPRESS)
 
-    subparsers.add_parser("submissions", help="List your team's recent submissions.")
+    submissions = subparsers.add_parser(
+        "submissions", help="List your team's recent submissions."
+    )
+    submissions.add_argument(
+        "--track", choices=("pai", "nuplan"), help="Filter by track."
+    )
 
     status = subparsers.add_parser("status", help="Get one submission status.")
     status.add_argument("submission_id")
@@ -74,7 +86,7 @@ def main() -> int:
         print_limits(client)
         return 0
     if args.command == "leaderboard":
-        print_json(client.get("/leaderboard"))
+        print_json(client.get(path_with_query("/leaderboard", track=args.track)))
         return 0
     if args.command == "submit":
         print_json(
@@ -82,13 +94,14 @@ def main() -> int:
                 "/submissions",
                 {
                     "image_uri": args.image_uri,
+                    "track": args.track,
                     "metadata": {"source": args.metadata_source},
                 },
             )
         )
         return 0
     if args.command == "submissions":
-        print_json(client.get("/submissions"))
+        print_json(client.get(path_with_query("/submissions", track=args.track)))
         return 0
     if args.command == "status":
         print_json(client.get(f"/submissions/{args.submission_id}"))
@@ -168,7 +181,9 @@ def ecr_login(client: ChallengeClient) -> None:
     print()
     print(f"  docker push {auth['image_uri_prefix']}:<version>")
     print()
-    print("  uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit \\")
+    print(
+        "  uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track <pai|nuplan> \\"
+    )
     print(f"    {auth['image_uri_prefix']}:<version>")
     print()
     print("Submissions are limited. Only submit images you want evaluated.")
@@ -202,6 +217,13 @@ def load_config() -> dict[str, str]:
         return {}
     token = config.get("token")
     return {"token": str(token)} if token else {}
+
+
+def path_with_query(path: str, **params: str | None) -> str:
+    filtered = {key: value for key, value in params.items() if value}
+    if not filtered:
+        return path
+    return f"{path}?{urllib.parse.urlencode(filtered)}"
 
 
 def save_config(config: dict[str, str]) -> None:

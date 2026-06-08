@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from alpasim_runtime.broadcaster import MessageBroadcaster
+from alpasim_runtime.config import RenderBundling
 from alpasim_runtime.events.base import Event, EventPriority, EventQueue
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.services.driver_service import DriverService
@@ -32,7 +33,12 @@ def _traffic_trajectories(state: RolloutState) -> dict[str, geometry.Trajectory]
 
 
 class CameraFrameEvent(Event):
-    """Render or register one camera frame at its shutter-close timestamp."""
+    """Render one camera frame at its shutter-close timestamp.
+
+    When ``unbound.render_bundling`` is NONE, render this camera immediately with
+    one ``render_rgb`` RPC. Otherwise register the frame so a single
+    ``CameraRenderFlushEvent`` renders all same-timestamp cameras in one RPC.
+    """
 
     priority: int = EventPriority.CAMERA
 
@@ -42,14 +48,12 @@ class CameraFrameEvent(Event):
         trigger: Clock.Trigger,
         sensorsim: SensorsimService,
         driver: DriverService,
-        use_aggregated_render: bool = False,
     ):
         super().__init__(timestamp_us=trigger.time_range_us.stop)
         self.camera = camera
         self.trigger = trigger
         self.sensorsim = sensorsim
         self.driver = driver
-        self.use_aggregated_render = use_aggregated_render
 
     def description(self) -> str:
         return (
@@ -58,15 +62,15 @@ class CameraFrameEvent(Event):
         )
 
     async def handle(self, rollout_state: RolloutState, queue: EventQueue) -> None:
-        if self.use_aggregated_render:
-            self._register_for_aggregated_render(rollout_state, queue)
+        if rollout_state.unbound.render_bundling != RenderBundling.NONE:
+            self._register_for_bundled_render(rollout_state, queue)
         else:
             await self._render_immediately(rollout_state)
 
         self._record_frame(rollout_state)
         self._schedule_next(rollout_state, queue)
 
-    def _register_for_aggregated_render(
+    def _register_for_bundled_render(
         self, state: RolloutState, queue: EventQueue
     ) -> None:
         state.pending_camera_triggers.setdefault(self.timestamp_us, []).append(
@@ -115,7 +119,6 @@ class CameraFrameEvent(Event):
                 trigger=next_trigger,
                 sensorsim=self.sensorsim,
                 driver=self.driver,
-                use_aggregated_render=self.use_aggregated_render,
             )
         )
 
@@ -150,7 +153,13 @@ class CameraRenderFlushEvent(Event):
         if not camera_triggers:
             return
 
-        render_coro = self.sensorsim.aggregated_render(
+        # Both bundled-render methods share the (images, driver_data) return.
+        bundled_render = (
+            self.sensorsim.batch_render
+            if rollout_state.unbound.render_bundling == RenderBundling.BATCH_RENDER_RGB
+            else self.sensorsim.aggregated_render
+        )
+        render_coro = bundled_render(
             camera_triggers,
             ego_trajectory=rollout_state.ego_trajectory,
             traffic_trajectories=_traffic_trajectories(rollout_state),
@@ -177,7 +186,6 @@ def make_initial_sensorsim_render_event(
     renderer_service: Any,
     driver: DriverService,
     broadcaster: MessageBroadcaster,
-    use_aggregated_render: bool = False,
 ) -> list[Event]:
     """Built-in factory for initial sensorsim camera frame events.
 
@@ -197,7 +205,6 @@ def make_initial_sensorsim_render_event(
             trigger=trigger,
             sensorsim=renderer_service,
             driver=driver,
-            use_aggregated_render=use_aggregated_render,
         )
         for camera in runtime_cameras
         for trigger in [camera.clock.ith_trigger(0)]

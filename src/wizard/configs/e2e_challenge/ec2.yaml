@@ -7,13 +7,13 @@
 
 defaults:
   - override /deploy: competition_ec2
-  - override /topology: 8gpu_36rollouts
+  - override /topology: 8gpu_32rollouts
   - override /driver: alpamayo1
   - override /driver_source: external_static
   - _self_
 
 defines:
-  nre_max_workers: 32
+  nre_max_workers: 1
 
 wizard:
   run_name: "e2e_challenge_ec2"
@@ -33,6 +33,7 @@ services:
 
 runtime:
   simulation_config:
+    render_bundling: BATCH_RENDER_RGB
     route_start_offset_m: 40.0
     send_recording_ground_truth: false
 

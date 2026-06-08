@@ -30,6 +30,7 @@ services:
       - "--user-config=/mnt/log_dir/{runtime_config_name}"
       - "--host=0.0.0.0"
       - "--port={port}"
+      - "--cache-size=${defines.nre_cache_size}"
       - "--log-level=${wizard.log_level}"
 
   runtime:
@@ -110,7 +111,6 @@ runtime:
     route_generator_type: RECORDED
     assert_zero_decision_delay: false
     send_recording_ground_truth: false
-    group_render_requests: true
     cameras:
       - logical_id: CAM_F0
         frame_interval_us: 500_000
