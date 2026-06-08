@@ -78,6 +78,56 @@ def scene_name_to_index_from_dataset(
         ) from exc
 
 
+def _resolve_nuplan_extra_params(dataset_name: str, extra_params: dict) -> dict:
+    """Convert config_dir to central_tokens_config for NuPlan datasets.
+
+    Reads YAML files from config_dir and builds central_tokens_config so that
+    trajdata's NuplanDataset receives only the parameters it understands.
+    Non-trajdata keys (config_dir, asset_base_path) are dropped.
+    """
+    from collections import defaultdict
+
+    import yaml
+
+    config_dir = Path(extra_params["config_dir"])
+    yaml_files = list(config_dir.glob("*.yaml"))
+    logger.info("Processing %d NuPlan YAML configs from %s", len(yaml_files), config_dir)
+
+    class _SafeLoader(yaml.SafeLoader):
+        pass
+
+    def _obj_constructor(loader, tag_suffix, node):
+        return loader.construct_mapping(node, deep=True)
+
+    def _tuple_constructor(loader, tag_suffix, node):
+        return loader.construct_sequence(node, deep=True)
+
+    _SafeLoader.add_multi_constructor("tag:yaml.org,2002:python/object", _obj_constructor)
+    _SafeLoader.add_multi_constructor("tag:yaml.org,2002:python/tuple", _tuple_constructor)
+
+    configs_by_log: dict = defaultdict(list)
+    for yaml_file in yaml_files:
+        try:
+            cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
+            central_log = cfg.get("central_log", "") if isinstance(cfg, dict) else getattr(cfg, "central_log", "")
+            central_tokens = cfg.get("central_tokens", []) if isinstance(cfg, dict) else getattr(cfg, "central_tokens", [])
+            if not central_log or not central_tokens:
+                logger.warning("%s missing central_log or central_tokens, skipping", yaml_file.name)
+                continue
+            for token in central_tokens:
+                configs_by_log[central_log].append({"central_token": token, "logfile": central_log})
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s", yaml_file.name, exc)
+
+    all_central_tokens_config = [cfg for cfgs in configs_by_log.values() for cfg in cfgs]
+    logger.info("Found %d central tokens for %s", len(all_central_tokens_config), dataset_name)
+    return {
+        "central_tokens_config": all_central_tokens_config,
+        "num_timesteps_before": extra_params.get("num_timesteps_before", 30),
+        "num_timesteps_after": extra_params.get("num_timesteps_after", 80),
+    }
+
+
 def trajdata_provider_config_to_params(
     trajdata_provider_config: TrajdataProviderConfig,
 ) -> dict:
@@ -92,9 +142,10 @@ def trajdata_provider_config_to_params(
     dataset_name = trajdata_provider_config.dataset.name
     dataset_kwargs = None
     if trajdata_provider_config.dataset.extra_params:
-        dataset_kwargs = {
-            dataset_name: trajdata_provider_config.dataset.extra_params,
-        }
+        extra = dict(trajdata_provider_config.dataset.extra_params)
+        if "nuplan" in dataset_name.lower() and "config_dir" in extra:
+            extra = _resolve_nuplan_extra_params(dataset_name, extra)
+        dataset_kwargs = {dataset_name: extra}
 
     return build_trajdata_params(
         desired_data=[dataset_name],

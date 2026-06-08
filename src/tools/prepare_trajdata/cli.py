@@ -262,18 +262,6 @@ def preprocess_from_params(params: dict, verbose: bool = True) -> bool:
     logger.info(f"  desired_data: {params['desired_data']}")
     logger.info(f"  data_dirs: {params['data_dirs']}")
 
-    # Process NuPlan-specific YAML configs if present
-    dataset_kwargs = params.get("dataset_kwargs", {})
-    if dataset_kwargs:
-        for dataset_name, extra_params in dataset_kwargs.items():
-            # Check if this is a NuPlan dataset (nuplan, nuplan_mini, nuplan_test, etc.)
-            if "nuplan" in dataset_name.lower() and "config_dir" in extra_params:
-                processed_config = process_nuplan_yaml_configs(
-                    dataset_name, extra_params
-                )
-                if processed_config:
-                    dataset_kwargs[dataset_name] = processed_config
-
     # Create cache directory
     cache_path = Path(params["cache_location"])
     cache_path.mkdir(parents=True, exist_ok=True)
