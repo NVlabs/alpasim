@@ -38,7 +38,7 @@ all = [
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
 video_model = ["alpasim-video-model"]
-mtgs = ["alpasim-mtgs"]
+mtgs = ["alpasim-mtgs[server]"]
 
 [tool.uv.workspace]
 members = [
@@ -70,7 +70,7 @@ alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
 alpasim-video-model = { workspace = true }
 alpasim-mtgs = { workspace = true }
-trajdata-alpasim = { path = "../trajdata", editable = true }
+trajdata-alpasim = { url = "https://github.com/NVlabs/trajdata/archive/7296afa30866e8b8fec917b7dc55c59dcad6892c.tar.gz" }
 
 [tool.uv]
 python-preference = "only-managed"
