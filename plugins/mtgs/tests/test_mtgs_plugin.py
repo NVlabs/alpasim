@@ -97,7 +97,10 @@ def test_mtgs_engine_importable():
 
 
 def _mtgs_user_config(
-    *, extra_params: dict | None = None, smooth_trajectories: bool = False
+    *,
+    extra_params: dict | None = None,
+    smooth_trajectories: bool = False,
+    vector_map_params: dict | None = None,
 ):
     from alpasim_runtime.config import (
         SceneProviderConfig,
@@ -114,6 +117,7 @@ def _mtgs_user_config(
                 cache_location="/tmp/trajdata-cache",
                 desired_dt=0.1,
                 load_vector_map=True,
+                vector_map_params=vector_map_params or {},
                 dataset=TrajdataDatasetConfig(
                     name="nuplan_test",
                     data_dir="/tmp/nuplan",
@@ -146,10 +150,9 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
         env_name = "nuplan_test"
 
     class FakeUnifiedDataset:
-        vector_map_params = {"incl_road_lanes": True}
-
         def __init__(self, **params):
             captured["dataset_params"] = params
+            self.vector_map_params = params.get("vector_map_params", {})
             self._scene = FakeScene()
 
         @property
@@ -180,7 +183,10 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     monkeypatch.setattr(mtgs_main, "TrajdataDataSource", fake_trajdata_data_source)
 
     get_scene, get_available_scene_ids = mtgs_main.create_get_scene_function(
-        _mtgs_user_config(extra_params={"asset_base_path": "/tmp/mtgs-assets"})
+        _mtgs_user_config(
+            extra_params={"asset_base_path": "/tmp/mtgs-assets"},
+            vector_map_params={"incl_road_lanes": True, "incl_road_edges": True},
+        )
     )
 
     assert get_available_scene_ids() == ["scene-a"]
@@ -197,5 +203,8 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     assert kwargs["scene"].name == "scene-a"
     assert kwargs["scene_cache"] is scene_cache
     assert kwargs["map_api"] is map_api
-    assert kwargs["vector_map_params"] == {"incl_road_lanes": True}
+    assert kwargs["vector_map_params"] == {
+        "incl_road_lanes": True,
+        "incl_road_edges": True,
+    }
     assert kwargs["asset_base_path"] == "/tmp/mtgs-assets/navtest/assets"

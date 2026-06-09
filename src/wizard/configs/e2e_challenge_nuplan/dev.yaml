@@ -1,0 +1,206 @@
+# @package _global_
+# NuPlan/MTGS challenge development preset.
+#
+# This runs a local closed-loop smoke test with:
+#   - contestant driver as an external service
+#   - MTGS as the managed renderer service
+#   - controller and runtime managed by Wizard
+#   - trajdata-backed nuPlan scenes
+#
+# Example:
+#   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+#   ALPASIM_NUPLAN_ROOT=/media/mwatson/4TB/worldengine \
+#   uv run alpasim_wizard +e2e_challenge_nuplan=dev \
+#     wizard.log_dir=./runs/e2e_challenge_nuplan_dev
+
+defaults:
+  - override /deploy: local
+  - override /topology: 1gpu
+  - override /driver_source: external_static
+  - _self_
+
+defines:
+  filesystem: ${repo-relative:"data"}
+  worldengine_root: ${oc.env:ALPASIM_NUPLAN_ROOT,/media/mwatson/4TB/worldengine}
+
+wizard:
+  run_name: "e2e_challenge_nuplan_dev"
+  log_dir: "./runs/e2e_challenge_nuplan_dev"
+  validate_mount_points: true
+  description: "NuPlan MTGS challenge development smoke test"
+  debug_flags:
+    use_localhost: true
+  run_sim_services: ["renderer", "controller", "runtime"]
+  external_services:
+    driver:
+      - "${oc.env:ALPASIM_DRIVER_HOST,localhost}:${oc.env:ALPASIM_DRIVER_PORT,6789}"
+
+services:
+  renderer:
+    image: ${defines.base_image}
+    external_image: false
+    volumes:
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${defines.worldengine_root}:${defines.worldengine_root}"
+      - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
+    environments:
+      - UV_LINK_MODE=copy
+    command:
+      - "uv run alpasim-mtgs-server"
+      - "--user-config=/mnt/log_dir/{runtime_config_name}"
+      - "--host=0.0.0.0"
+      - "--port={port}"
+      - "--log-level=${wizard.log_level}"
+
+  runtime:
+    depends_on:
+      - renderer
+      - controller
+    volumes:
+      - "${defines.worldengine_root}:${defines.worldengine_root}"
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
+      - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
+
+scenes:
+  scene_cache: ${defines.worldengine_root}
+  test_suite_id: null
+  limit_to_first_n: 1
+  scene_ids:
+    - 2021.09.09.14.18.22_veh-48_00322_00895-52d3f15d6ca75701
+    - 2021.05.25.14.16.10_veh-35_01100_01664-f02b15cc225b5d9a
+    - 2021.05.25.14.16.10_veh-35_01100_01664-fe800ded24045b44
+    - 2021.05.25.14.16.10_veh-35_01690_02183-0b57b00279885fd4
+    - 2021.05.25.14.16.10_veh-35_01690_02183-0c77bbb199f3589f
+    - 2021.05.25.14.16.10_veh-35_01690_02183-19488eb3301f5d26
+    - 2021.05.25.14.16.10_veh-35_01690_02183-2313aa310e16503d
+    - 2021.05.25.14.16.10_veh-35_01690_02183-2cd1545c4c835ead
+    - 2021.05.25.14.16.10_veh-35_01690_02183-30f09e001cf55013
+
+runtime:
+  scene_provider:
+    kind: trajdata
+    usdz: null
+    trajdata:
+      cache_location: ${defines.worldengine_root}
+      desired_dt: 0.1
+      load_vector_map: true
+      vector_map_params:
+        incl_road_lanes: true
+        incl_road_edges: true
+        incl_traffic_signs: true
+        incl_wait_lines: true
+        collate: false
+        keep_in_memory: true
+      rebuild_cache: false
+      rebuild_maps: false
+      num_workers: 4
+      dataset:
+        name: nuplan_test
+        data_dir: ${defines.worldengine_root}
+        extra_params:
+          config_dir: ${defines.worldengine_root}/navtest/configs
+          num_timesteps_before: 30
+          num_timesteps_after: 80
+          asset_base_path: ${defines.worldengine_root}
+
+  renderer:
+    kind: sensorsim
+    video_model_config: null
+
+  smooth_trajectories: false
+  enable_autoresume: false
+  nr_workers: 1
+
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 1
+      skip: false
+    controller:
+      n_concurrent_rollouts: 1
+      skip: false
+    driver:
+      n_concurrent_rollouts: 1
+      skip: false
+    physics:
+      n_concurrent_rollouts: 1
+      skip: true
+    trafficsim:
+      n_concurrent_rollouts: 1
+      skip: true
+
+  simulation_config:
+    n_sim_steps: 10
+    n_rollouts: 1
+    control_timestep_us: 500_000
+    force_gt_duration_us: 2_000_000
+    time_start_offset_us: 0
+    planner_delay_us: 0
+    min_traffic_duration_us: 0
+    physics_update_mode: NONE
+    route_generator_type: RECORDED
+    assert_zero_decision_delay: false
+    send_recording_ground_truth: false
+    group_render_requests: true
+    cameras:
+      - logical_id: CAM_F0
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L0
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L1
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_L2
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R0
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R1
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_R2
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+      - logical_id: CAM_B0
+        first_frame_offset_us: 0
+        frame_interval_us: 500_000
+        height: 1080
+        width: 1920
+
+eval:
+  num_processes: 1
+  allow_aggregation_with_failed_rollouts: true
+  parse_unstructured_debug_info: false
+  scene_score:
+    enabled: false
+  scorers:
+    image:
+      camera_logical_id: CAM_F0
+  database:
+    upload_metadata: false
+    upload_leaderboard: false
+    upload_full_metrics: false
+  video:
+    render_video: true
+    camera_id_to_render: CAM_F0
+    overlay_plans_on_camera: false
+    combined_video_speed_factor: 1.0

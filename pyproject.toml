@@ -37,8 +37,6 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
-internal = ["alpasim-internal"]
-video_model = ["alpasim-video-model"]
 mtgs = ["alpasim-mtgs[server]"]
 
 [tool.uv.workspace]
@@ -70,8 +68,6 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-alpasim-internal = { workspace = true }
-alpasim-video-model = { workspace = true }
 alpasim-mtgs = { workspace = true }
 trajdata-alpasim = { workspace = true }
 

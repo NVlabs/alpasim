@@ -23,6 +23,7 @@ from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.scene_metadata import Metadata
 from alpasim_utils.trajdata_data_source import TrajdataDataSource
 from omegaconf import OmegaConf
+
 from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def build_trajdata_params(
     data_dirs: dict[str, str],
     cache_location: str,
     incl_vector_map: bool,
+    vector_map_params: dict | None,
     rebuild_cache: bool,
     rebuild_maps: bool,
     num_workers: int,
@@ -55,11 +57,14 @@ def build_trajdata_params(
         "data_dirs": data_dirs,
         "cache_location": cache_location,
         "incl_vector_map": incl_vector_map,
+        "vector_map_params": vector_map_params,
         "rebuild_cache": rebuild_cache,
         "rebuild_maps": rebuild_maps,
         "num_workers": num_workers,
         "desired_dt": desired_dt,
     }
+    if not vector_map_params:
+        params.pop("vector_map_params")
     if dataset_kwargs:
         params["dataset_kwargs"] = dataset_kwargs
     return params
@@ -91,7 +96,9 @@ def _resolve_nuplan_extra_params(dataset_name: str, extra_params: dict) -> dict:
 
     config_dir = Path(extra_params["config_dir"])
     yaml_files = list(config_dir.glob("*.yaml"))
-    logger.info("Processing %d NuPlan YAML configs from %s", len(yaml_files), config_dir)
+    logger.info(
+        "Processing %d NuPlan YAML configs from %s", len(yaml_files), config_dir
+    )
 
     class _SafeLoader(yaml.SafeLoader):
         pass
@@ -102,25 +109,45 @@ def _resolve_nuplan_extra_params(dataset_name: str, extra_params: dict) -> dict:
     def _tuple_constructor(loader, tag_suffix, node):
         return loader.construct_sequence(node, deep=True)
 
-    _SafeLoader.add_multi_constructor("tag:yaml.org,2002:python/object", _obj_constructor)
-    _SafeLoader.add_multi_constructor("tag:yaml.org,2002:python/tuple", _tuple_constructor)
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/object", _obj_constructor
+    )
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/tuple", _tuple_constructor
+    )
 
     configs_by_log: dict = defaultdict(list)
     for yaml_file in yaml_files:
         try:
             cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
-            central_log = cfg.get("central_log", "") if isinstance(cfg, dict) else getattr(cfg, "central_log", "")
-            central_tokens = cfg.get("central_tokens", []) if isinstance(cfg, dict) else getattr(cfg, "central_tokens", [])
+            central_log = (
+                cfg.get("central_log", "")
+                if isinstance(cfg, dict)
+                else getattr(cfg, "central_log", "")
+            )
+            central_tokens = (
+                cfg.get("central_tokens", [])
+                if isinstance(cfg, dict)
+                else getattr(cfg, "central_tokens", [])
+            )
             if not central_log or not central_tokens:
-                logger.warning("%s missing central_log or central_tokens, skipping", yaml_file.name)
+                logger.warning(
+                    "%s missing central_log or central_tokens, skipping", yaml_file.name
+                )
                 continue
             for token in central_tokens:
-                configs_by_log[central_log].append({"central_token": token, "logfile": central_log})
+                configs_by_log[central_log].append(
+                    {"central_token": token, "logfile": central_log}
+                )
         except Exception as exc:
             logger.warning("Failed to load %s: %s", yaml_file.name, exc)
 
-    all_central_tokens_config = [cfg for cfgs in configs_by_log.values() for cfg in cfgs]
-    logger.info("Found %d central tokens for %s", len(all_central_tokens_config), dataset_name)
+    all_central_tokens_config = [
+        cfg for cfgs in configs_by_log.values() for cfg in cfgs
+    ]
+    logger.info(
+        "Found %d central tokens for %s", len(all_central_tokens_config), dataset_name
+    )
     return {
         "central_tokens_config": all_central_tokens_config,
         "num_timesteps_before": extra_params.get("num_timesteps_before", 30),
@@ -152,6 +179,7 @@ def trajdata_provider_config_to_params(
         data_dirs={dataset_name: trajdata_provider_config.dataset.data_dir},
         cache_location=trajdata_provider_config.cache_location,
         incl_vector_map=trajdata_provider_config.load_vector_map,
+        vector_map_params=trajdata_provider_config.vector_map_params,
         rebuild_cache=trajdata_provider_config.rebuild_cache,
         rebuild_maps=trajdata_provider_config.rebuild_maps,
         num_workers=trajdata_provider_config.num_workers,
