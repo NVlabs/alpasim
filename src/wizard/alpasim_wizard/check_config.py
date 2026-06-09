@@ -3,6 +3,7 @@
 
 import logging
 
+from .context import _uses_trajdata_scene_provider, fetch_artifacts
 from .scenes import LOCAL_SUITE_ID, USDZManager
 from .schema import AlpasimConfig
 from .setup_omegaconf import main_wrapper
@@ -15,6 +16,11 @@ def check_config(cfg: AlpasimConfig) -> None:
     """
     Sanity-checks the config file. Can be used on the login node.
     """
+    if _uses_trajdata_scene_provider(cfg):
+        artifacts = fetch_artifacts(cfg)
+        print(f"Found {len(artifacts)} scenes.")
+        return
+
     manager = USDZManager.from_cfg(cfg.scenes)
 
     # TODO The logic here duplicates what is in context.py:fetch_artifacts. Unify.

@@ -33,7 +33,7 @@ def test_mtgs_config_defaults():
     from alpasim_mtgs.config import MTGSConfig
 
     config = MTGSConfig()
-    assert config.skip_warmup is False
+    assert config.skip_warmup is True
 
 
 def test_mtgs_from_config_empty():
@@ -48,7 +48,7 @@ def test_mtgs_from_config_empty():
     )
     assert service is not None
     assert service.skip is True
-    assert service._mtgs_config.skip_warmup is False
+    assert service._mtgs_config.skip_warmup is True
 
 
 def test_mtgs_from_config_with_options():

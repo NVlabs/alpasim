@@ -8,4 +8,4 @@ wizard:
 
 runtime:
   renderer_config:
-    skip_warmup: false
+    skip_warmup: true

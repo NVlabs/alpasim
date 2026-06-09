@@ -17,4 +17,4 @@ class MTGSConfig:
     sensorsim client. This config only exposes MTGS-specific knobs.
     """
 
-    skip_warmup: bool = False
+    skip_warmup: bool = True

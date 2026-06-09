@@ -82,4 +82,7 @@ class MTGSService(SensorsimService):
         )
 
         if not self._mtgs_config.skip_warmup and not self.skip:
-            await self._warmup(cfg)
+            logger.info(
+                "MTGS client warmup requested, but MTGS loads scenes lazily on "
+                "the server; skipping client-side warmup."
+            )
