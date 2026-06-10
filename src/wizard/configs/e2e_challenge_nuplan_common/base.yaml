@@ -104,7 +104,6 @@ runtime:
     n_rollouts: 1
     control_timestep_us: 500_000
     force_gt_duration_us: 500_000
-    time_start_offset_us: 0
     planner_delay_us: 0
     min_traffic_duration_us: 0
     physics_update_mode: NONE
@@ -114,42 +113,34 @@ runtime:
     group_render_requests: true
     cameras:
       - logical_id: CAM_F0
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_L0
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_L1
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_L2
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_R0
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_R1
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_R2
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920
       - logical_id: CAM_B0
-        first_frame_offset_us: 0
         frame_interval_us: 500_000
         height: 1080
         width: 1920

@@ -250,19 +250,16 @@ def test_create_synthesizes_camera_ranges_when_rig_has_no_frame_timestamps(
 
     rollout = UnboundRollout.create(
         simulation_config=_simulation_config(
-            time_start_offset_us=50_000,
             cameras=[
                 RuntimeCameraConfig(
                     logical_id="camera_front",
                     frame_interval_us=100_000,
                     shutter_duration_us=30_000,
-                    first_frame_offset_us=10_000,
                 ),
                 RuntimeCameraConfig(
                     logical_id="camera_left",
                     frame_interval_us=100_000,
                     shutter_duration_us=40_000,
-                    first_frame_offset_us=20_000,
                 ),
             ],
         ),
@@ -273,8 +270,8 @@ def test_create_synthesizes_camera_ranges_when_rig_has_no_frame_timestamps(
         renderer_service=_sensorsim_renderer(),
     )
 
-    assert rollout.first_camera_frame_ranges_us["camera_front"] == range(60_000, 90_000)
-    assert rollout.first_camera_frame_ranges_us["camera_left"] == range(70_000, 110_000)
-    assert rollout.render_start_timestamp_us == 90_000
-    assert rollout.first_policy_timestamp_us == 90_000
-    assert rollout.closed_loop_start_us == 190_000
+    assert rollout.first_camera_frame_ranges_us["camera_front"] == range(0, 30_000)
+    assert rollout.first_camera_frame_ranges_us["camera_left"] == range(0, 40_000)
+    assert rollout.render_start_timestamp_us == 30_000
+    assert rollout.first_policy_timestamp_us == 30_000
+    assert rollout.closed_loop_start_us == 130_000

@@ -24,6 +24,7 @@ from alpasim_runtime.services.sensorsim_service import ImageFormat
 from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import AABB, TrafficObject, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
+
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,6 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
 
 
 def _synthetic_first_camera_frame_ranges_us(
-    simulation_config: SimulationConfig,
     data_source: SceneDataSource,
     camera_configs: list[RuntimeCameraConfig],
 ) -> dict[str, range]:
@@ -83,16 +83,11 @@ def _synthetic_first_camera_frame_ranges_us(
             f"{data_source.rig.sequence_id!r}. Available cameras: {available}."
         )
 
-    base_start_us = (
-        data_source.rig.trajectory.time_range_us.start
-        + simulation_config.time_start_offset_us
-    )
+    base_start_us = data_source.rig.trajectory.time_range_us.start
     return {
         camera_cfg.logical_id: range(
-            base_start_us + camera_cfg.first_frame_offset_us,
-            base_start_us
-            + camera_cfg.first_frame_offset_us
-            + camera_cfg.shutter_duration_us,
+            base_start_us,
+            base_start_us + camera_cfg.shutter_duration_us,
         )
         for camera_cfg in camera_configs
     }
@@ -119,7 +114,6 @@ def _build_rollout_timing(
             )
         else:
             first_camera_frame_ranges_us = _synthetic_first_camera_frame_ranges_us(
-                simulation_config,
                 data_source,
                 camera_configs,
             )
