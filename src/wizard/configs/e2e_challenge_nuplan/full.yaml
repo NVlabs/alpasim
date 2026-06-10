@@ -6,7 +6,7 @@
 #
 # Example:
 #   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-#   ALPASIM_NUPLAN_ROOT=<path_to_location_of_{navtest, nuplan_test}> \
+#   ALPASIM_NUPLAN_ROOT=<path_to_worldengine_root_containing_navtest_and_nuplan_test> \
 #   uv run alpasim_wizard +e2e_challenge_nuplan=full \
 #     wizard.log_dir=./runs/e2e_challenge_nuplan_full
 

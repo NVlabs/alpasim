@@ -7,7 +7,7 @@ already-running contestant driver:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-ALPASIM_NUPLAN_ROOT=/media/mwatson/4TB/worldengine \
+ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
 uv run alpasim_wizard +e2e_challenge_nuplan=dev \
   wizard.log_dir=./runs/e2e_challenge_nuplan_dev
 ```
@@ -18,10 +18,13 @@ Run the full navtest preset with the same trusted data root:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-ALPASIM_NUPLAN_ROOT=/media/mwatson/4TB/worldengine \
+ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
 uv run alpasim_wizard +e2e_challenge_nuplan=full \
   wizard.log_dir=./runs/e2e_challenge_nuplan_full
 ```
+
+Set `ALPASIM_NUPLAN_ROOT` to the World Engine data root containing
+`navtest/configs`, `navtest/assets`, and `nuplan_test`.
 
 ## Preset Structure
 
@@ -61,7 +64,7 @@ that the scene provider sees the full set:
 ```bash
 uv run --extra wizard alpasim_check_config \
   +e2e_challenge_nuplan=full \
-  defines.worldengine_root=/media/mwatson/4TB/worldengine
+  defines.worldengine_root=/path/to/worldengine-root
 ```
 
 Expected output:
