@@ -35,50 +35,35 @@ from eval.schema import SceneScoreConfig
 
 logger = logging.getLogger(__name__)
 
-
-def _build_default_modifiers(has_offroad: bool) -> list[MetricAggregationModifiers]:
-    offroad_or_collision_event = pl.col("collision_any") > 0.0
-    offroad_or_collision_at_fault_event = pl.col("collision_at_fault") > 0.0
-    if has_offroad:
-        offroad_or_collision_event = offroad_or_collision_event | (
-            pl.col("offroad") > 0.0
+DEFAULT_MODIFIERS = [
+    RemoveTimestepsBeforeEvent(pl.col("eval_relevant") > 0.0),
+    AddCombinedEvent(
+        event=(pl.col("collision_any") > 0.0) | (pl.col("offroad") > 0.0),
+        name="offroad_or_collision",
+        time_aggregation="max",
+    ),
+    AddCombinedEvent(
+        event=(pl.col("collision_front") > 0.0) | (pl.col("collision_lateral") > 0),
+        name="collision_at_fault",
+        time_aggregation="max",
+    ),
+    AddCombinedEvent(
+        event=(pl.col("collision_at_fault") > 0.0) | (pl.col("offroad") > 0.0),
+        name="offroad_or_collision_at_fault",
+        time_aggregation="max",
+    ),
+    AddCombinedEvent(
+        event=(
+            pl.col("timestamps_us")
+            - pl.col("timestamps_us").min().over("trajectory_uid")
         )
-        offroad_or_collision_at_fault_event = offroad_or_collision_at_fault_event | (
-            pl.col("offroad") > 0.0
-        )
-
-    return [
-        RemoveTimestepsBeforeEvent(pl.col("eval_relevant") > 0.0),
-        AddCombinedEvent(
-            event=offroad_or_collision_event,
-            name="offroad_or_collision",
-            time_aggregation="max",
-        ),
-        AddCombinedEvent(
-            event=(pl.col("collision_front") > 0.0) | (pl.col("collision_lateral") > 0),
-            name="collision_at_fault",
-            time_aggregation="max",
-        ),
-        AddCombinedEvent(
-            event=offroad_or_collision_at_fault_event,
-            name="offroad_or_collision_at_fault",
-            time_aggregation="max",
-        ),
-        AddCombinedEvent(
-            event=(
-                pl.col("timestamps_us")
-                - pl.col("timestamps_us").min().over("trajectory_uid")
-            )
-            / 20e6,
-            name="duration_frac_20s",
-            time_aggregation="last",
-        ),
-        RemoveTrajectoryWithEvent(pl.col("img_is_black") > 0.0),
-        RemoveTimestepsAfterEvent(pl.col("offroad_or_collision") > 0.0),
-    ]
-
-
-DEFAULT_MODIFIERS = _build_default_modifiers(has_offroad=True)
+        / 20e6,
+        name="duration_frac_20s",
+        time_aggregation="last",
+    ),
+    RemoveTrajectoryWithEvent(pl.col("img_is_black") > 0.0),
+    RemoveTimestepsAfterEvent(pl.col("offroad_or_collision") > 0.0),
+]
 
 
 def _add_progress_clipped_rel_metric(
@@ -103,28 +88,6 @@ def _add_progress_clipped_rel_metric(
         how="vertical",
     )
     return df_wide, agg_function_df
-
-
-def _validate_offroad_metric(
-    df_wide: pl.DataFrame,
-    processing_warnings: list[str],
-) -> None:
-    """Validate offroad if present; do not synthesize unavailable data."""
-    if "offroad" not in df_wide.columns:
-        msg = (
-            "No offroad column found in the metrics dataframe. "
-            "Offroad-dependent combined metrics will use collision-only events; "
-            "scene scoring requires offroad and will fail if enabled."
-        )
-        logger.warning(msg)
-        processing_warnings.append(msg)
-        return
-
-    if df_wide["offroad"].null_count() > 0:
-        raise ValueError(
-            "Offroad metric contains null values after timestamp alignment. "
-            "Refusing to treat unavailable offroad samples as 0.0."
-        )
 
 
 def _combine_run_uuids_deterministically(run_uuids: pl.Series) -> str:
@@ -778,19 +741,19 @@ def aggregate_and_write_metrics_results_txt(
         on="name",
     ).sort(["trajectory_uid", "timestamps_us"])
 
-    # When no map is loaded, offroad is not computed. Do not synthesize it:
-    # aggregation-only views can still compute collision-only incident metrics,
-    # while scene scoring should fail clearly if offroad is required.
-    _validate_offroad_metric(
-        df_wide,
-        processing_warnings,
-    )
-    has_offroad = "offroad" in df_wide.columns
+    # When no map is loaded, offroad is not computed. Add a default so modifiers that
+    # reference it (e.g. offroad_or_collision) do not fail.
+    if "offroad" not in df_wide.columns:
+        df_wide = df_wide.with_columns(pl.lit(0.0).alias("offroad"))
+        msg = (
+            "No offroad column found in the metrics dataframe. "
+            "Adding a default value of 0.0."
+        )
+        logger.warning(msg)
+        processing_warnings.append(msg)
 
     df_wide_modified = df_wide
-    additional_modifiers = _build_default_modifiers(has_offroad) + (
-        additional_modifiers or []
-    )
+    additional_modifiers = DEFAULT_MODIFIERS + (additional_modifiers or [])
     for modifier in additional_modifiers:
         df_wide_modified, agg_function_df = modifier(df_wide_modified, agg_function_df)
     df_wide_modified, agg_function_df = _add_progress_clipped_rel_metric(
