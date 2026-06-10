@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
+# Template for building the NuPlan trajdata cache used by
+# +e2e_challenge_nuplan=dev/full.
+#
+# Set ALPASIM_NUPLAN_ROOT to the World Engine root containing navtest/configs
+# and navtest/assets.
+
+scene_provider:
+  kind: trajdata
+  trajdata:
+    cache_location: ${oc.env:ALPASIM_NUPLAN_ROOT}
+    desired_dt: 0.1
+    load_vector_map: true
+    rebuild_cache: false
+    rebuild_maps: false
+    num_workers: 4
+    dataset:
+      name: nuplan_test
+      data_dir: ${oc.env:ALPASIM_NUPLAN_ROOT}
+      extra_params:
+        config_dir: ${oc.env:ALPASIM_NUPLAN_ROOT}/navtest/configs
+        num_timesteps_before: 30
+        num_timesteps_after: 80
+        asset_base_path: ${oc.env:ALPASIM_NUPLAN_ROOT}

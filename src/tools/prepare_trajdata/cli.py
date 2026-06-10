@@ -7,7 +7,7 @@ Data preprocessing CLI for building trajdata cache.
 This module provides two clear paths for data preprocessing:
 
 1. **User Config Path** (--user-config): For complex scenarios
-   - Load full configuration from YAML file
+   - Load scene_provider.trajdata from a provider-only or full runtime YAML file
    - Supports multiple data sources, hierarchical config
    - Supports YAML batch mode (NuPlan central_tokens)
    - CLI overrides limited to: --rebuild-cache, --rebuild-maps, --verbose
@@ -20,7 +20,7 @@ This module provides two clear paths for data preprocessing:
 
 Usage Examples:
 
-    # Complex: Use user config with optional overrides
+    # Complex: Use provider config with optional overrides
     python -m prepare_trajdata --user-config user.yaml --rebuild-cache
 
     # Simple: Direct CLI parameters for basic preprocessing
@@ -42,9 +42,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from alpasim_runtime.config import UserSimulatorConfig
+from alpasim_runtime.config import (
+    SceneProviderConfig,
+    TrajdataProviderConfig,
+    UserSimulatorConfig,
+)
 from alpasim_runtime.scene_loader import trajdata_provider_config_to_params
-from alpasim_utils.yaml_utils import typed_parse_config
+from alpasim_utils.yaml_utils import load_yaml_dict, typed_parse_config
 from omegaconf import OmegaConf
 
 from trajdata.dataset import UnifiedDataset
@@ -56,7 +60,7 @@ logger = logging.getLogger(__name__)
 class PrepareDataConfig:
     """Configuration for CLI-based data preprocessing.
 
-    This is used ONLY for CLI mode. User config mode uses DataSourceConfig directly.
+    This is used ONLY for CLI mode. User config mode uses TrajdataProviderConfig directly.
 
     Note: CLI mode only supports basic preprocessing. For YAML batch mode (NuPlan),
     use user-config files with config_dir in extra_params.
@@ -308,7 +312,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
         description=(
             "Prepare scene data and build trajdata cache for alpasim simulations.\n\n"
             "Two modes:\n"
-            "  1. User config (--user-config): Complex scenarios with full YAML config\n"
+            "  1. User config (--user-config): Provider-only or full runtime YAML\n"
             "  2. CLI mode (--desired-data + --data-dir): Simple, direct preprocessing"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -320,7 +324,10 @@ def create_arg_parser() -> argparse.ArgumentParser:
     mode_group.add_argument(
         "--user-config",
         type=str,
-        help="Path to user config YAML file containing scene_provider.trajdata configuration",
+        help=(
+            "Path to YAML containing scene_provider.trajdata, a direct "
+            "SceneProviderConfig, or a full runtime config"
+        ),
     )
 
     # Data source parameters
@@ -435,8 +442,38 @@ def parse_data_dirs(
     return result
 
 
+def load_trajdata_config(config_path: str) -> TrajdataProviderConfig | None:
+    """Load trajdata provider config from a full or provider-only YAML file."""
+    raw_config = load_yaml_dict(config_path)
+
+    if "scene_provider" in raw_config:
+        scene_provider = OmegaConf.to_object(
+            OmegaConf.merge(
+                OmegaConf.structured(SceneProviderConfig),
+                OmegaConf.create(raw_config["scene_provider"]),
+            )
+        )
+        assert isinstance(scene_provider, SceneProviderConfig)
+        return scene_provider.trajdata
+
+    if "trajdata" in raw_config:
+        scene_provider = OmegaConf.to_object(
+            OmegaConf.merge(
+                OmegaConf.structured(SceneProviderConfig),
+                OmegaConf.create(raw_config),
+            )
+        )
+        assert isinstance(scene_provider, SceneProviderConfig)
+        return scene_provider.trajdata
+
+    user_config = typed_parse_config(config_path, UserSimulatorConfig)
+    user_config = OmegaConf.to_object(user_config)
+    assert isinstance(user_config, UserSimulatorConfig)
+    return user_config.scene_provider.trajdata
+
+
 def run_from_user_config(config_path: str, args: argparse.Namespace) -> bool:
-    """Run preprocessing from user config file with minimal CLI overrides.
+    """Run preprocessing from a provider or runtime config file.
 
     Args:
         config_path: Path to user config YAML file
@@ -446,10 +483,7 @@ def run_from_user_config(config_path: str, args: argparse.Namespace) -> bool:
         True if successful, False otherwise
     """
     logger.info(f"Loading configuration from: {config_path}")
-    user_config = typed_parse_config(config_path, UserSimulatorConfig)
-    user_config = OmegaConf.to_object(user_config)
-
-    config = user_config.scene_provider.trajdata
+    config = load_trajdata_config(config_path)
     if config is None:
         logger.error("scene_provider.trajdata must be configured for prepare_data")
         return False

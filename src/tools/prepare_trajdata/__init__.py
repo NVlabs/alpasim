@@ -7,7 +7,7 @@ Data preprocessing module for building trajdata cache.
 This module provides two approaches for preparing scene data before simulations:
 
 1. **User Config Path** (Recommended for complex scenarios):
-   - Load configuration from YAML file
+   - Load scene_provider.trajdata from a provider-only or full runtime YAML file
    - Supports multiple data sources with individual settings
    - Automatic NuPlan YAML batch processing when config_dir is provided
    - Full control over per-dataset parameters
@@ -37,7 +37,7 @@ Example usage (programmatic):
     )
     preprocess_basic(config, verbose=True)
 
-    # Or use user config (recommended for production)
+    # Or use provider config (recommended for production)
     from alpasim_runtime.config import UserSimulatorConfig
     from alpasim_utils.yaml_utils import typed_parse_config
     user_config = typed_parse_config("user.yaml", UserSimulatorConfig)
