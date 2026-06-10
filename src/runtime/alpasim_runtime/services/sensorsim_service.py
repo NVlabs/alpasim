@@ -302,6 +302,33 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             ego_mask_id=ego_mask_id,
         )
 
+    @staticmethod
+    def _validate_rgb_metadata_matches_trigger(
+        request: RGBRenderRequest,
+        camera: RuntimeCamera,
+        trigger: Clock.Trigger,
+    ) -> None:
+        expected_start_us = trigger.time_range_us.start
+        expected_end_us = trigger.time_range_us.stop
+        if (
+            request.frame_start_us != expected_start_us
+            or request.frame_end_us != expected_end_us
+        ):
+            raise RuntimeError(
+                "RGB render request timing does not match camera trigger: "
+                f"camera={camera.logical_id!r}, "
+                f"request=[{request.frame_start_us}, {request.frame_end_us}), "
+                f"trigger=[{expected_start_us}, {expected_end_us})."
+            )
+
+        request_camera_id = request.camera_intrinsics.logical_id
+        if request_camera_id and request_camera_id != camera.logical_id:
+            raise RuntimeError(
+                "RGB render request camera does not match camera trigger: "
+                f"request camera={request_camera_id!r}, "
+                f"trigger camera={camera.logical_id!r}."
+            )
+
     async def aggregated_render(
         self,
         camera_triggers: list[tuple[RuntimeCamera, Clock.Trigger]],
@@ -357,7 +384,16 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             )
 
         images_with_metadata = []
-        for rgb_return, (camera, trigger) in zip(response.rgb_returns, camera_triggers):
+        for rgb_return, rgb_request, (camera, trigger) in zip(
+            response.rgb_returns,
+            request.rgb_requests,
+            camera_triggers,
+        ):
+            self._validate_rgb_metadata_matches_trigger(
+                rgb_request,
+                camera,
+                trigger,
+            )
             images_with_metadata.append(
                 ImageWithMetadata(
                     start_timestamp_us=trigger.time_range_us.start,
@@ -420,6 +456,11 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
+        self._validate_rgb_metadata_matches_trigger(
+            request,
+            camera,
+            trigger,
+        )
         return ImageWithMetadata(
             start_timestamp_us=trigger.time_range_us.start,
             end_timestamp_us=trigger.time_range_us.stop,

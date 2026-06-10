@@ -204,7 +204,7 @@ message RGBRenderRequest {
     // Renderers that compose the scene around the ego (e.g. MTGS) need the
     // ego pose directly; they cannot recover it from sensor_pose without
     // knowing the camera extrinsics.
-    PosePair ego_pose = 13;
+    PosePair ego_pose = 1013;
 }
 
 message AvailableCamerasRequest {

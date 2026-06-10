@@ -950,36 +950,55 @@ class TestAggregateAndWriteMetricsResultsTxt:
             )
 
     @patch("eval.aggregation.processing.plot_metrics_results")
-    def test_scene_score_defaults_missing_offroad_metric(
+    def test_scene_score_requires_offroad_metric(
         self,
         mock_plot: MagicMock,
         unified_metrics_df: pl.DataFrame,
         temp_directory: pathlib.Path,
     ) -> None:
-        """Missing offroad data should use the established no-map default."""
+        """Missing offroad data should not be treated as no offroad."""
         del mock_plot
         metrics_df = unified_metrics_df.filter(pl.col("name") != "offroad")
 
-        aggregate_and_write_metrics_results_txt(
-            metrics_df,
-            output_path=str(temp_directory),
-        )
-
-        payload = json.loads((temp_directory / "results-summary.json").read_text())
-        assert all(
-            rollout["score_metrics"]["offroad"] == 0.0
-            and rollout["metrics"]["offroad"] == 0.0
-            for rollout in payload["rollouts"]
-        )
+        with pytest.raises(ValueError, match="missing metric 'offroad'"):
+            aggregate_and_write_metrics_results_txt(
+                metrics_df,
+                output_path=str(temp_directory),
+            )
 
     @patch("eval.aggregation.processing.plot_metrics_results")
-    def test_scene_score_defaults_null_offroad_values_after_timestamp_alignment(
+    def test_missing_offroad_is_not_populated_when_scene_score_disabled(
         self,
         mock_plot: MagicMock,
         unified_metrics_df: pl.DataFrame,
         temp_directory: pathlib.Path,
     ) -> None:
-        """Sparse offroad rows should not aggregate to None after pivoting."""
+        """Aggregation may run without offroad, but must not invent it."""
+        del mock_plot
+        metrics_df = unified_metrics_df.filter(pl.col("name") != "offroad")
+
+        result = aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            scene_score_config=SceneScoreConfig(enabled=False),
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        assert "offroad" not in result.df_wide.columns
+        assert "offroad" not in result.df_wide_avg_t.columns
+        assert all(
+            "offroad" not in rollout["metrics"] for rollout in payload["rollouts"]
+        )
+        assert all(rollout["score_metrics"] is None for rollout in payload["rollouts"])
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_null_offroad_values_after_timestamp_alignment_fail(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Sparse offroad rows should not be treated as no offroad."""
         del mock_plot
         metrics_df = unified_metrics_df.filter(
             ~((pl.col("name") == "offroad") & (pl.col("timestamps_us") != 1000))
@@ -992,17 +1011,11 @@ class TestAggregateAndWriteMetricsResultsTxt:
             .alias("values")
         )
 
-        aggregate_and_write_metrics_results_txt(
-            metrics_df,
-            output_path=str(temp_directory),
-        )
-
-        payload = json.loads((temp_directory / "results-summary.json").read_text())
-        assert all(
-            rollout["score_metrics"]["offroad"] == 0.0
-            and rollout["metrics"]["offroad"] == 0.0
-            for rollout in payload["rollouts"]
-        )
+        with pytest.raises(ValueError, match="Offroad metric contains null values"):
+            aggregate_and_write_metrics_results_txt(
+                metrics_df,
+                output_path=str(temp_directory),
+            )
 
     @patch("eval.aggregation.processing.plot_metrics_results")
     def test_clamped_long_scene_does_not_get_short_gt_distance_override(
