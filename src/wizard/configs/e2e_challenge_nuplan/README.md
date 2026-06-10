@@ -34,8 +34,8 @@ token:
 ```
 
 For the current navtest set this produces 12,146 unique scene ids in
-`full.yaml`. This matches the scene naming expected by the trajdata-backed
-NuPlan scene provider.
+`../nuplan_scenes/navtest_full.yaml`, which is composed by `full.yaml`. This
+matches the scene naming expected by the trajdata-backed NuPlan scene provider.
 
 ## Validation
 
