@@ -23,6 +23,22 @@ uv run alpasim_wizard +e2e_challenge_nuplan=full \
   wizard.log_dir=./runs/e2e_challenge_nuplan_full
 ```
 
+## Preset Structure
+
+`dev.yaml` and `full.yaml` both compose
+`../e2e_challenge_nuplan_common/base.yaml` for the shared MTGS/trajdata runtime
+setup. They only differ in run naming, scene selection, scene limit, and whether
+videos are rendered.
+
+To run the dev preset with the full scene set, override the scene group and
+remove the dev scene limit:
+
+```bash
+uv run alpasim_wizard +e2e_challenge_nuplan=dev \
+  nuplan_scenes=navtest_full \
+  scenes.limit_to_first_n=0
+```
+
 ## Full Scene List
 
 The full navtest list is expanded from the navtest config YAML files. There are
