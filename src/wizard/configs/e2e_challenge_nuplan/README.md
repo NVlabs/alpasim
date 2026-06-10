@@ -12,6 +12,48 @@ uv run alpasim_wizard +e2e_challenge_nuplan=dev \
   wizard.log_dir=./runs/e2e_challenge_nuplan_dev
 ```
 
+## Full Navtest Evaluation
+
+Run the full navtest preset with the same trusted data root:
+
+```bash
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+ALPASIM_NUPLAN_ROOT=/media/mwatson/4TB/worldengine \
+uv run alpasim_wizard +e2e_challenge_nuplan=full \
+  wizard.log_dir=./runs/e2e_challenge_nuplan_full
+```
+
+## Full Scene List
+
+The full navtest list is expanded from the navtest config YAML files. There are
+1,491 config files, but the evaluation scene id is generated for every central
+token:
+
+```text
+<central_log>-<central_token>
+```
+
+For the current navtest set this produces 12,146 unique scene ids in
+`full.yaml`. This matches the scene naming expected by the trajdata-backed
+NuPlan scene provider.
+
+## Validation
+
+Before running a full evaluation, verify that Hydra can resolve the preset and
+that the scene provider sees the full set:
+
+```bash
+uv run --extra wizard alpasim_check_config \
+  +e2e_challenge_nuplan=full \
+  defines.worldengine_root=/media/mwatson/4TB/worldengine
+```
+
+Expected output:
+
+```text
+Found 12146 scenes.
+```
+
 The preset expects MTGS assets under:
 
 ```text
