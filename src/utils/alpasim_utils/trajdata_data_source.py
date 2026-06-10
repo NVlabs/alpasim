@@ -44,6 +44,7 @@ from alpasim_utils.scenario import (
 )
 from alpasim_utils.scene_data_source import SceneDataSource
 from scipy.spatial.transform import Rotation as R
+
 from trajdata.caching import EnvCache
 from trajdata.data_structures.agent import AgentMetadata
 from trajdata.data_structures.scene_metadata import Scene

@@ -21,10 +21,10 @@ from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from PIL import Image, UnidentifiedImageError
 from scipy.spatial.transform import Rotation as R
-from trajdata.maps import VectorMap
 
 from eval.schema import EvalConfig, MetricVehicleConfig
 from eval.video_data import RenderableLineString
+from trajdata.maps import VectorMap
 
 logger = logging.getLogger("eval.data")
 

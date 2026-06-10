@@ -21,13 +21,13 @@ from concurrent.futures import ProcessPoolExecutor
 
 import yaml
 from alpasim_grpc.v0.logging_pb2 import LogEntry
-from trajdata.maps import VectorMap
 
 from eval.accumulator import EvalDataAccumulator
 from eval.data import ScenarioEvalInput
 from eval.scenario_evaluator import ScenarioEvalResult, ScenarioEvaluator
 from eval.schema import EvalConfig
 from eval.video import render_video_from_eval_result
+from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
 

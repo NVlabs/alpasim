@@ -27,7 +27,6 @@ from alpasim_utils.geometry import (
     pose_from_grpc,
     trajectory_from_grpc,
 )
-from trajdata.maps import VectorMap
 
 from eval.data import (
     RAABB,
@@ -38,6 +37,7 @@ from eval.data import (
     ScenarioEvalInput,
 )
 from eval.schema import EvalConfig
+from trajdata.maps import VectorMap
 
 logger = logging.getLogger("alpasim_eval.accumulator")
 
