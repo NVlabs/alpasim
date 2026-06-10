@@ -90,6 +90,41 @@ def _add_progress_clipped_rel_metric(
     return df_wide, agg_function_df
 
 
+def _ensure_offroad_metric(
+    df_wide: pl.DataFrame,
+    agg_function_df: pl.DataFrame,
+    processing_warnings: list[str],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Ensure offroad is available for modifiers and scene scoring."""
+    if "offroad" not in df_wide.columns:
+        df_wide = df_wide.with_columns(pl.lit(0.0).alias("offroad"))
+        msg = (
+            "No offroad column found in the metrics dataframe. "
+            "Adding a default value of 0.0."
+        )
+        logger.warning(msg)
+        processing_warnings.append(msg)
+    elif df_wide["offroad"].null_count() > 0:
+        df_wide = df_wide.with_columns(pl.col("offroad").fill_null(0.0))
+        msg = (
+            "Null offroad values found in the metrics dataframe. "
+            "Filling nulls with 0.0."
+        )
+        logger.warning(msg)
+        processing_warnings.append(msg)
+
+    if "offroad" not in agg_function_df["name"].to_list():
+        agg_function_df = pl.concat(
+            [
+                agg_function_df,
+                pl.DataFrame({"name": ["offroad"], "time_aggregation": ["max"]}),
+            ],
+            how="vertical",
+        )
+
+    return df_wide, agg_function_df
+
+
 def _combine_run_uuids_deterministically(run_uuids: pl.Series) -> str:
     normalized = [
         str(run_uuid) for run_uuid in run_uuids.drop_nulls().unique().sort().to_list()
@@ -741,16 +776,15 @@ def aggregate_and_write_metrics_results_txt(
         on="name",
     ).sort(["trajectory_uid", "timestamps_us"])
 
-    # When no map is loaded, offroad is not computed. Add a default so modifiers that
-    # reference it (e.g. offroad_or_collision) do not fail.
-    if "offroad" not in df_wide.columns:
-        df_wide = df_wide.with_columns(pl.lit(0.0).alias("offroad"))
-        msg = (
-            "No offroad column found in the metrics dataframe. "
-            "Adding a default value of 0.0."
-        )
-        logger.warning(msg)
-        processing_warnings.append(msg)
+    # When no map is loaded, offroad is not computed. When metrics are sparse or
+    # old rollout files are mixed with newer ones, offroad can also be null at
+    # some timestamps. Use the existing no-map default consistently so modifiers
+    # and scene scoring can still run.
+    df_wide, agg_function_df = _ensure_offroad_metric(
+        df_wide,
+        agg_function_df,
+        processing_warnings,
+    )
 
     df_wide_modified = df_wide
     additional_modifiers = DEFAULT_MODIFIERS + (additional_modifiers or [])

@@ -70,6 +70,7 @@ class VectorMap:
 
     def __post_init__(self) -> None:
         self.env_name, self.map_name = self.map_id.split(":")
+        self._road_area_polygons: Dict[str, Polygon] = {}
 
         self.lanes: Optional[List[RoadLane]] = None
         if MapElementType.ROAD_LANE in self.elements:

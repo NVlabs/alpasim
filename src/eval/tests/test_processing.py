@@ -950,6 +950,61 @@ class TestAggregateAndWriteMetricsResultsTxt:
             )
 
     @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_scene_score_defaults_missing_offroad_metric(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Missing offroad data should use the established no-map default."""
+        del mock_plot
+        metrics_df = unified_metrics_df.filter(pl.col("name") != "offroad")
+
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        assert all(
+            rollout["score_metrics"]["offroad"] == 0.0
+            and rollout["metrics"]["offroad"] == 0.0
+            for rollout in payload["rollouts"]
+        )
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_scene_score_defaults_null_offroad_values_after_timestamp_alignment(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        """Sparse offroad rows should not aggregate to None after pivoting."""
+        del mock_plot
+        metrics_df = unified_metrics_df.filter(
+            ~((pl.col("name") == "offroad") & (pl.col("timestamps_us") != 1000))
+        ).with_columns(
+            pl.when(
+                (pl.col("name") == "eval_relevant") & (pl.col("timestamps_us") == 1000)
+            )
+            .then(0.0)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+        )
+
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        assert all(
+            rollout["score_metrics"]["offroad"] == 0.0
+            and rollout["metrics"]["offroad"] == 0.0
+            for rollout in payload["rollouts"]
+        )
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
     def test_clamped_long_scene_does_not_get_short_gt_distance_override(
         self,
         mock_plot: MagicMock,

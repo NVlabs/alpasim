@@ -9,7 +9,7 @@
 #
 # Example:
 #   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-#   ALPASIM_NUPLAN_ROOT=/media/mwatson/4TB/worldengine \
+#   ALPASIM_NUPLAN_ROOT=<path_to_location_of_{navtest, nuplan_test}> \
 #   uv run alpasim_wizard +e2e_challenge_nuplan=dev \
 #     wizard.log_dir=./runs/e2e_challenge_nuplan_dev
 
@@ -21,7 +21,7 @@ defaults:
 
 defines:
   filesystem: ${repo-relative:"data"}
-  worldengine_root: ${oc.env:ALPASIM_NUPLAN_ROOT,/media/mwatson/4TB/worldengine}
+  worldengine_root: ${oc.env:ALPASIM_NUPLAN_ROOT}
 
 wizard:
   run_name: "e2e_challenge_nuplan_dev"
@@ -191,7 +191,7 @@ eval:
   allow_aggregation_with_failed_rollouts: true
   parse_unstructured_debug_info: false
   scene_score:
-    enabled: false
+    enabled: true
   scorers:
     image:
       camera_logical_id: CAM_F0
