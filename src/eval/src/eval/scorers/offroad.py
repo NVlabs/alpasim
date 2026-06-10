@@ -260,30 +260,30 @@ class OffRoadScorer(Scorer):
                 offroad.append(False)
                 continue
 
-            road_area_offroad = _is_offroad_using_road_area(
-                simulation_result,
-                res["ego_xyzh"],
-                ego_polygon,
-            )
             if not _has_map_element_kdtree(
                 simulation_result, vec_map_elements.MapElementType.ROAD_EDGE
             ):
+                # The nuPlan dataset, for example, doesn't have road edges, but it does have road areas.
+                road_area_offroad = _is_offroad_using_road_area(
+                    simulation_result,
+                    res["ego_xyzh"],
+                    ego_polygon,
+                )
                 offroad.append(
                     False if road_area_offroad is None else road_area_offroad
                 )
-                continue
+            else:
+                # Check if we're too close to the road edge. This will still miss
+                # offroad cases when we're far outside the road - but then either
+                # we started offroad or we had to go offroad at some point.
+                closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
+                    xyz=res["ego_xyzh"][..., :3]
+                ).polyline.xy
 
-            # Check if we're too close to the road edge. This will still miss
-            # offroad cases when we're far outside the road - but then either
-            # we started offroad or we had to go offroad at some point.
-            closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
-                xyz=res["ego_xyzh"][..., :3]
-            ).polyline.xy
-
-            distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
-                ego_polygon
-            )
-            offroad.append(distance < 1e-3)
+                distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
+                    ego_polygon
+                )
+                offroad.append(distance < 1e-3)
         return [
             MetricReturn(
                 name="offroad",
