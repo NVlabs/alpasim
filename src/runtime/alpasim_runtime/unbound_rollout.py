@@ -103,23 +103,29 @@ def _build_rollout_timing(
     camera_logical_ids = [camera_cfg.logical_id for camera_cfg in camera_configs]
     egomotion_context_start_us = data_source.rig.trajectory.time_range_us.start
 
-    # Providers with recorded camera windows anchor rollout timing to the
-    # recorded shutter-close timestamp. Trajdata-backed MTGS scenes expose
-    # camera ids but do not carry per-frame camera timestamps, so synthesize
-    # the first frame range from runtime camera config in that specific case.
+    # ``first_camera_frame_end_us`` raises through ``first_camera_frame_ranges_us``
+    # when no cameras are configured.  Headless rollouts fall back to the GT
+    # trajectory start as the render anchor.
     if camera_logical_ids:
         if data_source.rig.camera_frame_ranges_us:
             first_camera_frame_ranges_us = data_source.rig.first_camera_frame_ranges_us(
                 camera_logical_ids
             )
+            render_start_us = data_source.rig.first_camera_frame_end_us(
+                camera_logical_ids
+            )
         else:
+            # Trajdata-backed MTGS scenes expose camera ids but do not carry
+            # per-frame camera timestamps, so synthesize the first frame range
+            # from the scene start and runtime shutter durations.
             first_camera_frame_ranges_us = _synthetic_first_camera_frame_ranges_us(
                 data_source,
                 camera_configs,
             )
-        render_start_us = min(
-            frame_range.stop for frame_range in first_camera_frame_ranges_us.values()
-        )
+            render_start_us = min(
+                frame_range.stop
+                for frame_range in first_camera_frame_ranges_us.values()
+            )
     else:
         first_camera_frame_ranges_us = {}
         render_start_us = data_source.rig.trajectory.time_range_us.start
