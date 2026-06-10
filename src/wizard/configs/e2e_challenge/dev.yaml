@@ -36,7 +36,6 @@ runtime:
   simulation_config:
     route_start_offset_m: 40.0
     send_recording_ground_truth: false
-    force_gt_duration_us: 500_000 # 0.5s
 
 eval:
   allow_aggregation_with_failed_rollouts: true

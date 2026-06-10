@@ -135,7 +135,7 @@ runtime:
     n_sim_steps: 10
     n_rollouts: 1
     control_timestep_us: 500_000
-    force_gt_duration_us: 2_000_000
+    force_gt_duration_us: 500_000
     time_start_offset_us: 0
     planner_delay_us: 0
     min_traffic_duration_us: 0
