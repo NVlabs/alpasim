@@ -46,6 +46,7 @@ from alpasim_runtime.config import UserSimulatorConfig
 from alpasim_runtime.scene_loader import trajdata_provider_config_to_params
 from alpasim_utils.yaml_utils import typed_parse_config
 from omegaconf import OmegaConf
+
 from trajdata.dataset import UnifiedDataset
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,7 @@ def preprocess_from_params(params: dict, verbose: bool = True) -> bool:
             rebuild_maps=params["rebuild_maps"],
             desired_dt=params["desired_dt"],
             num_workers=params["num_workers"],
-            dataset_kwargs=dataset_kwargs,
+            dataset_kwargs=params.get("dataset_kwargs"),
             verbose=verbose,
         )
     except Exception as e:
