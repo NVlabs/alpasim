@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as follows."
+authors:
+- family-names: "Ivanovic"
+  given-names: "Boris"
+  orcid: "https://orcid.org/0000-0002-8698-202X"
+title: "trajdata: A unified interface to many trajectory forecasting datasets"
+version: 1.3.3
+doi: 10.5281/zenodo.6671548
+date-released: 2023-08-22
+url: "https://github.com/nvr-avg/trajdata"
+preferred-citation:
+  type: conference-paper
+  authors:
+  - family-names: "Ivanovic"
+    given-names: "Boris"
+    orcid: "https://orcid.org/0000-0002-8698-202X"
+  - family-names: "Song"
+    given-names: "Guanyu"
+  - family-names: "Gilitschenski"
+    given-names: "Igor"
+  - family-names: "Pavone"
+    given-names: "Marco"
+  journal: "Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks"
+  month: 12
+  title: "trajdata: A Unified Interface to Multiple Human Trajectory Datasets"
+  year: 2023

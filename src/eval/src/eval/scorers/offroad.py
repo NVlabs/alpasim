@@ -11,10 +11,10 @@ from alpasim_utils import geometry
 from matplotlib import pyplot as plt
 from shapely import plotting as shapely_plotting
 from shapely.geometry.base import BaseGeometry
-from trajdata.maps import vec_map_elements
 
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
+from trajdata.maps import vec_map_elements
 
 
 def _get_center_line_yaw_at_projection(
@@ -81,6 +81,55 @@ def _get_lane_polygon(
         return _repair_polygonal_geometry(
             shapely.LineString(lane.center.points[..., :2]).buffer(road_width_m / 2)
         )
+
+
+def _has_map_element_kdtree(
+    simulation_result: SimulationResult,
+    elem_type: vec_map_elements.MapElementType,
+) -> bool:
+    search_kdtrees = getattr(simulation_result.vec_map, "search_kdtrees", None)
+    return search_kdtrees is not None and elem_type in search_kdtrees
+
+
+def _road_areas_near_ego(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    query_dist_m: float = 15.0,
+) -> list[vec_map_elements.RoadArea] | None:
+    if not _has_map_element_kdtree(
+        simulation_result, vec_map_elements.MapElementType.ROAD_AREA
+    ):
+        return None
+
+    return simulation_result.vec_map.get_road_areas_within(
+        ego_xyzh[..., :3], query_dist_m
+    )
+
+
+def _road_area_union(
+    simulation_result: SimulationResult,
+    road_areas: list[vec_map_elements.RoadArea],
+) -> BaseGeometry:
+    polygons = [
+        simulation_result.vec_map.get_road_area_polygon_2d(area.id)
+        for area in road_areas
+    ]
+    return _repair_polygonal_geometry(shapely.ops.unary_union(polygons))
+
+
+def _is_offroad_using_road_area(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    ego_polygon: BaseGeometry,
+) -> bool | None:
+    road_areas = _road_areas_near_ego(simulation_result, ego_xyzh)
+    if road_areas is None:
+        return None
+    if not road_areas:
+        return True
+
+    road_area_union = _road_area_union(simulation_result, road_areas)
+    return not road_area_union.covers(ego_polygon)
 
 
 def _compute_off_lane(
@@ -211,17 +260,30 @@ class OffRoadScorer(Scorer):
                 offroad.append(False)
                 continue
 
-            # Check if we're too close to the road edge. This will still miss
-            # offroad cases when we're far outside the road - but then either
-            # we started offroad or we had to go offroad at some point.
-            closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
-                xyz=res["ego_xyzh"][..., :3]
-            ).polyline.xy
+            if not _has_map_element_kdtree(
+                simulation_result, vec_map_elements.MapElementType.ROAD_EDGE
+            ):
+                # The nuPlan dataset, for example, doesn't have road edges, but it does have road areas.
+                road_area_offroad = _is_offroad_using_road_area(
+                    simulation_result,
+                    res["ego_xyzh"],
+                    ego_polygon,
+                )
+                offroad.append(
+                    False if road_area_offroad is None else road_area_offroad
+                )
+            else:
+                # Check if we're too close to the road edge. This will still miss
+                # offroad cases when we're far outside the road - but then either
+                # we started offroad or we had to go offroad at some point.
+                closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
+                    xyz=res["ego_xyzh"][..., :3]
+                ).polyline.xy
 
-            distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
-                ego_polygon
-            )
-            offroad.append(distance < 1e-3)
+                distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
+                    ego_polygon
+                )
+                offroad.append(distance < 1e-3)
         return [
             MetricReturn(
                 name="offroad",

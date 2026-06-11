@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package trajdata;
+
+message VectorizedMap {
+  // The name of this map in the format environment_name:map_name
+  string name = 1;
+
+  // The full set of map elements.
+  repeated MapElement elements = 2;
+
+  // The coordinates of the cuboid (in m)
+  // containing all elements in this map.
+  Point max_pt = 3;
+  Point min_pt = 4;
+
+  // The original world coordinates (in m) of the bottom-left of the map
+  // (account for a change in the origin for storage efficiency).
+  Point shifted_origin = 5;
+}
+
+message MapElement {
+  // A unique ID to identify this element.
+  bytes id = 1;
+
+  // Type specific data.
+  oneof element_data {
+    RoadLane road_lane = 2;
+    RoadArea road_area = 3;
+    PedCrosswalk ped_crosswalk = 4;
+    PedWalkway ped_walkway = 5;
+    RoadEdge road_edge = 6;
+    TrafficSign traffic_sign = 7;
+    WaitLine wait_line = 8;
+  }
+}
+
+message Point {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Polyline {
+  // Position deltas in 10^-5 meters. The origin is an arbitrary location.
+  // Inspired by https://github.com/woven-planet/l5kit/blob/master/l5kit/l5kit/data/proto/road_network.proto#L446
+  // The delta for the first point is just its coordinates tuple, i.e. it is a "delta" from
+  // the origin. For subsequent points, this field stores the difference between the point's
+  // coordinates and the previous point's coordinates. This is for representation efficiency.
+  repeated sint64 dx_mm = 1;
+  repeated sint64 dy_mm = 2;
+  repeated sint64 dz_mm = 3;
+  repeated double h_rad = 4;
+}
+
+message RoadLane {
+  // The polyline data for the lane. A polyline is a list of points with
+  // segments defined between consecutive points.
+  Polyline center = 1;
+
+  // The polyline data for the (optional) left boundary of this lane.
+  optional Polyline left_boundary = 2;
+
+  // The polyline data for the (optional) right boundary of this lane.
+  optional Polyline right_boundary = 3;
+
+  // A list of IDs for lanes that this lane may be entered from.
+  repeated bytes entry_lanes = 4;
+
+  // A list of IDs for lanes that this lane may exit to.
+  repeated bytes exit_lanes = 5;
+
+  // A list of neighbors to the left of this lane. Neighbor lanes
+  // include only adjacent lanes going the same direction.
+  repeated bytes adjacent_lanes_left = 6;
+
+  // A list of neighbors to the right of this lane. Neighbor lanes
+  // include only adjacent lanes going the same direction.
+  repeated bytes adjacent_lanes_right = 7;
+
+  // A list of associated road area ids.
+  repeated bytes road_area_ids = 8;
+
+  // A list of associated traffic sign ids.
+  repeated bytes traffic_sign_ids = 9;
+
+  // A list of associated wait line ids.
+  repeated bytes wait_line_ids = 10;
+
+}
+
+message RoadArea {
+  // The polygon defining the outline of general driveable area. This acts as a
+  // catch-all when there's a road segment without lane information.
+  // For example, intersections in nuScenes are not "lanes".
+  Polyline exterior_polygon = 1;
+
+  // The area within these polygons is NOT included.
+  repeated Polyline interior_holes = 2;
+}
+
+message PedCrosswalk {
+  // The polygon defining the outline of the crosswalk. The polygon is assumed
+  // to be closed (i.e. a segment exists between the last point and the first
+  // point).
+  Polyline polygon = 1;
+}
+
+message PedWalkway {
+  // The polygon defining the outline of the pedestrian walkway (e.g., sidewalk).
+  // The polygon is assumed to be closed (i.e. a segment exists between the last
+  // point and the first point).
+  Polyline polygon = 1;
+}
+
+message RoadEdge {
+  // The polyline data for the edge of the road. This is used to define the
+  // boundary of the road network.
+  Polyline polyline = 1;
+}
+
+message TrafficSign {
+  // Position of the traffic sign
+  Point position = 1;
+  // Type of the traffic sign
+  string sign_type = 2;
+}
+
+message WaitLine {
+  // The polyline data for the wait line
+  Polyline polyline = 1;
+  // Type of the wait line. e.g., stop line
+  string wait_line_type = 2;
+  // Is the waitline explicit or implicit
+  bool is_implicit = 3;
+}

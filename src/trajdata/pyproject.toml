@@ -1,0 +1,50 @@
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["setuptools>=58", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.8",
+    "License :: OSI Approved :: Apache Software License",
+]
+name = "trajdata-alpasim"
+version = "1.4.3"
+authors = [{ name = "Boris Ivanovic", email = "bivanovic@nvidia.com" }]
+description = "A unified interface to many trajectory forecasting datasets."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.19",
+    "tqdm>=4.62",
+    "matplotlib>=3.5",
+    "dill>=0.3.4",
+    "pandas>=1.4.1",
+    "pyarrow>=7.0.0",
+    "torch>=1.10.2",
+    "seaborn>=0.12",
+    "bokeh>=3.0.3",
+    "geopandas>=0.13.2",
+    "protobuf>=4.0.0,<5.0.0",
+    "scipy>=1.9.0",
+    "shapely>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["black", "isort", "pytest", "pytest-xdist", "twine", "build", "grpcio-tools==1.62.2"]
+interaction = ["lanelet2==1.2.1; python_version < '3.12'"]
+lyft = ["l5kit==1.5.0; python_version < '3.12'"]
+nusc = ["nuscenes-devkit==1.1.9"]
+waymo = [
+    "tensorflow==2.11.0; python_version < '3.12'",
+    "waymo-open-dataset-tf-2-11-0; python_version < '3.12'",
+    "intervaltree",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/nvr-avg/trajdata"
+"Bug Tracker" = "https://github.com/nvr-avg/trajdata/issues"

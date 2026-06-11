@@ -47,6 +47,7 @@ class TrajdataProviderConfig:
     cache_location: str = MISSING
     desired_dt: float = 0.1
     load_vector_map: bool = True
+    vector_map_params: Dict[str, Any] = field(default_factory=dict)
     rebuild_cache: bool = False
     rebuild_maps: bool = False
     num_workers: int = 1

@@ -162,6 +162,7 @@ Watson
 - Controller: Michael Watson
 - Physics: Riccardo de Lutio
 - Trafficsim: Maximilian Igl, Boris Ivanovic
+- MTGS integration: Caojun Wang
 
 **Senior Mgmt:** Sanja Fidler, Zan Gojcic, Boris Ivanovic, Marco Pavone
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 # \/ this is all it takes to validate that imports work
 import alpasim_grpc.v0  # noqa: F401

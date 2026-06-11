@@ -9,10 +9,10 @@ from typing import Iterable
 import numpy as np
 from matplotlib import pyplot as plt
 from shapely import LineString, Point, STRtree
-from trajdata import maps
-from trajdata.maps import VectorMap
 
 from eval.schema import EvalConfig
+from trajdata import maps
+from trajdata.maps import VectorMap
 
 
 @dataclasses.dataclass
@@ -257,7 +257,7 @@ class ShapelyMap:
             max_dist is None or center is not None
         ), "center must be provided if max_dist is provided"
 
-        current_linestrings_ids: Iterable[int] = (
+        current_linestring_ids: Iterable[int] = (
             np.arange(len(self.renderable_linestrings))
             if max_dist is None
             else self.get_linestring_idxs_in_radius(center, max_dist)
@@ -267,7 +267,7 @@ class ShapelyMap:
         if cfg.video.map_video.map_elements_to_plot is not None:
             current_linestring_ids = [
                 id
-                for id in current_linestrings_ids
+                for id in current_linestring_ids
                 if self.renderable_linestrings[id].name
                 in cfg.video.map_video.map_elements_to_plot
             ]

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim-mtgs"
+version = "0.1.0"
+description = "MTGS (Multi-Target Gaussian Splatting) renderer plugin for Alpasim."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "alpasim_plugins",
+    "alpasim_grpc",
+    "alpasim_runtime",
+    "alpasim_utils",
+]
+
+[project.optional-dependencies]
+server = [
+    "torch",
+    "gsplat>=1.0.0",
+    "opencv-python",
+    "pyquaternion",
+    "numpy",
+]
+
+[project.scripts]
+alpasim-mtgs-server = "alpasim_mtgs.server.main:main"
+
+[tool.setuptools]
+package-dir = { alpasim_mtgs = "src", "alpasim_mtgs.server" = "server", "alpasim_mtgs.configs" = "configs" }
+packages = [
+    "alpasim_mtgs",
+    "alpasim_mtgs.server",
+    "alpasim_mtgs.server.engine",
+    "alpasim_mtgs.server.engine.gaussian_model",
+    "alpasim_mtgs.server.engine.utils",
+    "alpasim_mtgs.configs",
+]
+
+[tool.uv.sources]
+alpasim_plugins = { workspace = true }
+alpasim_grpc = { workspace = true }
+alpasim_runtime = { workspace = true }
+alpasim_utils = { workspace = true }
+
+[project.entry-points."alpasim.configs"]
+mtgs = "alpasim_mtgs.configs"
+
+[project.entry-points."alpasim.services"]
+mtgs = "alpasim_mtgs.service:MTGSService"

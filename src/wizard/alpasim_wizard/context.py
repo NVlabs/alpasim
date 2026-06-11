@@ -19,8 +19,44 @@ from .schema import AlpasimConfig
 logger = logging.getLogger(__name__)
 
 
+def _uses_trajdata_scene_provider(cfg: AlpasimConfig) -> bool:
+    scene_provider = getattr(cfg.runtime, "scene_provider", None)
+    return getattr(scene_provider, "kind", None) == "trajdata"
+
+
+def _fetch_trajdata_artifacts(cfg: AlpasimConfig) -> list[SceneIdAndUuid]:
+    test_suite_id = cfg.scenes.test_suite_id
+    scene_ids = cfg.scenes.scene_ids
+
+    if test_suite_id is not None:
+        raise ValueError(
+            "Trajdata-backed wizard runs do not support test_suite_id. "
+            "Set scenes.scene_ids to the desired trajdata scene IDs."
+        )
+    if scene_ids is None:
+        raise ValueError(
+            "Trajdata-backed wizard runs require scenes.scene_ids to be set."
+        )
+
+    artifacts = [
+        SceneIdAndUuid(scene_id=scene_id, uuid=scene_id) for scene_id in scene_ids
+    ]
+    artifacts = sorted(artifacts, key=lambda x: x.scene_id)
+
+    limit_n = cfg.scenes.limit_to_first_n
+    if limit_n > 0 and len(artifacts) > limit_n:
+        logger.info(f"Limiting scenes from {len(artifacts)} to first {limit_n}")
+        artifacts = artifacts[:limit_n]
+
+    cfg.scenes.sceneset_path = None
+    return artifacts
+
+
 def fetch_artifacts(cfg: AlpasimConfig) -> list[SceneIdAndUuid]:
     """Fetch artifacts using the scene manager."""
+
+    if _uses_trajdata_scene_provider(cfg):
+        return _fetch_trajdata_artifacts(cfg)
 
     Path(cfg.scenes.scene_cache).mkdir(parents=True, exist_ok=True)
 

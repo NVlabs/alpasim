@@ -37,6 +37,7 @@ all = [
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+mtgs = ["alpasim-mtgs[server]"]
 
 [tool.uv.workspace]
 members = [
@@ -51,6 +52,7 @@ members = [
   "src/physics",
   "src/tools",
   "src/driver",
+  "src/trajdata",
   "plugins/*",
 ]
 
@@ -66,7 +68,8 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
+alpasim-mtgs = { workspace = true }
+trajdata-alpasim = { workspace = true }
 
 [tool.uv]
 python-preference = "only-managed"

@@ -1,0 +1,31 @@
+# @package _global_
+# NuPlan/MTGS full navtest challenge preset.
+#
+# This runs a full navtest closed-loop evaluation with a managed MTGS renderer,
+# controller/runtime managed by Wizard, and an already-running contestant driver.
+#
+# Example:
+#   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+#   ALPASIM_NUPLAN_ROOT=<path_to_worldengine_root_containing_navtest_and_nuplan_test> \
+#   uv run alpasim_wizard +e2e_challenge_nuplan=full \
+#     wizard.log_dir=./runs/e2e_challenge_nuplan_full
+
+defaults:
+  - /e2e_challenge_nuplan_common: base
+  - /nuplan_scenes: navtest_full
+  - override /deploy: local
+  - override /topology: 1gpu
+  - override /driver_source: external_static
+  - _self_
+
+wizard:
+  run_name: "e2e_challenge_nuplan_full"
+  log_dir: "./runs/e2e_challenge_nuplan_full"
+  description: "NuPlan MTGS full navtest evaluation"
+
+scenes:
+  limit_to_first_n: 0
+
+eval:
+  video:
+    render_video: false

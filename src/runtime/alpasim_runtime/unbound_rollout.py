@@ -24,6 +24,7 @@ from alpasim_runtime.services.sensorsim_service import ImageFormat
 from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import AABB, TrafficObject, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
+
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,36 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
     )
 
 
+def _synthetic_first_camera_frame_ranges_us(
+    data_source: SceneDataSource,
+    camera_configs: list[RuntimeCameraConfig],
+) -> dict[str, range]:
+    available_logical_ids = {
+        camera_id.logical_name for camera_id in data_source.rig.camera_ids
+    }
+    missing_logical_ids = [
+        camera_cfg.logical_id
+        for camera_cfg in camera_configs
+        if camera_cfg.logical_id not in available_logical_ids
+    ]
+    if missing_logical_ids:
+        available = ", ".join(sorted(available_logical_ids))
+        missing = ", ".join(missing_logical_ids)
+        raise ValueError(
+            f"Configured camera(s) {missing} are not present in rig "
+            f"{data_source.rig.sequence_id!r}. Available cameras: {available}."
+        )
+
+    base_start_us = data_source.rig.trajectory.time_range_us.start
+    return {
+        camera_cfg.logical_id: range(
+            base_start_us,
+            base_start_us + camera_cfg.shutter_duration_us,
+        )
+        for camera_cfg in camera_configs
+    }
+
+
 def _build_rollout_timing(
     simulation_config: SimulationConfig,
     data_source: SceneDataSource,
@@ -76,10 +107,25 @@ def _build_rollout_timing(
     # when no cameras are configured.  Headless rollouts fall back to the GT
     # trajectory start as the render anchor.
     if camera_logical_ids:
-        first_camera_frame_ranges_us = data_source.rig.first_camera_frame_ranges_us(
-            camera_logical_ids
-        )
-        render_start_us = data_source.rig.first_camera_frame_end_us(camera_logical_ids)
+        if data_source.rig.camera_frame_ranges_us:
+            first_camera_frame_ranges_us = data_source.rig.first_camera_frame_ranges_us(
+                camera_logical_ids
+            )
+            render_start_us = data_source.rig.first_camera_frame_end_us(
+                camera_logical_ids
+            )
+        else:
+            # Trajdata-backed MTGS scenes expose camera ids but do not carry
+            # per-frame camera timestamps, so synthesize the first frame range
+            # from the scene start and runtime shutter durations.
+            first_camera_frame_ranges_us = _synthetic_first_camera_frame_ranges_us(
+                data_source,
+                camera_configs,
+            )
+            render_start_us = min(
+                frame_range.stop
+                for frame_range in first_camera_frame_ranges_us.values()
+            )
     else:
         first_camera_frame_ranges_us = {}
         render_start_us = data_source.rig.trajectory.time_range_us.start

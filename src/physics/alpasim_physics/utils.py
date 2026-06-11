@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3

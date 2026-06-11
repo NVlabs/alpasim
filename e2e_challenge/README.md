@@ -13,6 +13,24 @@ and wait for approval.
 - [Starter kit](starter_kit/README.md): build and locally test a minimal driver container
 - [Challenge CLI](competitor_cli/README.md): authenticate, log in to ECR, submit images, check status, view the leaderboard
 
+## Tracks
+
+The competition has two tracks: the Physical AI AV Track and the nuPlan Track. For both
+tracks, the image contract for submissions is the same across tracks: contestants submit only
+a driver container that serves the AlpaSim driver gRPC API. Depending upon the requested
+submission type, the evaluator starts the appropriate simulator stack and connects to the
+submitted driver image.
+
+### Physical AI (PAI) AV
+
+The Physical AI AV track uses an internal set of NuRec-compatible scenes similar to those
+available in the public NuRec dataset.
+
+### NuPlan / MTGS
+
+The NuPlan track uses managed nuPlan scenes and MTGS rendering in the evaluation environment.
+
+
 ## Submission Image Requirements and Constraints
 
 The image is expected to:
@@ -26,10 +44,10 @@ Each replica receives `ALPASIM_DRIVER_HOST`, `ALPASIM_DRIVER_PORT`,
 `ALPASIM_CONTESTANT_REPLICA_INDEX`, and `ALPASIM_CONTESTANT_REPLICAS`. GPU
 access is provided during official evaluation.
 
-Official evaluation currently uses the `+e2e_challenge=ec2` preset, which selects
-`topology=8gpu_36rollouts`. The backend starts 12 replicas of the submitted image
-across GPUs 4-7 with 3 concurrent rollouts per replica. Local smoke tests use
-`+e2e_challenge=dev` and a 1-GPU topology.
+The PAI track evaluation uses the `+e2e_challenge=ec2`
+preset, which selects `topology=8gpu_36rollouts`. The backend starts 12 replicas
+of the submitted image across GPUs 4-7 with 3 concurrent rollouts per replica.
+Local smoke tests use `+e2e_challenge=dev` and a 1-GPU topology.
 
 Some additional constraints of the environment:
 

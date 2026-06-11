@@ -1,0 +1,31 @@
+# @package _global_
+# NuPlan/MTGS challenge development preset.
+#
+# This runs a one-scene closed-loop smoke test with a managed MTGS renderer,
+# controller/runtime managed by Wizard, and an already-running contestant driver.
+#
+# Example:
+#   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+#   ALPASIM_NUPLAN_ROOT=<path_to_worldengine_root_containing_navtest_and_nuplan_test> \
+#   uv run alpasim_wizard +e2e_challenge_nuplan=dev \
+#     wizard.log_dir=./runs/e2e_challenge_nuplan_dev
+
+defaults:
+  - /e2e_challenge_nuplan_common: base
+  - /nuplan_scenes: navtest_dev
+  - override /deploy: local
+  - override /topology: 1gpu
+  - override /driver_source: external_static
+  - _self_
+
+wizard:
+  run_name: "e2e_challenge_nuplan_dev"
+  log_dir: "./runs/e2e_challenge_nuplan_dev"
+  description: "NuPlan MTGS challenge development smoke test"
+
+scenes:
+  limit_to_first_n: 1
+
+eval:
+  video:
+    render_video: true

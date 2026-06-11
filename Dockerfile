@@ -20,8 +20,17 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     build-essential \
+    gcc-11 \
+    g++-11 \
+    ninja-build \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
+
+# gsplat builds CUDA extensions at runtime. Pin the host compiler to a CUDA-compatible
+# toolchain and use ninja when torch compiles the extension.
+ENV CC=/usr/bin/gcc-11
+ENV CXX=/usr/bin/g++-11
+ENV MAX_JOBS=4
 
 # Install Rust toolchain (required for utils_rs maturin build)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -43,7 +52,7 @@ WORKDIR /repo
 
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all'
+    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all --extra mtgs'
 
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1

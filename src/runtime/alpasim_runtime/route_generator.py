@@ -9,6 +9,7 @@ from typing import final
 import numpy as np
 from alpasim_runtime.config import RouteGeneratorType
 from alpasim_utils.geometry import Polyline, Pose
+
 from trajdata.maps import VectorMap
 from trajdata.maps.vec_map_elements import RoadLane
 

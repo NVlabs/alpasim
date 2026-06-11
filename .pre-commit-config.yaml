@@ -1,7 +1,7 @@
 default_language_version:
   python: python3
 
-exclude: ^(.gitlab-ci.yml|plugins/internal/cicd/gitlab/|src/grpc|plugins/internal/src/tools/migration_assistant.py) # TODO(alpasim): enable in future
+exclude: ^(.gitlab-ci.yml|plugins/internal/cicd/gitlab/|src/grpc|plugins/internal/src/tools/migration_assistant.py|src/trajdata) # TODO(alpasim): enable in future
 repos:
   - repo: https://github.com/Lucas-C/pre-commit-hooks
     rev: v1.5.5
