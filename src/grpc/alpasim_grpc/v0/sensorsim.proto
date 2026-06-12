@@ -19,6 +19,7 @@ service SensorsimService {
     rpc render_rgb (RGBRenderRequest) returns (RGBRenderReturn);
     rpc render_lidar (LidarRenderRequest) returns (LidarRenderReturn);
     rpc render_aggregated (AggregatedRenderRequest) returns (AggregatedRenderReturn);
+    rpc batch_render_rgb (BatchRGBRenderRequest) returns (BatchRGBRenderReturn);
     rpc get_version (common.Empty) returns (common.VersionId);
     rpc get_available_scenes (common.Empty) returns (common.AvailableScenesReturn);
     rpc get_available_cameras (AvailableCamerasRequest) returns (AvailableCamerasReturn);
@@ -269,6 +270,28 @@ message LidarRenderRequest {
     repeated DynamicObject dynamic_objects = 6;
 }
 
+
+// Batched multi-camera RGB render. Field names/numbers MUST match NRE's
+// SensorsimService.batch_render_rgb contract (nrs/nre sensorsim.proto).
+message BatchRGBRenderRequest {
+    repeated BatchRGBRenderRequestItem items = 1;
+}
+
+message BatchRGBRenderRequestItem {
+    string camera_name = 1;        // Identifier to match the response item
+    RGBRenderRequest request = 2;  // Full render request for this camera
+}
+
+message BatchRGBRenderReturn {
+    repeated BatchRGBRenderReturnItem items = 1;
+}
+
+message BatchRGBRenderReturnItem {
+    string camera_name = 1;     // Matches request camera_name
+    RGBRenderReturn result = 2; // Rendered image bytes
+    bool success = 3;           // True if render succeeded
+    string error_message = 4;   // Populated if success=false
+}
 
 message AggregatedRenderRequest
 {

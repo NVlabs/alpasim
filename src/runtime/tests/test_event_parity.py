@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 from alpasim_grpc.v0.traffic_pb2 import ObjectTrajectoryUpdate, TrafficReturn
-from alpasim_runtime.config import PhysicsUpdateMode
+from alpasim_runtime.config import PhysicsUpdateMode, RenderBundling
 from alpasim_runtime.events.base import (
     EndSimulationException,
     Event,
@@ -708,7 +708,7 @@ class TestControllerAndEgoPhysicsPipeline:
 
 
 class TestGroupedRenderDataFlow:
-    """Phase 2E: When group_render_requests=True, policy receives renderer data."""
+    """Phase 2E: bundled (render_aggregated) flush forwards renderer data."""
 
     @pytest.fixture
     def grouped_render_event(
@@ -722,7 +722,6 @@ class TestGroupedRenderDataFlow:
             trigger=runtime_camera.clock.ith_trigger(0),
             sensorsim=mock_sensorsim,
             driver=mock_driver,
-            use_aggregated_render=True,
         )
 
     @pytest.mark.asyncio
@@ -734,6 +733,7 @@ class TestGroupedRenderDataFlow:
         mock_driver: AsyncMock,
     ):
         """Aggregated camera flush stores driver_data on rollout_state."""
+        rollout_state.unbound.render_bundling = RenderBundling.RENDER_AGGREGATED
         driver_data_blob = b"aggregated_render_payload"
         mock_sensorsim.aggregated_render.return_value = ([], driver_data_blob)
 
@@ -835,6 +835,7 @@ class TestGroupedRenderDataFlow:
         mock_driver: AsyncMock,
     ):
         """Aggregated camera flush forwards all images from aggregated_render."""
+        rollout_state.unbound.render_bundling = RenderBundling.RENDER_AGGREGATED
         fake_images = [MagicMock(), MagicMock(), MagicMock()]
         mock_sensorsim.aggregated_render.return_value = (fake_images, b"data")
 

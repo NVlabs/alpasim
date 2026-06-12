@@ -2,6 +2,9 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Upgrade OSS renderer to NRE-GA 26.04 (11.06.26)
+Bumped the `base_config.yaml` renderer image to `nvcr.io/nvidia/nre/nre-ga:26.04` and repointed `defines.renderer_entrypoint` to the `/app/run` symlink (the old path was renamed in 26.04).
+
 ## Eval Modifications (05.06.26)
 Eval aggregation now writes `results-summary.json` with per-rollout pass/fail status,
 scene scores, failed rollout rows, and driver `drive` RPC latency from telemetry.

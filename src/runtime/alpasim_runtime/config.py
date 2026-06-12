@@ -264,6 +264,18 @@ class RouteGeneratorType(Enum):
     RECORDED = 1
 
 
+class RenderBundling(Enum):
+    """Which sensorsim bundled-render RPC to use for a control step.
+
+    NONE renders one ``render_rgb`` per camera; the others bundle all of a
+    step's cameras into a single RPC (see sensorsim.proto).
+    """
+
+    NONE = "none"
+    BATCH_RENDER_RGB = "batch_render_rgb"  # NRE batched render
+    RENDER_AGGREGATED = "render_aggregated"  # ODL render+physics
+
+
 @dataclass
 class SimulationConfig:
     """
@@ -310,8 +322,8 @@ class SimulationConfig:
     # before the simulation starts. Set to 0 to disable filtering.
     min_traffic_duration_us: int = 3_000_000  # 3 s
 
-    # Flag to enable grouping of render requests
-    group_render_requests: bool = False
+    # Which sensorsim bundled-render RPC to use (NONE = one render_rgb per camera).
+    render_bundling: RenderBundling = RenderBundling.NONE
 
 
 @dataclass

@@ -8,6 +8,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from alpasim_runtime.config import RenderBundling
 from alpasim_runtime.events.base import EventQueue
 from alpasim_runtime.events.camera import (
     CameraFrameEvent,
@@ -46,7 +47,6 @@ async def test_non_aggregated_camera_event_renders_immediately(
         trigger=camera.clock.ith_trigger(0),
         sensorsim=mock_sensorsim,
         driver=mock_driver,
-        use_aggregated_render=False,
     )
 
     queue = EventQueue()
@@ -63,6 +63,35 @@ async def test_non_aggregated_camera_event_renders_immediately(
 
 
 @pytest.mark.asyncio
+async def test_non_aggregated_camera_event_does_not_set_renderer_data(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    """Immediate render cannot carry renderer->driver data.
+
+    ``render_rgb`` returns only ``image_bytes`` (no ``driver_data``), so the
+    immediate path must leave ``data_sensorsim_to_driver`` untouched.
+    """
+    camera = _make_camera("cam_front")
+    mock_sensorsim.render.return_value = MagicMock(spec=ImageWithMetadata)
+    sentinel = b"untouched"
+    rollout_state.data_sensorsim_to_driver = sentinel
+
+    event = CameraFrameEvent(
+        camera=camera,
+        trigger=camera.clock.ith_trigger(0),
+        sensorsim=mock_sensorsim,
+        driver=mock_driver,
+    )
+    await event.handle(rollout_state, EventQueue())
+
+    mock_sensorsim.aggregated_render.assert_not_awaited()
+    # The immediate path is a no-op on renderer->driver data.
+    assert rollout_state.data_sensorsim_to_driver is sentinel
+
+
+@pytest.mark.asyncio
 async def test_aggregated_camera_events_flush_same_timestamp_together(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
@@ -74,14 +103,15 @@ async def test_aggregated_camera_events_flush_same_timestamp_together(
     trigger_rear = Clock.Trigger(range(1_000, 33_000), sequential_idx=0)
     fake_image = MagicMock(spec=ImageWithMetadata)
     mock_sensorsim.aggregated_render.return_value = ([fake_image], b"driver-data")
+    rollout_state.unbound.render_bundling = RenderBundling.RENDER_AGGREGATED
 
     queue = EventQueue()
     await CameraFrameEvent(
-        cam_front, trigger_front, mock_sensorsim, mock_driver, True
+        cam_front, trigger_front, mock_sensorsim, mock_driver
     ).handle(rollout_state, queue)
-    await CameraFrameEvent(
-        cam_rear, trigger_rear, mock_sensorsim, mock_driver, True
-    ).handle(rollout_state, queue)
+    await CameraFrameEvent(cam_rear, trigger_rear, mock_sensorsim, mock_driver).handle(
+        rollout_state, queue
+    )
 
     assert len(rollout_state.pending_camera_triggers[33_000]) == 2
     assert len(queue) == 3  # one flush plus one next frame per camera
@@ -95,6 +125,34 @@ async def test_aggregated_camera_events_flush_same_timestamp_together(
     mock_sensorsim.render.assert_not_awaited()
     assert rollout_state.data_sensorsim_to_driver == b"driver-data"
 
+    await rollout_state.step_context.drain_outstanding_tasks()
+    mock_driver.submit_image.assert_awaited_once_with(fake_image)
+
+
+@pytest.mark.asyncio
+async def test_bundled_flush_uses_batch_render_when_flag_set(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+):
+    """render_bundling=BATCH_RENDER_RGB routes the flush to NRE batch_render."""
+    rollout_state.unbound.render_bundling = RenderBundling.BATCH_RENDER_RGB
+    camera = _make_camera("cam_front")
+    trigger = Clock.Trigger(range(0, 33_000), sequential_idx=0)
+    fake_image = MagicMock(spec=ImageWithMetadata)
+    mock_sensorsim.batch_render.return_value = ([fake_image], None)
+
+    queue = EventQueue()
+    await CameraFrameEvent(camera, trigger, mock_sensorsim, mock_driver).handle(
+        rollout_state, queue
+    )
+    flush = next(
+        event for event in queue.queue if isinstance(event, CameraRenderFlushEvent)
+    )
+    await flush.handle(rollout_state, queue)
+
+    mock_sensorsim.batch_render.assert_awaited_once()
+    mock_sensorsim.aggregated_render.assert_not_awaited()
     await rollout_state.step_context.drain_outstanding_tasks()
     mock_driver.submit_image.assert_awaited_once_with(fake_image)
 
@@ -115,7 +173,6 @@ async def test_camera_event_schedules_next_frame_ending_at_rollout_boundary(
         trigger=camera.clock.ith_trigger(0),
         sensorsim=mock_sensorsim,
         driver=mock_driver,
-        use_aggregated_render=False,
     ).handle(rollout_state, queue)
 
     assert len(queue) == 1

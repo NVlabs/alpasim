@@ -59,6 +59,10 @@ class _FakeSensorsimServicer(sensorsim_pb2_grpc.SensorsimServiceServicer):
             []
         )
         self.render_requests: list[sensorsim_pb2.RGBRenderRequest] = []
+        self.batch_render_requests: list[sensorsim_pb2.BatchRGBRenderRequest] = []
+        self.aggregated_render_requests: list[sensorsim_pb2.AggregatedRenderRequest] = (
+            []
+        )
 
     async def get_version(self, request: Empty, context):
         del request, context
@@ -86,17 +90,31 @@ class _FakeSensorsimServicer(sensorsim_pb2_grpc.SensorsimServiceServicer):
         self.render_requests.append(request)
         return sensorsim_pb2.RGBRenderReturn(image_bytes=_TINY_JPEG)
 
+    async def batch_render_rgb(
+        self,
+        request: sensorsim_pb2.BatchRGBRenderRequest,
+        context,
+    ):
+        del context
+        self.batch_render_requests.append(request)
+        response = sensorsim_pb2.BatchRGBRenderReturn()
+        for item in request.items:
+            ret_item = response.items.add()
+            ret_item.camera_name = item.camera_name
+            ret_item.result.image_bytes = _TINY_JPEG
+            ret_item.success = True
+        return response
+
     async def render_aggregated(
         self,
         request: sensorsim_pb2.AggregatedRenderRequest,
         context,
     ):
         del context
+        self.aggregated_render_requests.append(request)
         response = sensorsim_pb2.AggregatedRenderReturn()
-        for rgb_request in request.rgb_requests:
-            del rgb_request
-            rgb_return = response.rgb_returns.add()
-            rgb_return.image_bytes = _TINY_JPEG
+        for _ in request.rgb_requests:
+            response.rgb_returns.add().image_bytes = _TINY_JPEG
         return response
 
 
@@ -110,7 +128,9 @@ async def _start_fake_sensorsim_server(
     return server, f"127.0.0.1:{port}"
 
 
-def _write_sensorsim_mock_configs(tmp_path: Path, sensorsim_address: str) -> dict:
+def _write_sensorsim_mock_configs(
+    tmp_path: Path, sensorsim_address: str, *, batch_render: bool = False
+) -> dict:
     base_user_config = yaml.safe_load(
         (_MOCK_DATA_DIR / "user-config.yaml").read_text(encoding="utf-8")
     )
@@ -118,6 +138,8 @@ def _write_sensorsim_mock_configs(tmp_path: Path, sensorsim_address: str) -> dic
     base_user_config["endpoints"]["renderer"]["skip"] = False
     base_user_config["endpoints"]["renderer"]["n_concurrent_rollouts"] = 1
     base_user_config["simulation_config"]["n_sim_steps"] = 1
+    if batch_render:
+        base_user_config["simulation_config"]["render_bundling"] = "BATCH_RENDER_RGB"
 
     network_config = {
         service: {"endpoints": []}
@@ -180,6 +202,43 @@ async def test_sensorsim_mocks_with_fake_server(tmp_path: Path):
     assert {
         request.camera_intrinsics.logical_id for request in servicer.render_requests
     } == set(_MOCK_CAMERA_IDS)
+
+
+@pytest.mark.asyncio
+async def test_sensorsim_mocks_batch_render(tmp_path: Path):
+    """render_bundling=BATCH_RENDER_RGB drives NRE batch_render_rgb."""
+    servicer = _FakeSensorsimServicer()
+    server, address = await _start_fake_sensorsim_server(servicer)
+    try:
+        configs = _write_sensorsim_mock_configs(tmp_path, address, batch_render=True)
+
+        run_metadata = tmp_path / "run_metadata.yaml"
+        run_metadata.write_text("run_name: test_sensorsim_batch\n")
+
+        parser = create_arg_parser()
+        parsed_args = parser.parse_args(
+            [
+                f"--user-config={configs['user_config']}",
+                f"--network-config={configs['network_config']}",
+                f"--eval-config={configs['eval_config']}",
+                f"--log-dir={tmp_path}",
+            ]
+        )
+
+        success = await asyncio.wait_for(run_simulation(parsed_args), timeout=120)
+    finally:
+        await server.stop(grace=0.5)
+
+    assert success
+    # Bundled path used: batch_render_rgb received, per-camera render_rgb not.
+    assert servicer.batch_render_requests
+    assert not servicer.render_requests
+    rendered_cameras = {
+        item.request.camera_intrinsics.logical_id
+        for request in servicer.batch_render_requests
+        for item in request.items
+    }
+    assert rendered_cameras == set(_MOCK_CAMERA_IDS)
 
 
 class _FakeWorldModelServicer(video_model_pb2_grpc.WorldModelServiceServicer):

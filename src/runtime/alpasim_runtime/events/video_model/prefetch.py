@@ -286,7 +286,6 @@ def make_initial_video_model_render_event(
     renderer_service: Any,
     driver: DriverService,
     broadcaster: MessageBroadcaster,
-    use_aggregated_render: bool = False,
 ) -> Event:
     """Factory for the initial video-model prefetch event.
 
@@ -310,13 +309,11 @@ def make_initial_video_model_render_event(
         renderer_service: Active :class:`VideoModelService` instance.
         driver: Driver service receiving scheduled frame events.
         broadcaster: Rollout broadcaster, reserved for future logging.
-        use_aggregated_render: Built-in sensorsim compatibility flag, unused
-            for the chunked video model renderer.
 
     Returns:
         The first :class:`VideoModelPrefetchEvent`.
     """
-    del simulation_end_us, closed_loop_start_us, use_aggregated_render
+    del simulation_end_us, closed_loop_start_us
     render_anchor_us = (
         render_start_timestamp_us
         if render_start_timestamp_us is not None
