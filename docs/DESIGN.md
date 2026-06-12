@@ -11,14 +11,14 @@ Real-time and very precise physics are non-goals.
 For these reasons we implement Alpasim as a collection of microservices (enabling scalability) which
 are implemented in Python (accessible to researchers) and communicate via gRPC.
 
-Core services include the
-[Neural Rendering Engine (NRE)](https://www.nvidia.com/en-us/glossary/3d-reconstruction/) and neural
-traffic simulator (coming soon). Additionally, we have a [physics simulation module](/src/physics)
-(ground constraints for egovehicle and non-ego actors), a
-[controller/vehicle model](/src/controller), and a
-[runtime](/src/runtime) which drives the simulation
-loop by issuing calls to the respective services and produces logs. An [eval module](/src/eval) runs
-outside of the main simulation loop and consumes the logs to compute metrics for autonomous driving.
+Core services include a renderer service, neural traffic simulator (coming soon), a
+[physics simulation module](/src/physics) (ground constraints for egovehicle and non-ego actors), a
+[controller/vehicle model](/src/controller), and a [runtime](/src/runtime) which drives the
+simulation loop by issuing calls to the respective services and produces logs. The default renderer
+uses the [Neural Rendering Engine (NRE)](https://www.nvidia.com/en-us/glossary/3d-reconstruction/),
+and the same `renderer` endpoint can also be backed by the
+[OmniDreams video-model renderer](VIDEO_MODEL.md). An [eval module](/src/eval) runs outside of the
+main simulation loop and consumes the logs to compute metrics for autonomous driving.
 
 The simulator interfaces with [a driver](/src/driver) - the egovehicle policy network, which is the
 main target of the simulation and creates trajectories to complete the feedback loop. The services
@@ -34,7 +34,7 @@ The diagram illustrates the logical flow of the simulation instance
 - **Runtime** keeps track of the world state
 - The world state is fed as bounding boxes to **trafficsim**, which actuates non-ego actors
   (pedestrians, vehicles, etc)
-- The world state is also used by **NRE** to produce camera frames for the ego vehicle
+- The world state is also used by the **renderer** to produce camera frames for the ego vehicle
 - Sensor readings are used by the **driver** to make decisions about actuating the ego vehicle
 - The actuation request (planned path) is fed to the **controller**, which models the vehicle
   controller and dynamics, providing (uncorrected) egomotion
@@ -45,7 +45,7 @@ The diagram illustrates the logical flow of the simulation instance
 
 The software implementation places the runtime at the center, as a node for all communications. The
 remaining services can be replicated according to their computational requirements (in general
-`ego policy > sensor sim > controller sim > traffic sim > physics sim`). This design facilitates
+`ego policy > renderer > controller sim > traffic sim > physics sim`). This design facilitates
 synchronized logging and lets the runtime double as a load balancer between the replicas of
 remaining services but it also means that the runtime is about as IO intense as all other services
 _combined_.

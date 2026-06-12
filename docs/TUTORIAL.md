@@ -18,7 +18,9 @@ AlpaSim consists of multiple networked microservices (renderer, physics simulati
 controller, driver, traffic simulation). The AlpaSim runtime requests observed video frames from the
 renderer and egomotion history from the controller, communicates with the physics microservice to
 constrain actors to the road surface, and provides the information to the driver, with the
-expectation of receiving driving decisions in return to close the loop.
+expectation of receiving driving decisions in return to close the loop. The default renderer uses
+NuRec, and the same `renderer` service interface can also be backed by OmniDreams through
+FlashDreams.
 
 This repository contains the implementations of a subset of the services needed to execute the
 simulation as well as config files and infra code necessary to bring the microservices up via
@@ -198,6 +200,25 @@ By default, the wizard launches and owns the configured driver service. Use
 Additionally, service-specific config groups can override the default images and launch behavior,
 for example `physics=disabled`.
 
+### Renderer options
+
+The tutorial run above uses the default NuRec-backed renderer. AlpaSim can also use
+[OmniDreams](https://github.com/nv-tlabs/omni-dreams) through
+[FlashDreams](https://github.com/NVIDIA/flashdreams) as a stateful video-model renderer behind the
+same `renderer` endpoint.
+
+| Renderer path | Main config entry point | Notes |
+|---------------|-------------------------|-------|
+| Default NuRec renderer | `deploy=local` | Best starting point for the basic tutorial and broad public scene coverage. |
+| Wizard-managed OmniDreams renderer | `deploy=managed_flashdreams` | Wizard starts a local FlashDreams renderer container. Requires a locally built FlashDreams image. |
+| External OmniDreams renderer | `deploy=external_video_model` | AlpaSim connects to an OmniDreams gRPC server running elsewhere. Useful when renderer GPUs live on another machine. |
+
+The active renderer is selected through the deploy config and materializes in
+`runtime.renderer.kind`; OmniDreams runs use `runtime.renderer.kind=video_model`. The driver remains
+a separate service, but the current public OmniDreams recipe is single-view, so use one of the
+known-compatible driver presets and timing presets documented in
+[VIDEO_MODEL.md](VIDEO_MODEL.md) instead of adding camera overrides by hand.
+
 # Level 2
 
 In level 2 we learn to customize the simulation (i.e. change the driver policy, change simulated
@@ -344,9 +365,12 @@ the predictions of a policy, you can set
 
 ## Scenes
 
-The scene in AlpaSim is a NuRec reconstruction of a real-world driving log.
+Scenes in AlpaSim are USDZ artifacts built from real-world driving logs. The default NuRec renderer
+and the OmniDreams video-model renderer both use these artifacts; OmniDreams additionally conditions
+on ClipGT data packaged in the USDZ, including recorded first-frame JPEGs, camera calibration, and
+HD map data.
 
-Publicly available NuRec scenes are stored on
+Publicly available scene artifacts are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release)
 and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
 their uuid, rather than their filenames, to prevent versioning issues. The list of currently

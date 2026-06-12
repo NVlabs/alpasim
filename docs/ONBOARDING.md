@@ -34,6 +34,23 @@ Alpasim depends on access to the following:
 - Install the NVIDIA Container Toolkit (see
   [here](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
 
+## Optional: OmniDreams video-model renderer
+
+The default AlpaSim tutorial uses NuRec. To use
+[OmniDreams](https://github.com/nv-tlabs/omni-dreams) as the renderer backend, follow the
+[Video Model Renderer guide](VIDEO_MODEL.md) after completing the base setup above.
+
+Additional requirements for this path:
+
+- A [FlashDreams](https://github.com/NVIDIA/flashdreams) checkout and a locally built
+  `flashdreams-alpasim:local` image for `deploy=managed_flashdreams`, or access to an external
+  OmniDreams gRPC server for `deploy=external_video_model`.
+- Hugging Face authentication for any gated OmniDreams, FlashDreams, driver, or scene assets needed
+  by the selected run.
+- Enough GPU memory for both the renderer and the selected driver. The managed FlashDreams preset
+  currently requires about 48 GB VRAM with the lightweight public single-view driver preset and
+  about 96 GB VRAM with the Alpamayo1.5 single-camera preset.
+
 ## Dependency management
 
 The repo is a [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/). All packages under `src/` and `plugins/` are workspace members sharing a single lockfile (`uv.lock`). The root `pyproject.toml` has empty `dependencies`, so a bare `uv sync` installs nothing -- this is intentional to avoid pulling heavy dependencies (torch, warp-lang) by default.

@@ -20,8 +20,11 @@ Suitable use cases include:
 
 ### **Sensor Fidelity**
 
-- Neural Rendering (NuRec) integration for photorealistic sensor simulation of novel views
+- Pluggable renderer service with default [NuRec](https://docs.nvidia.com/nurec/) support and
+  [OmniDreams](https://github.com/nv-tlabs/omni-dreams) video-model rendering through
+  [FlashDreams](https://github.com/NVIDIA/flashdreams)
 - High-fidelity camera feeds with configurable field-of-view, resolution, and frame rates
+- Stateful video-model rendering for stronger dynamic-object and non-rigid visual fidelity
 - Realistic sensor noise and environmental conditions
 
 ### **Research Hackability**
@@ -60,6 +63,8 @@ appreciated.
 ## Getting Started
 
 To run simulations locally (Docker Compose, single machine), see the [Tutorial](docs/TUTORIAL.md).
+The default tutorial path uses NuRec; for OmniDreams as the renderer backend, see the
+[Video Model Renderer guide](docs/VIDEO_MODEL.md).
 For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 
 ## Documentation & Resources
@@ -67,6 +72,8 @@ For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 - **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions
 - **[Tutorial](docs/TUTORIAL.md)**: Step-by-step usage guide
 - **[Manual Driver](docs/MANUAL_DRIVER.md)**: Interactive keyboard control of the ego vehicle
+- **[Video Model Renderer](docs/VIDEO_MODEL.md)**: Running OmniDreams through FlashDreams as the
+  AlpaSim renderer backend
 - **[Operations Guide](docs/OPERATIONS.md)**: Performance tuning, configuration, and troubleshooting
 - **[Data Pipeline](docs/DATA_PIPELINE.md)**: ASL log format and reading logs
 - **[Design Documentation](docs/DESIGN.md)**: Technical architecture and design decisions

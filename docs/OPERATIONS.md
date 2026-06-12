@@ -10,6 +10,12 @@ The number of service replicas and their GPU assignments are configured in deplo
 located in `src/wizard/configs/deploy/`:
 
 - **Local workstation**: `local.yaml`
+- **Wizard-managed OmniDreams renderer**: `managed_flashdreams.yaml`
+- **External OmniDreams renderer**: `external_video_model.yaml`
+
+The default renderer path is NuRec-backed. OmniDreams runs use FlashDreams behind the same
+`renderer` endpoint; see [VIDEO_MODEL.md](VIDEO_MODEL.md) for the renderer-specific chunking,
+camera, and deployment constraints.
 
 #### Understanding the Configuration
 
@@ -91,6 +97,11 @@ For NRE-backed renderer deployments, tune these together:
 - `runtime.endpoints.renderer.n_concurrent_rollouts`
 
 Recent OSS deploy configs prefer `replicas_per_container: 1` plus higher `--max-workers`.
+
+For OmniDreams/FlashDreams deployments, start with
+`runtime.endpoints.renderer.n_concurrent_rollouts=1` and the `+chunking=8frame` preset from
+[VIDEO_MODEL.md](VIDEO_MODEL.md). Scale only after the
+renderer server, driver cadence, and GPU memory headroom are known to be stable.
 
 ### How do I change the model?
 
