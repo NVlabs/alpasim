@@ -62,32 +62,42 @@ uv run alpasim_wizard +e2e_challenge=dev \
 
 ## NuPlan Smoke Test
 
-This smoke test uses the NuPlan/MTGS preset. It needs a local World Engine data
+This smoke test uses the NuPlan/MTGS preset. It needs a local NuPlan/MTGS data
 root in addition to the starter driver container.
 
 ### Data Setup
 
-Create a World Engine root directory and download the navtest assets from the
-[OpenDriveLab dataset](https://huggingface.co/datasets/OpenDriveLab/WorldEngine/tree/main/data/sim_engine/assets).
-Extract these under the World Engine root.
-
-The NuPlan preset also expects a trajdata cache at
-`<worldengine-root>/nuplan_test`. Build it once with `prepare-trajdata` after
-extracting `navtest/configs`.
-
-Then build the cache using the checked-in NuPlan cache config:
+Create a local data root and download the prebuilt navtest cache, scene configs,
+and the first MTGS asset shard from the
+[OpenDriveLab challenge dataset](https://huggingface.co/datasets/OpenDriveLab/AlpasimChallenge2026_nuplan_track).
+The first asset shard is enough for the `dev` smoke test.
 
 ```bash
-ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
-uv run prepare-trajdata \
-  --user-config src/tools/prepare_trajdata/examples/alpasim-nuplan-cache.yaml \
-  --rebuild-cache
+export ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track
+export ALPASIM_NUPLAN_HF=/path/to/alpasim-nuplan-track-hf
+
+mkdir -p "$ALPASIM_NUPLAN_ROOT" "$ALPASIM_NUPLAN_HF"
+
+uv run --with huggingface-hub hf download \
+  --repo-type dataset \
+  --local-dir "$ALPASIM_NUPLAN_HF" \
+  OpenDriveLab/AlpasimChallenge2026_nuplan_track \
+  trajdata_cache/nuplan_test.tar.gz \
+  MTGS_asset/navtest/configs.tar.gz \
+  MTGS_asset/navtest/assets/part001.tar.gz
+
+tar -xzf "$ALPASIM_NUPLAN_HF/trajdata_cache/nuplan_test.tar.gz" \
+  -C "$ALPASIM_NUPLAN_ROOT"
+tar -xzf "$ALPASIM_NUPLAN_HF/MTGS_asset/navtest/configs.tar.gz" \
+  -C "$ALPASIM_NUPLAN_ROOT"
+tar -xzf "$ALPASIM_NUPLAN_HF/MTGS_asset/navtest/assets/part001.tar.gz" \
+  -C "$ALPASIM_NUPLAN_ROOT"
 ```
 
 The resulting layout should include:
 
 ```text
-/path/to/worldengine-root/
+/path/to/alpasim-nuplan-track/
   navtest/
     configs/
     assets/
@@ -101,7 +111,7 @@ With the starter driver container still running:
 ```bash
 source setup_local_env.sh  # if you haven't already
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
+ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track \
 uv run alpasim_wizard +e2e_challenge_nuplan=dev \
   wizard.log_dir=./runs/e2e_challenge_nuplan_smoke
 ```
@@ -112,12 +122,13 @@ Result:
 ./runs/e2e_challenge_nuplan_smoke/aggregate/results-summary.json
 ```
 
-The dev preset runs one scene. To smoke-test the full NuPlan scene set with the
-same local setup, override the scene group and remove the dev scene limit:
+The dev preset runs one scene. To smoke-test the full NuPlan scene set,
+download and extract all `MTGS_asset/navtest/assets/part*.tar.gz` shards, then
+override the scene group and remove the dev scene limit:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
-ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
+ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track \
 uv run alpasim_wizard +e2e_challenge_nuplan=dev \
   nuplan_scenes=navtest_full \
   scenes.limit_to_first_n=0 \
