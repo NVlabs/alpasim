@@ -478,7 +478,8 @@ def create_video_animation(
         if len(overlay_frame_matches) == 0:
             logger.info(
                 "Driver response timestamps do not align with rendered frames; "
-                "camera overlay will be empty."
+                "camera overlay will hold the most recent response after the "
+                "first response is available."
             )
 
     if should_render_table:
@@ -503,7 +504,7 @@ def create_video_animation(
 
     # Get initial command name from driver response
     initial_driver_response = sim_result.driver_responses.get_driver_response_for_time(
-        timestamps_us[0], which_time="now"
+        timestamps_us[0], which_time="now", fallback="previous"
     )
     initial_command = (
         initial_driver_response.command_name
@@ -584,7 +585,7 @@ def create_video_animation(
         or MapElements.DRIVER_RESPONSES in cfg.video.map_video.map_elements_to_plot
     ):
         artists_on_map["driver_responses"] = sim_result.driver_responses.render_at_time(
-            axs["map"], timestamps_us[0], "now"
+            axs["map"], timestamps_us[0], "now", fallback="previous"
         )
 
     if (
@@ -639,7 +640,9 @@ def create_video_animation(
             or MapElements.DRIVER_RESPONSES in cfg.video.map_video.map_elements_to_plot
         ):
             artists_on_map["driver_responses"] = (
-                sim_result.driver_responses.render_at_time(axs["map"], time, "now")
+                sim_result.driver_responses.render_at_time(
+                    axs["map"], time, "now", fallback="previous"
+                )
             )
 
         if (
@@ -686,7 +689,7 @@ def create_video_animation(
 
         # Update command text from driver response
         driver_response = sim_result.driver_responses.get_driver_response_for_time(
-            time, which_time="now"
+            time, which_time="now", fallback="previous"
         )
         command_name = (
             driver_response.command_name
@@ -706,6 +709,7 @@ def create_video_animation(
                 camera_projector,
                 time,
                 which_time="now",
+                fallback="previous",
             )
             overlay_artists.extend(
                 sim_result.routes.render_on_camera(

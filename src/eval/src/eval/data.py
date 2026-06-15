@@ -641,13 +641,16 @@ class DriverResponses:
         ax: plt.Axes,
         time: int,
         which_time: Literal["now", "query"] = "now",
+        fallback: Literal["exact", "previous"] = "exact",
     ) -> dict[str, list[plt.Artist]]:
         """Render driver responses at a given time.
 
         Can be called repeatedly to update the driver responses to current time.
         `which_time` declares whether the `time` is the query or prediction time.
         """
-        driver_response_at_time = self.get_driver_response_for_time(time, which_time)
+        driver_response_at_time = self.get_driver_response_for_time(
+            time, which_time, fallback=fallback
+        )
         if driver_response_at_time is None:
             return {}
         # Styling information is already encoded inside each RenderableTrajectory
@@ -712,10 +715,11 @@ class DriverResponses:
         projector: "CameraProjector",
         time: int,
         which_time: Literal["now", "query"] = "now",
+        fallback: Literal["exact", "previous"] = "exact",
     ) -> list[plt.Artist]:
         """Render planner trajectories onto a camera axis."""
         driver_response_at_time = self.get_driver_response_for_time(
-            time, which_time=which_time
+            time, which_time=which_time, fallback=fallback
         )
         artists = self.camera_artists_by_ax.setdefault(
             id(ax), {"selected": None, "sampled": []}
@@ -821,11 +825,19 @@ class DriverResponses:
         return overlay_artists
 
     def get_driver_response_for_time(
-        self, time: int, which_time: Literal["now", "query"] = "now"
+        self,
+        time: int,
+        which_time: Literal["now", "query"] = "now",
+        *,
+        fallback: Literal["exact", "previous"] = "exact",
     ) -> DriverResponseAtTime | None:
-        """Note that this returns the driver response for the query time.
+        """Return the driver response matching ``time``.
 
-        I.e. not the time when the response was predicted.
+        ``which_time`` selects whether ``time`` is matched against response
+        creation timestamps (``now``) or the timestamps the responses predicted
+        from (``query``). By default, only exact timestamp matches are returned.
+        Renderers can opt into ``fallback="previous"`` to show the most recent
+        still-active response at an off-cadence video frame.
         """
         timestamps_to_search = (
             self.timestamps_us if which_time == "now" else self.query_times_us
@@ -833,18 +845,20 @@ class DriverResponses:
         # Empty list (e.g. session aborted before any response was recorded).
         if not timestamps_to_search:
             return None
-        idx = np.searchsorted(timestamps_to_search, time)
-        if idx == len(timestamps_to_search):
+        if fallback == "exact":
+            idx = np.searchsorted(timestamps_to_search, time)
+            if idx == len(timestamps_to_search) or timestamps_to_search[idx] != time:
+                return None
+            return self.per_timestep_driver_responses[idx]
+        if fallback != "previous":
+            raise ValueError(f"Unsupported driver-response fallback: {fallback}")
+
+        # Off-cadence video frames can sit between policy-response timestamps.
+        # Use the most recent response at-or-before the requested frame, keeping
+        # its original local-frame trajectory rather than reanchoring it.
+        idx = np.searchsorted(timestamps_to_search, time, side="right") - 1
+        if idx < 0:
             return None
-        # Too early, haven't received response yet
-        if (
-            timestamps_to_search[idx] != time
-            and not timestamps_to_search[0] < time < timestamps_to_search[-1]
-        ):
-            return None
-        assert (
-            timestamps_to_search[idx] == time
-        ), f"{time=} not {timestamps_to_search=}, interpolation is not supported."
         return self.per_timestep_driver_responses[idx]
 
 

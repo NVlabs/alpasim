@@ -41,11 +41,11 @@ class PlanDeviationScorer(Scorer):
         plan_deviation_results = []
         result_timestamps = []
 
-        for ts_idx in range(1, len(simulation_result.timestamps_us)):
-            ts = simulation_result.timestamps_us[ts_idx]
-            prev_ts = simulation_result.timestamps_us[ts_idx - 1]
-
-            # First element is current time, so we have to slice it off
+        for prev_ts, ts in zip(
+            simulation_result.driver_responses.timestamps_us[:-1],
+            simulation_result.driver_responses.timestamps_us[1:],
+            strict=True,
+        ):
             driver_response_pred_at_time = (
                 simulation_result.driver_responses.get_driver_response_for_time(
                     ts, "now"
@@ -75,6 +75,8 @@ class PlanDeviationScorer(Scorer):
                 current_plan_timestamps
                 <= driver_plan_pred_at_prev_time.timestamps_us[-1]
             ]
+            if len(common_timestamps) == 0:
+                continue
 
             driver_waypoints_at_prev_time = np.asarray(
                 driver_plan_pred_at_prev_time.interpolate_to_timestamps(

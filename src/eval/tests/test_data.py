@@ -7,6 +7,8 @@ These tests guard against regressions when the underlying Trajectory class chang
 ensuring that RenderableTrajectory properly inherits from and initializes Trajectory.
 """
 
+from typing import cast
+
 import numpy as np
 import pytest
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
@@ -242,6 +244,62 @@ class TestDriverResponsesGetForTimeEmpty:
         )
         # Past last entry, but not matching the query_times_us[-1] corner case.
         assert dr.get_driver_response_for_time(500_000, "now") is None
+
+
+class TestDriverResponsesGetForTimeFallback:
+    """Regression: renderers can hold the previous response at off-cadence frames.
+
+    The video animation iterates EGO trajectory timestamps, which run at
+    ``pose_reporting_interval_us`` (e.g. 100ms). Driver responses are recorded
+    at ``control_timestep_us`` (e.g. 200ms). A frame timestamp landing between
+    two responses has no exact match. Exact lookup stays exact for metrics;
+    renderers opt into holding the most recent response.
+    """
+
+    def _responses(self, sample_raabb: RAABB) -> DriverResponses:
+        ego_traj = RenderableTrajectory(
+            timestamps_us=np.array([0], dtype=np.uint64),
+            positions=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+            quaternions=np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float32),
+            raabb=sample_raabb,
+        )
+        r0 = cast(DriverResponseAtTime, object())
+        r1 = cast(DriverResponseAtTime, object())
+        dr = DriverResponses(
+            ego_coords_rig_to_aabb_center=Pose.identity(),
+            ego_trajectory_local=ego_traj,
+            timestamps_us=[0, 200_000],  # responses at 5Hz replan cadence
+            query_times_us=[0, 200_000],
+            per_timestep_driver_responses=[r0, r1],
+        )
+        return dr, r0, r1
+
+    def test_exact_lookup_returns_none_off_cadence(self, sample_raabb: RAABB) -> None:
+        dr, r0, r1 = self._responses(sample_raabb)
+        # Cadence-matched frames hit the exact response.
+        assert dr.get_driver_response_for_time(0, "now") is r0
+        assert dr.get_driver_response_for_time(200_000, "now") is r1
+        # Metric-style exact lookup does not reinterpret an old response as new.
+        assert dr.get_driver_response_for_time(100_000, "now") is None
+
+    def test_previous_fallback_returns_at_or_before(
+        self, sample_raabb: RAABB
+    ) -> None:
+        dr, r0, r1 = self._responses(sample_raabb)
+        assert (
+            dr.get_driver_response_for_time(-1, "now", fallback="previous") is None
+        )
+        assert dr.get_driver_response_for_time(0, "now", fallback="previous") is r0
+        # 100_000 is a sub-control-step ego frame between responses 0 and 200_000.
+        assert (
+            dr.get_driver_response_for_time(100_000, "now", fallback="previous") is r0
+        )
+        assert (
+            dr.get_driver_response_for_time(200_000, "now", fallback="previous") is r1
+        )
+        assert (
+            dr.get_driver_response_for_time(500_000, "now", fallback="previous") is r1
+        )
 
 
 def _drive_response_with_debug(debug_payload: bytes) -> DriveResponse:
