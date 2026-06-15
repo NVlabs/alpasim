@@ -51,7 +51,7 @@ class MinADEScorer(Scorer):
             for time_delta in self.time_deltas
         }
 
-        for ts_idx, ts in enumerate(simulation_result.timestamps_us):
+        for ts in simulation_result.driver_responses.timestamps_us:
             # First element is current time
             driver_response_at_time = (
                 simulation_result.driver_responses.get_driver_response_for_time(
@@ -60,6 +60,7 @@ class MinADEScorer(Scorer):
             )
             if driver_response_at_time is None:
                 continue
+            ts_idx = int(np.searchsorted(simulation_result.timestamps_us, ts))
 
             # Index into the resulting ade array created at current time.
             # Need subtract additionally -1 because we exclude the current timestamp

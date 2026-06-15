@@ -17,7 +17,8 @@ class SafetyScorer(Scorer):
 
         triggers = []
 
-        for ts_idx, ts in enumerate(simulation_result.timestamps_us):
+        response_timestamps = simulation_result.driver_responses.timestamps_us
+        for ts in response_timestamps:
             driver_response_at_time = (
                 simulation_result.driver_responses.get_driver_response_for_time(
                     ts, "now"
@@ -35,7 +36,7 @@ class SafetyScorer(Scorer):
                 name="safety_monitor_triggered",
                 values=triggers,
                 valid=[True] * len(triggers),
-                timestamps_us=list(simulation_result.timestamps_us),
+                timestamps_us=list(response_timestamps),
                 time_aggregation=AggregationType.MAX,
             )
         ]
