@@ -117,5 +117,7 @@ message LogEntry {
         omnidreams.video_model.SessionCloseRequest video_model_session_close_request = 26;
         omnidreams.video_model.VideoChunkRequest video_model_chunk_request = 28;
         omnidreams.video_model.VideoChunkReturn video_model_chunk_return = 29;
+
+        nre.grpc.protos.sensorsim.BatchRGBRenderRequest batch_render_request = 30;
     }
 }

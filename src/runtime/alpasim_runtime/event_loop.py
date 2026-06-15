@@ -369,7 +369,6 @@ class EventBasedRollout:
             runtime_cameras=list(self.runtime_cameras),
             driver=self.driver,
             broadcaster=self.broadcaster,
-            use_aggregated_render=unbound.group_render_requests,
         )
         if isinstance(render_events, list):
             for event in render_events:

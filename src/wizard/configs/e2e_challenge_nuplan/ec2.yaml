@@ -1,0 +1,50 @@
+# @package _global_
+# NuPlan/MTGS EC2 challenge preset.
+#
+# This runs a full navtest closed-loop evaluation with managed MTGS services and
+# an already-running external contestant driver.
+#
+# Example:
+#   ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+#   ALPASIM_NUPLAN_ROOT=<path_to_worldengine_root_containing_navtest_and_nuplan_test> \
+#   uv run alpasim_wizard +e2e_challenge_nuplan=ec2 \
+#     wizard.log_dir=./runs/e2e_challenge_nuplan_ec2
+
+defaults:
+  - /e2e_challenge_nuplan_common: base
+  - /nuplan_scenes: navtest_full
+  - override /deploy: competition_ec2
+  - override /topology: 8gpu_32rollouts_mtgs
+  - override /driver_source: external_static
+  - _self_
+
+wizard:
+  run_name: "e2e_challenge_nuplan_ec2"
+  log_dir: "./runs/e2e_challenge_nuplan_ec2"
+  description: "NuPlan MTGS EC2 challenge evaluation"
+  run_sim_services: ["renderer", "controller", "runtime"]
+
+scenes:
+  limit_to_first_n: 0
+
+runtime:
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 8
+    driver:
+      n_concurrent_rollouts: 2
+      skip: false
+    controller:
+      n_concurrent_rollouts: 4
+    physics:
+      n_concurrent_rollouts: 1
+      skip: true
+    trafficsim:
+      n_concurrent_rollouts: 1
+      skip: true
+  simulation_config:
+    render_bundling: RENDER_AGGREGATED
+
+eval:
+  video:
+    render_video: false

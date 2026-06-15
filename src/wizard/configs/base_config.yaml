@@ -277,6 +277,9 @@ runtime:
     force_gt_duration_us: 1_700_000 # 1.7s
     skip_driver_during_force_gt: false # When true, force-GT warmup does not call driver.drive
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
+    # Which sensorsim bundled-render RPC to use (NONE = one render_rgb per camera).
+    # Options: NONE | BATCH_RENDER_RGB (NRE) | RENDER_AGGREGATED (ODL).
+    render_bundling: NONE
 
     control_timestep_us: 100_000
     pose_reporting_interval_us: 0 # 0 = controller reports only the final pose

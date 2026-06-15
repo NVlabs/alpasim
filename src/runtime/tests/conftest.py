@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from alpasim_grpc.v0.common_pb2 import DynamicState, Vec3
 from alpasim_runtime.broadcaster import MessageBroadcaster
-from alpasim_runtime.config import PhysicsUpdateMode
+from alpasim_runtime.config import PhysicsUpdateMode, RenderBundling
 from alpasim_runtime.delay_buffer import DelayBuffer
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_runtime.services.controller_service import (
@@ -177,6 +177,7 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound.assert_zero_decision_delay = False
     unbound.planner_delay_us = 0
     unbound.send_recording_ground_truth = False
+    unbound.render_bundling = RenderBundling.NONE
     unbound.route_generator_type = "NONE"
     unbound.route_start_offset_m = 0.0
     unbound.physics_update_mode = PhysicsUpdateMode.NONE

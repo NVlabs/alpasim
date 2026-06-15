@@ -43,10 +43,10 @@ Result:
 ### Optional 8-GPU Multi-Replica Smoke
 
 This mirrors the current official evaluation shape and requires an 8-GPU host.
-Start 12 local driver containers:
+Start 16 local driver containers:
 
 ```bash
-ALPASIM_DRIVER_REPLICAS=12 \
+ALPASIM_DRIVER_REPLICAS=16 \
   e2e_challenge/starter_kit/run_local_container.sh
 ```
 
@@ -54,9 +54,9 @@ Then run the simulator stack:
 
 ```bash
 uv run alpasim_wizard +e2e_challenge=dev \
-  topology=8gpu_36rollouts \
-  'wizard.external_services.driver=["localhost:6789","localhost:6790","localhost:6791","localhost:6792","localhost:6793","localhost:6794","localhost:6795","localhost:6796","localhost:6797","localhost:6798","localhost:6799","localhost:6800"]' \
-  runtime.endpoints.driver.n_concurrent_rollouts=3 \
+  topology=8gpu_32rollouts \
+  runtime.endpoints.driver.n_concurrent_rollouts=2 \
+  'wizard.external_services.driver=["localhost:6789","localhost:6790","localhost:6791","localhost:6792","localhost:6793","localhost:6794","localhost:6795","localhost:6796","localhost:6797","localhost:6798","localhost:6799","localhost:6800","localhost:6801","localhost:6802","localhost:6803","localhost:6804"]' \
   wizard.log_dir=./runs/e2e_challenge_multi_smoke
 ```
 

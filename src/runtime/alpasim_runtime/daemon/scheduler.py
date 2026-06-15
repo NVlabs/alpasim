@@ -7,7 +7,9 @@ import asyncio
 import logging
 from collections import deque
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Protocol
+from uuid import uuid4
 
 from alpasim_runtime.address_pool import (
     AddressPool,
@@ -25,6 +27,14 @@ from alpasim_runtime.worker.ipc import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _InFlightJob:
+    request_id: str
+    pending_job: PendingRolloutJob
+    pools: dict[str, AddressPool]
+    acquired: dict[str, ServiceAddress]
 
 
 class DaemonUnavailableError(RuntimeError):
@@ -66,9 +76,7 @@ class DaemonScheduler:
         self._required_service_names = (*BASE_SERVICE_NAMES, "renderer")
         self._request_store = RequestStore()
         self._global_pending: deque[tuple[str, PendingRolloutJob]] = deque()
-        self._in_flight: dict[
-            str, tuple[dict[str, AddressPool], dict[str, ServiceAddress]]
-        ] = {}
+        self._in_flight: dict[str, _InFlightJob] = {}
         self._request_pools: dict[str, dict[str, AddressPool]] = {}
         self._accepting_requests = True
         self._dispatch_loop_task = asyncio.create_task(self._dispatch_loop())
@@ -159,16 +167,52 @@ class DaemonScheduler:
                     controller=acquired["controller"],
                 ),
                 session_uuid=pending_job.session_uuid,
+                retry_attempt=pending_job.retry_attempt,
+                max_retry_attempts=pending_job.max_retry_attempts,
             )
             self._runtime.submit_assigned_job(assigned)
-            self._in_flight[assigned.job_id] = (required_pools, acquired)
+            self._in_flight[assigned.job_id] = _InFlightJob(
+                request_id=request_id,
+                pending_job=pending_job,
+                pools=required_pools,
+                acquired=acquired,
+            )
 
     def on_result(self, result: JobResult) -> None:
-        entry = self._in_flight.pop(result.job_id, None)
-        if entry is None:
+        in_flight = self._in_flight.pop(result.job_id, None)
+        if in_flight is None:
             raise RuntimeError(f"Unknown job_id in result queue: {result.job_id}")
-        pools, acquired = entry
-        release_all(pools, acquired)
+        release_all(in_flight.pools, in_flight.acquired)
+
+        if (
+            result.retryable
+            and not result.success
+            and in_flight.pending_job.retry_attempt
+            < in_flight.pending_job.max_retry_attempts
+        ):
+            retry_job = PendingRolloutJob(
+                job_id=uuid4().hex,
+                scene_id=in_flight.pending_job.scene_id,
+                rollout_spec_index=in_flight.pending_job.rollout_spec_index,
+                # Leave empty so UnboundRollout allocates a fresh rollout/session
+                # UUID and cannot collide with partial failed artifacts.
+                session_uuid="",
+                retry_attempt=in_flight.pending_job.retry_attempt + 1,
+                max_retry_attempts=in_flight.pending_job.max_retry_attempts,
+            )
+            logger.warning(
+                "Retrying rollout after retryable infrastructure failure: "
+                "scene=%s failed_job=%s retry_job=%s attempt=%d/%d error=%s",
+                retry_job.scene_id,
+                result.job_id,
+                retry_job.job_id,
+                retry_job.retry_attempt,
+                retry_job.max_retry_attempts,
+                result.error,
+            )
+            self._global_pending.append((in_flight.request_id, retry_job))
+            return
+
         self._request_store.record_result(result)
 
         try:

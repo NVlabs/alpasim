@@ -1,0 +1,59 @@
+# @package _global_
+# 8-GPU topology: 32 concurrent rollouts. PAI EC2 renderer-stability topology.
+#
+# Intended for the direct EC2 challenge runner with external contestant drivers:
+# - 16 contestant containers, assigned round-robin to GPUs 4-7
+# - 2 driver rollouts per contestant endpoint
+#
+# Total capacity per service:
+# - REND: 4 GPUs x 8 replicas x 1 rollout  = 32
+# - DRIV: 4 GPUs x 4 replicas x 2 rollouts = 32
+# - PHYS: 4 GPUs x 2 replicas x 4 rollouts = 32
+# - CONT: 1 CPU service x 8 replicas x 4 rollouts = 32
+
+defines:
+  nre_cache_size: 2
+  physics_cache_size: 16
+
+eval:
+  num_processes: 16
+
+services:
+  renderer:
+    replicas_per_container: 8
+    gpus: [0, 1, 2, 3]
+
+  # Used only for non-external/local driver runs. In competition EC2 runs, the
+  # direct runner starts external contestant containers and overrides this
+  # service to point at those endpoints.
+  driver:
+    replicas_per_container: 4
+    gpus: [4, 5, 6, 7]
+
+  physics:
+    replicas_per_container: 2
+    gpus: [4, 5, 6, 7]
+
+  controller:
+    replicas_per_container: 8
+    gpus: null
+
+  trafficsim:
+    replicas_per_container: 1
+    gpus: [0, 1]
+
+runtime:
+  nr_workers: 4
+  endpoints:
+    renderer:
+      n_concurrent_rollouts: 1
+    driver:
+      n_concurrent_rollouts: 2
+      skip: false
+    physics:
+      n_concurrent_rollouts: 4
+      skip: false
+    controller:
+      n_concurrent_rollouts: 4
+    trafficsim:
+      skip: true
