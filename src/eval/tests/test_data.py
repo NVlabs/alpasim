@@ -282,13 +282,9 @@ class TestDriverResponsesGetForTimeFallback:
         # Metric-style exact lookup does not reinterpret an old response as new.
         assert dr.get_driver_response_for_time(100_000, "now") is None
 
-    def test_previous_fallback_returns_at_or_before(
-        self, sample_raabb: RAABB
-    ) -> None:
+    def test_previous_fallback_returns_at_or_before(self, sample_raabb: RAABB) -> None:
         dr, r0, r1 = self._responses(sample_raabb)
-        assert (
-            dr.get_driver_response_for_time(-1, "now", fallback="previous") is None
-        )
+        assert dr.get_driver_response_for_time(-1, "now", fallback="previous") is None
         assert dr.get_driver_response_for_time(0, "now", fallback="previous") is r0
         # 100_000 is a sub-control-step ego frame between responses 0 and 200_000.
         assert (
@@ -300,6 +296,7 @@ class TestDriverResponsesGetForTimeFallback:
         assert (
             dr.get_driver_response_for_time(500_000, "now", fallback="previous") is r1
         )
+
 
 def _drive_response_with_debug(debug_payload: bytes) -> DriveResponse:
     response = DriveResponse()

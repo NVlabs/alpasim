@@ -40,9 +40,7 @@ def _trajectory(timestamps_us: np.ndarray) -> Trajectory:
     return Trajectory(timestamps_us, positions, quaternions)
 
 
-def _renderable(
-    timestamps_us: np.ndarray, raabb: RAABB
-) -> RenderableTrajectory:
+def _renderable(timestamps_us: np.ndarray, raabb: RAABB) -> RenderableTrajectory:
     return RenderableTrajectory.from_trajectory(
         _trajectory(timestamps_us),
         raabb,
@@ -105,9 +103,9 @@ def test_driver_response_scorers_use_policy_timestamps(
     cfg = create_test_eval_config()
     cfg.scorers.min_ade.time_deltas = [0.1]
     min_ade = MinADEScorer(cfg).calculate(off_cadence_simulation_result)[0]
-    plan_deviation = PlanDeviationScorer(cfg).calculate(
-        off_cadence_simulation_result
-    )[0]
+    plan_deviation = PlanDeviationScorer(cfg).calculate(off_cadence_simulation_result)[
+        0
+    ]
     safety = SafetyScorer(cfg).calculate(off_cadence_simulation_result)[0]
 
     assert min_ade.timestamps_us == [0, 200_000, 400_000]
