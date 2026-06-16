@@ -4,13 +4,14 @@
 
 1. Register a team in the [public Hugging Face Space](https://huggingface.co/spaces/nvidia/AlpasimE2EClosedLoopChallenge2026)
 and wait for approval.
-1. Build a Docker image that serves the AlpaSim driver gRPC API. Start with the [starter kit](starter_kit/README.md) for a minimal example, then customize and test locally.
+1. Build a Docker image that serves the AlpaSim driver gRPC API. Start with the [starter kit](starter_kit/README.md) for a minimal example or the [VAVAM sample submission](sample_submission_vavam/README.md) for a richer model-backed example, then customize and test locally.
 1. Push the image to your team's ECR repository and use the challenge CLI to submit the image URI for evaluation.
 1. Wait for evaluation and check status or leaderboard results.
 
 ## Competition Resources
 
 - [Starter kit](starter_kit/README.md): build and locally test a minimal driver container
+- [VAVAM sample submission](sample_submission_vavam/README.md): build and locally test a VAVAM-backed driver container
 - [Challenge CLI](competitor_cli/README.md): authenticate, log in to ECR, submit images, check status, view the leaderboard
 
 ## Tracks
@@ -41,14 +42,19 @@ The image is expected to:
 - implement `egodriver.EgodriverService` from `src/grpc/alpasim_grpc/v0/egodriver.proto`
 - listen on the configured gRPC host and port
 - support multiple concurrent calls on multiple instances (replicas) of the same image
-- keep average `Drive` RPC handling time at or below 0.1 seconds
+- target 0.1 seconds or less of model work per `Drive` call
 
 Each replica receives `ALPASIM_DRIVER_HOST`, `ALPASIM_DRIVER_PORT`,
 `ALPASIM_CONTESTANT_REPLICA_INDEX`, and `ALPASIM_CONTESTANT_REPLICAS`. GPU
 access is provided during official evaluation.
 
+The 0.1 second target corresponds to a 10 Hz driving loop: a policy should be
+able to produce each driving decision within one control tick. Official
+evaluation enforces this with a per-track throughput budget. Submission status
+reports the observed throughput wall time and the applicable limit.
+
 Both tracks use the `ec2` preset (see `src/wizard/configs/{e2e_challenge,e2e_challenge_nuplan}`).
-The EC2 config start 16 replicas of the submitted image across GPUs 4-7 with 2 concurrent rollouts per replica.
+The EC2 configs start 16 replicas of the submitted image across GPUs 4-7 with 2 concurrent rollouts per replica.
 
 Local smoke tests use `+e2e_challenge=dev` and a 1-GPU topology.
 
