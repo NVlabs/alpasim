@@ -9,6 +9,7 @@
 defines:
   filesystem: ${oc.env:ALPASIM_DATA_DIR,/opt/dlami/nvme/alpasim-data}
   base_image: ${oc.env:ALPASIM_IMAGE,???}
+  renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
 
 wizard:
   run_method: "NONE"
@@ -41,4 +42,4 @@ services:
     external_image: true
 
   renderer:
-    image: ${oc.env:NRE_IMAGE,nvcr.io/nvidia/nre/nre-ga:26.02}
+    image: ${oc.env:NRE_IMAGE,nvcr.io/nvidia/nre/nre-ga:26.04}

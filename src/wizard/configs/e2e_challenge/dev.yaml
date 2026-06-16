@@ -11,6 +11,9 @@ defaults:
   - override /driver_source: external_static
   - _self_
 
+defines:
+  renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
+
 wizard:
   run_name: "e2e_challenge_dev"
   log_dir: "./runs/e2e_challenge_dev"
@@ -22,6 +25,9 @@ wizard:
       - "${oc.env:ALPASIM_DRIVER_HOST,localhost}:${oc.env:ALPASIM_DRIVER_PORT,6789}"
 
 services:
+  renderer:
+    image: ${oc.env:NRE_IMAGE,nvcr.io/nvidia/nre/nre-ga:26.04}
+
   driver:
     image: ${oc.env:CONTESTANT_IMAGE,alpasim-e2e-starter-driver:latest}
     external_image: true
