@@ -189,18 +189,7 @@ def modified_metrics_df_with_img_black(
     """Modified metrics dataframe where one specific rollout has img_is_black = 1.0.
 
     Specifically sets img_is_black = 1.0 for test_run_1 + clip1 + rollout1.
-    This will trigger RemoveTrajectoryWithEvent(img_is_black > 0) to remove that complete trajectory.
-
-    Expected impact:
-    - Original: 8 trajectories (2 runs × 2 clips × 2 rollouts)
-    - Removed: 1 trajectory (test_run_1 + clip1 + rollout1)
-    - Remaining: 7 trajectories
-
-    Rollouts per clip after filtering:
-    - test_run_1 + clip1: 1 rollout (rollout2 remains, rollout1 removed)
-    - test_run_1 + clip2: 2 rollouts (both rollout1 and rollout2 remain)
-    - test_run_2 + clip1: 2 rollouts (both rollout1 and rollout2 remain)
-    - test_run_2 + clip2: 2 rollouts (both rollout1 and rollout2 remain)
+    Default aggregation should retain this trajectory and let downstream metrics score it.
     """
     return unified_metrics_df.with_columns(
         # Set img_is_black = 1.0 for test_run_1 + clip1 + rollout1 only
@@ -1104,7 +1093,7 @@ class TestProcessedMetricDFs:
     def processed_dfs_with_img_black(
         self, modified_metrics_df_with_img_black: pl.DataFrame
     ) -> ProcessedMetricDFs:
-        """Create processed dataframes with img_black trajectory removed."""
+        """Create processed dataframes with an img_black trajectory retained."""
         return aggregate_and_write_metrics_results_txt(
             modified_metrics_df_with_img_black
         )
@@ -1143,22 +1132,13 @@ class TestProcessedMetricDFs:
         removed_trajectories = processed_dfs.get_removed_trajectories()
         assert removed_trajectories.height == 0
 
-        # Test with modified data where one trajectory has img_is_black > 0
+        # Test with modified data where one trajectory has img_is_black > 0.
+        # Black images are retained by default and scored through normal metrics.
         removed_trajectories_modified = (
             processed_dfs_with_img_black.get_removed_trajectories()
         )
 
-        # Should have exactly 1 removed trajectory: test_run_1 + clip1 + rollout1
-        assert removed_trajectories_modified.height == 1
-
-        # Check that the removed trajectory is exactly the one we expect
-        expected_removed = removed_trajectories_modified.select(
-            "run_name", "clipgt_id", "rollout_id"
-        )
-
-        assert expected_removed["run_name"][0] == "test_run_1"
-        assert expected_removed["clipgt_id"][0] == "clip1"
-        assert expected_removed["rollout_id"][0] == "rollout1"
+        assert removed_trajectories_modified.height == 0
 
         # Verify all required columns are present
         expected_columns = {
@@ -1170,8 +1150,8 @@ class TestProcessedMetricDFs:
         assert set(removed_trajectories_modified.columns).issuperset(expected_columns)
 
         # Verify the remaining trajectories count
-        # Original: 8 trajectories, Removed: 1 trajectory, Remaining: 7 trajectories
-        assert processed_dfs_with_img_black.df_wide_avg_t.shape[0] == 7
+        # Original: 8 trajectories, Removed: 0 trajectories, Remaining: 8 trajectories
+        assert processed_dfs_with_img_black.df_wide_avg_t.shape[0] == 8
 
     def test_get_rollouts_per_clip_quantitative(
         self,
@@ -1187,7 +1167,7 @@ class TestProcessedMetricDFs:
             n_rollouts == 2 for n_rollouts in rollouts_per_clip["n_rollouts"].to_list()
         )
 
-        # Test modified data - one specific clip should have 1 rollout, others should have 2
+        # Test modified data - black-image trajectories are still counted.
         rollouts_per_clip_modified = (
             processed_dfs_with_img_black.get_rollouts_per_clip()
         )
@@ -1198,11 +1178,8 @@ class TestProcessedMetricDFs:
             key = (row["run_name"], row["clipgt_id"])
             rollouts_dict[key] = row["n_rollouts"]
 
-        # Check specific expected values:
-        # test_run_1 + clip1: 1 rollout (rollout1 was removed, rollout2 remains)
-        assert rollouts_dict[("test_run_1", "clip1")] == 1
-
-        # All other clips should have 2 rollouts
+        # All clips should still have 2 rollouts.
+        assert rollouts_dict[("test_run_1", "clip1")] == 2
         assert rollouts_dict[("test_run_1", "clip2")] == 2
         assert rollouts_dict[("test_run_2", "clip1")] == 2
         assert rollouts_dict[("test_run_2", "clip2")] == 2
