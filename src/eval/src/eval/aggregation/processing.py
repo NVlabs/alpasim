@@ -26,7 +26,6 @@ from eval.aggregation.modifiers import (
     MetricAggregationModifiers,
     RemoveTimestepsAfterEvent,
     RemoveTimestepsBeforeEvent,
-    RemoveTrajectoryWithEvent,
     get_removed_rows,
 )
 from eval.aggregation.scene_score import score_rollout
@@ -61,7 +60,6 @@ DEFAULT_MODIFIERS = [
         name="duration_frac_20s",
         time_aggregation="last",
     ),
-    RemoveTrajectoryWithEvent(pl.col("img_is_black") > 0.0),
     RemoveTimestepsAfterEvent(pl.col("offroad_or_collision") > 0.0),
 ]
 
