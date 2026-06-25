@@ -135,9 +135,18 @@ def _resolve_nuplan_extra_params(dataset_name: str, extra_params: dict) -> dict:
                     "%s missing central_log or central_tokens, skipping", yaml_file.name
                 )
                 continue
+            road_block_name = (
+                cfg.get("road_block_name", "")
+                if isinstance(cfg, dict)
+                else getattr(cfg, "road_block_name", "")
+            ) or f"{central_log}-{central_tokens[0]}"
             for token in central_tokens:
                 configs_by_log[central_log].append(
-                    {"central_token": token, "logfile": central_log}
+                    {
+                        "central_token": token,
+                        "logfile": central_log,
+                        "asset_folder": road_block_name,
+                    }
                 )
         except Exception as exc:
             logger.warning("Failed to load %s: %s", yaml_file.name, exc)
