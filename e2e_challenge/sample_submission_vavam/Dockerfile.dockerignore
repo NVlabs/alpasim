@@ -1,0 +1,13 @@
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.git/
+**/.venv/
+**/venv/
+models/
+alpamayo1_distilled/assets/
+vendor/grpc/dist/
+vendor/grpc/outputs/
+vendor/grpc/log_replay/

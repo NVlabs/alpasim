@@ -1,0 +1,13 @@
+grpcio
+grpcio-tools
+protobuf>=4.0.0,<5.0.0
+setuptools<82
+dataclasses-json>=0.6.7
+numpy
+pillow
+opencv-python-headless
+omegaconf
+einops
+hydra-core
+rich
+git+https://github.com/valeoai/VideoActionModel.git@v1.0.0

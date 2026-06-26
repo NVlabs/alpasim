@@ -10,6 +10,9 @@ uv run alpasim_wizard +e2e_challenge=dev \
   wizard.log_dir=./runs/e2e_challenge_smoke
 ```
 
+If `NRE_IMAGE` is not supplied, the dev preset uses
+`nvcr.io/nvidia/nre/nre-ga:26.04`.
+
 Starter driver:
 
 ```bash
@@ -41,6 +44,8 @@ the wizard.
 The EC2 preset selects the current production topology, `8gpu_32rollouts`. The
 direct runner supplies the complete external driver endpoint list and any
 production-only renderer image/entrypoint overrides for official evaluation.
+If `NRE_IMAGE` is not supplied, the PAI EC2 preset also uses
+`nvcr.io/nvidia/nre/nre-ga:26.04`.
 
 ```bash
 docker run --rm --gpus all \

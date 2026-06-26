@@ -28,6 +28,8 @@ data/alpackages/*
 data/huggingface
 data/vavam-driver
 data/trafficsim-models/
+e2e_challenge/sample_submission_vavam/assets/vavam/VAM_width_1024_pretrained_139k.pt
+e2e_challenge/sample_submission_vavam/assets/vavam/VQ_ds16_16384_llamagen_encoder.jit
 outputs/
 artifacts/
 asset_harvesting/
