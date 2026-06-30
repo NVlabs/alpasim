@@ -25,7 +25,6 @@ from alpasim_runtime.daemon.app import RuntimeDaemonApp
 from alpasim_runtime.daemon.engine import DaemonEngine
 from alpasim_runtime.runtime_context import parse_simulator_config
 from alpasim_runtime.telemetry.plot_metrics import generate_metrics_plot
-from alpasim_runtime.telemetry.utils import merge_metrics_files
 from alpasim_runtime.validation import validate_array_job_config
 from alpasim_utils.yaml_utils import typed_parse_config
 
@@ -40,7 +39,7 @@ def get_run_name(log_dir: str) -> str:
     run_metadata_path = os.path.join(log_dir, "run_metadata.yaml")
     with open(run_metadata_path, "r") as f:
         run_metadata = yaml.safe_load(f)
-    return run_metadata.get("run_name")
+    return run_metadata["run_name"]
 
 
 def _failed_rollouts_from_returns(
@@ -64,6 +63,29 @@ def _failed_rollouts_from_returns(
     return failed_rollouts
 
 
+def _write_metrics_artifact_error(prometheus_dir: Path, exc: BaseException) -> None:
+    prometheus_dir.mkdir(parents=True, exist_ok=True)
+    error_path = prometheus_dir / "metrics_plot_error.txt"
+    error_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
+    logger.warning("Telemetry plot generation failed: %s", exc)
+
+
+def _generate_metrics_artifacts(
+    *,
+    prometheus_url: str,
+    log_dir: Path,
+) -> None:
+    """Generate best-effort runtime metrics artifacts from local Prometheus."""
+    prometheus_dir = log_dir / "prometheus"
+    try:
+        generate_metrics_plot(
+            prometheus_url=prometheus_url,
+            output_path=log_dir / "metrics_plot.png",
+        )
+    except Exception as exc:
+        _write_metrics_artifact_error(prometheus_dir, exc)
+
+
 def create_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
@@ -75,7 +97,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
         "--log-dir",
         type=str,
         required=True,
-        help="Root directory for all simulation outputs (rollouts/, telemetry/, txt-logs/)",
+        help="Root directory for all simulation outputs (rollouts/, prometheus/, txt-logs/)",
     )
 
     parser.add_argument(
@@ -176,7 +198,6 @@ async def run_simulation(args: argparse.Namespace) -> bool:
 
     # Derive output directories from log_dir
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
-    telemetry_dir = os.path.join(args.log_dir, "telemetry")
 
     # Validate nr_workers
     if config.user.nr_workers < 1:
@@ -217,16 +238,10 @@ async def run_simulation(args: argparse.Namespace) -> bool:
             if len(failed) > 3:
                 logger.error("  ... and %d more", len(failed) - 3)
 
-        # Merge telemetry files
-        merge_metrics_files(telemetry_dir)
-
-        # Generate telemetry visualization plot
-        output_path = generate_metrics_plot(
-            metrics_path=Path(telemetry_dir) / "metrics.prom",
-            output_path=Path(args.log_dir) / "metrics_plot.png",
-            run_name=get_run_name(args.log_dir),
+        _generate_metrics_artifacts(
+            prometheus_url=config.user.prometheus.url,
+            log_dir=Path(args.log_dir),
         )
-        logger.info("Generated telemetry metrics plot: %s", output_path)
 
     success = all_rollouts_successful
 

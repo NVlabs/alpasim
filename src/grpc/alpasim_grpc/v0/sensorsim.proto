@@ -22,9 +22,21 @@ service SensorsimService {
     rpc batch_render_rgb (BatchRGBRenderRequest) returns (BatchRGBRenderReturn);
     rpc get_version (common.Empty) returns (common.VersionId);
     rpc get_available_scenes (common.Empty) returns (common.AvailableScenesReturn);
+    rpc get_loaded_scenes (common.Empty) returns (LoadedScenesReturn);
     rpc get_available_cameras (AvailableCamerasRequest) returns (AvailableCamerasReturn);
     rpc get_available_trajectories (AvailableTrajectoriesRequest) returns (AvailableTrajectoriesReturn);
     rpc get_available_ego_masks (common.Empty) returns (AvailableEgoMasksReturn);
+}
+
+message LoadedSceneEntry {
+    string scene_id = 1;
+    uint64 loaded_instance_count = 2;
+    uint64 reusable_instance_count = 3;
+}
+
+message LoadedScenesReturn {
+    repeated LoadedSceneEntry scenes = 1;
+    uint64 loaded_instance_capacity = 2;
 }
 
 message EgoMaskId {

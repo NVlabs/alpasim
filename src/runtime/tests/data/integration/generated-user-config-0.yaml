@@ -12,7 +12,6 @@ endpoints:
     skip: false
   renderer:
     n_concurrent_rollouts: 2
-  sensorsim_cache_size: '4'
   trafficsim:
     n_concurrent_rollouts: 14
     skip: false
@@ -20,6 +19,9 @@ renderer:
   kind: sensorsim
   video_model_config: null
 nr_workers: 1
+prometheus:
+  url: http://127.0.0.1:9090
+  worker_ports: [0]
 scenes:
   - scene_id: clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e
 simulation_config:

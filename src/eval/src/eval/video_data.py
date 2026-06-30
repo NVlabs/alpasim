@@ -16,14 +16,35 @@ from eval.schema import EvalConfig
 
 
 @dataclasses.dataclass
-class PointPlot:
-    """Represents a point to be plotted. Used to plot the vec_map."""
+class RenderablePoint:
+    """Represents a point marker to be plotted from the vec_map."""
 
     name: str
-    points: list[Point]
+    point: Point
     color: str
     marker: str
     size: float = 6
+    artists: list[plt.Artist] | None = None
+
+    def remove_artist(self) -> None:
+        if self.artists is not None:
+            self.artists[0].remove()
+            self.artists = None
+
+    def render(self, ax: plt.Axes) -> list[plt.Artist]:
+        if self.artists is not None:
+            raise RuntimeError("You should not re-render an existing point.")
+        self.artists = ax.plot(
+            [self.point.x],
+            [self.point.y],
+            linestyle="",
+            marker=self.marker,
+            markersize=self.size,
+            color=self.color,
+            alpha=0.9,
+            zorder=4,
+        )
+        return self.artists
 
 
 @dataclasses.dataclass
@@ -104,13 +125,12 @@ class ShapelyMap:
     """Represents a map with shapely objects."""
 
     renderable_linestrings: list[RenderableLineString]
-    # TODOs: Make work for points
-    # * Split traffic signs by type
-    # * Add points to str_tree
-    # * Rendering error where using rotation transform does something weird.
-    # point_plots: list[PointPlot]
+    renderable_points: list[RenderablePoint]
     str_tree: STRtree
     currently_rendered_linestring_ids: np.ndarray = dataclasses.field(
+        default_factory=lambda: np.array([])
+    )
+    currently_rendered_point_ids: np.ndarray = dataclasses.field(
         default_factory=lambda: np.array([])
     )
 
@@ -119,9 +139,20 @@ class ShapelyMap:
         if vec_map is None:
             return ShapelyMap(
                 renderable_linestrings=[],
+                renderable_points=[],
                 str_tree=STRtree([]),
             )
         renderable_linestrings = []
+        renderable_points = []
+
+        def _closed_linestring(xyz: np.ndarray) -> LineString | None:
+            points = np.asarray(xyz)
+            if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] < 2:
+                return None
+            points_xy = points[:, :2]
+            if not np.allclose(points_xy[0], points_xy[-1]):
+                points_xy = np.vstack([points_xy, points_xy[0]])
+            return LineString(points_xy)
 
         road_lane_elements = vec_map.elements[
             maps.vec_map_elements.MapElementType.ROAD_LANE
@@ -138,9 +169,18 @@ class ShapelyMap:
         other_line_elements = [
             e for e in wait_line_elements.values() if e.wait_line_type != "STOP"
         ]
-        # traffic_sign_elements = vec_map.elements[
-        #     maps.vec_map_elements.MapElementType.TRAFFIC_SIGN
-        # ]
+        crosswalk_elements = vec_map.elements.get(
+            maps.vec_map_elements.MapElementType.PED_CROSSWALK, {}
+        )
+        road_area_elements = vec_map.elements.get(
+            maps.vec_map_elements.MapElementType.ROAD_AREA, {}
+        )
+        walkway_elements = vec_map.elements.get(
+            maps.vec_map_elements.MapElementType.PED_WALKWAY, {}
+        )
+        traffic_sign_elements = vec_map.elements.get(
+            maps.vec_map_elements.MapElementType.TRAFFIC_SIGN, {}
+        )
 
         for element in road_lane_elements.values():
             renderable_linestrings.append(
@@ -210,28 +250,94 @@ class ShapelyMap:
                 )
             )
 
-        # TODO: Currently doesn't work with transform...
-        # point_plots = []
-        # point_plots.append(
-        #     PointPlot(
-        #         name="traffic_sign",
-        #         points=[
-        #             Point(traffic_sign.position[:2])
-        #             for traffic_sign in traffic_sign_elements.values()
-        #         ],
-        #         color="orange",
-        #         marker="8",
-        #     )
-        # )
+        for crosswalk in crosswalk_elements.values():
+            linestring = _closed_linestring(crosswalk.polygon.xyz)
+            if linestring is not None:
+                renderable_linestrings.append(
+                    RenderableLineString(
+                        linestring=linestring,
+                        name="crosswalk",
+                        linewidth=1,
+                        style="-",
+                        alpha=0.8,
+                        color="purple",
+                    )
+                )
+
+        for road_area in road_area_elements.values():
+            linestring = _closed_linestring(road_area.exterior_polygon.xyz)
+            if linestring is not None:
+                renderable_linestrings.append(
+                    RenderableLineString(
+                        linestring=linestring,
+                        name="road_area",
+                        linewidth=1,
+                        style="-",
+                        alpha=0.4,
+                        color="green",
+                    )
+                )
+            for hole in road_area.interior_holes:
+                linestring = _closed_linestring(hole.xyz)
+                if linestring is not None:
+                    renderable_linestrings.append(
+                        RenderableLineString(
+                            linestring=linestring,
+                            name="road_island",
+                            linewidth=1,
+                            style="-",
+                            alpha=0.8,
+                            color="black",
+                        )
+                    )
+
+        for walkway in walkway_elements.values():
+            linestring = _closed_linestring(walkway.polygon.xyz)
+            if linestring is not None:
+                renderable_linestrings.append(
+                    RenderableLineString(
+                        linestring=linestring,
+                        name="ped_walkway",
+                        linewidth=1,
+                        style="-",
+                        alpha=0.5,
+                        color="gray",
+                    )
+                )
+
+        for traffic_sign in traffic_sign_elements.values():
+            position = np.asarray(traffic_sign.position)
+            if position.shape[0] < 2:
+                continue
+            renderable_points.append(
+                RenderablePoint(
+                    name="traffic_sign",
+                    point=Point(float(position[0]), float(position[1])),
+                    color="red",
+                    marker="^",
+                    size=4,
+                )
+            )
 
         str_tree = STRtree([r.linestring for r in renderable_linestrings])
         return ShapelyMap(
             renderable_linestrings,
+            renderable_points,
             str_tree,
         )
 
     def get_linestring_idxs_in_radius(self, center: Point, radius: float) -> np.ndarray:
         return self.str_tree.query(center.buffer(radius), "intersects")
+
+    def get_point_idxs_in_radius(self, center: Point, radius: float) -> np.ndarray:
+        return np.asarray(
+            [
+                idx
+                for idx, point in enumerate(self.renderable_points)
+                if point.point.distance(center) <= radius
+            ],
+            dtype=int,
+        )
 
     def render(
         self,
@@ -262,6 +368,11 @@ class ShapelyMap:
             if max_dist is None
             else self.get_linestring_idxs_in_radius(center, max_dist)
         )
+        current_point_ids: Iterable[int] = (
+            np.arange(len(self.renderable_points))
+            if max_dist is None
+            else self.get_point_idxs_in_radius(center, max_dist)
+        )
 
         # Filter for elements to plot
         if cfg.video.map_video.map_elements_to_plot is not None:
@@ -271,24 +382,43 @@ class ShapelyMap:
                 if self.renderable_linestrings[id].name
                 in cfg.video.map_video.map_elements_to_plot
             ]
+            current_point_ids = [
+                id
+                for id in current_point_ids
+                if self.renderable_points[id].name
+                in cfg.video.map_video.map_elements_to_plot
+            ]
+        else:
+            current_linestring_ids = list(current_linestrings_ids)
+            current_point_ids = list(current_point_ids)
 
         # Remove artists for linestrings that are no longer in the radius
         for linestring_id in set(self.currently_rendered_linestring_ids) - set(
             current_linestring_ids
         ):
             self.renderable_linestrings[linestring_id].remove_artist()
+        for point_id in set(self.currently_rendered_point_ids) - set(current_point_ids):
+            self.renderable_points[point_id].remove_artist()
 
         # Render new linestrings
         for linestring_id in set(current_linestring_ids) - set(
             self.currently_rendered_linestring_ids
         ):
             self.renderable_linestrings[linestring_id].render(ax)
+        for point_id in set(current_point_ids) - set(self.currently_rendered_point_ids):
+            self.renderable_points[point_id].render(ax)
         self.currently_rendered_linestring_ids = current_linestring_ids
+        self.currently_rendered_point_ids = current_point_ids
 
         return {
             "map": [
                 artist
                 for linestring_id in current_linestring_ids
                 for artist in self.renderable_linestrings[linestring_id].artists
+            ]
+            + [
+                artist
+                for point_id in current_point_ids
+                for artist in self.renderable_points[point_id].artists
             ],
         }

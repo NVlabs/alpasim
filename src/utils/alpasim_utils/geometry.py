@@ -12,6 +12,7 @@ Quaternions use scipy convention (x, y, z, w) internally.
 
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 try:
@@ -32,6 +33,8 @@ __all__ = [
     "pose_to_grpc",
     "pose_from_grpc",
     "pose_to_grpc_at_time",
+    "quat_to_yaw",
+    "yaw_to_quat_components",
     # Polyline
     "Polyline",
     "ProjectionResult",
@@ -83,6 +86,20 @@ def pose_to_grpc_at_time(pose: Pose, timestamp_us: int) -> grpc_types.PoseAtTime
         pose=pose_to_grpc(pose),
         timestamp_us=timestamp_us,
     )
+
+
+def quat_to_yaw(quat: grpc_types.Quat) -> float:
+    """Return yaw from a gRPC quaternion."""
+    return Pose.from_denormalized_quat(
+        np.zeros((3,), dtype=np.float32),
+        np.asarray([quat.x, quat.y, quat.z, quat.w], dtype=np.float32),
+    ).yaw()
+
+
+def yaw_to_quat_components(yaw: float) -> tuple[float, float, float, float]:
+    """Return gRPC-order quaternion components ``(w, x, y, z)`` for yaw."""
+    half_yaw = 0.5 * yaw
+    return (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
 
 
 # =============================================================================

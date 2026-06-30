@@ -10,9 +10,6 @@ eval:
 
 services:
   renderer:
-    environments:
-      - OMP_NUM_THREADS=1
-      - PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.7
     replicas_per_container: 1
     gpus: [0, 1, 2, 3]
 

@@ -10,12 +10,24 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
+from importlib.resources import files as resource_files
 from typing import Any, Iterator, List, Literal
 
 from .context import WizardContext
-from .schema import RunMode, ServiceConfig
+from .schema import ContainerConfig, RunMode, ServiceConfig
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_prometheus_command(context: WizardContext) -> str:
+    command = (
+        resource_files("alpasim_wizard")
+        .joinpath("telemetry/resources/prometheus_sidecar.sh")
+        .read_text(encoding="utf-8")
+    )
+    for name, port in context.telemetry_ports.prometheus_service_ports().items():
+        command = command.replace(f"{{prometheus_ports.{name}}}", str(port))
+    return command
 
 
 @dataclass
@@ -35,17 +47,23 @@ class Address:
 class VolumeMount:
     host: str
     container: str
+    options: str | None = None
 
     @staticmethod
     def from_str(string: str) -> VolumeMount:
         try:
-            host, container = string.split(":")
+            parts = string.split(":", maxsplit=2)
+            host, container = parts[:2]
+            options = parts[2] if len(parts) == 3 else None
         except ValueError as e:
             raise ValueError(f"Failed to convert {string=} to VolumeMount") from e
-        return VolumeMount(host, container)
+        return VolumeMount(host, container, options)
 
     def to_str(self) -> str:
-        return f"{self.host}:{self.container}"
+        mount = f"{self.host}:{self.container}"
+        if self.options is not None:
+            return f"{mount}:{self.options}"
+        return mount
 
     def host_exists(self) -> bool:
         return os.path.exists(self.host)
@@ -72,21 +90,22 @@ class ContainerDefinition:
             return self.address.port if self.address is not None else None
 
         @property
-        def service_config(self) -> ServiceConfig:
+        def service_config(self) -> ContainerConfig:
             """Get service config from parent container definition."""
             if self.parent_container_definition is None:
                 raise ValueError("Parent container definition is not set")
             return self.parent_container_definition.service_config
 
-    uuid: str  # Format: {container_name == service_name}-{container_idx}
-    name: str  # Name of the service
-    service_config: ServiceConfig
+    uuid: str  # Format: {name}-{container_idx}
+    name: str
+    service_config: ContainerConfig
     service_instances: list[ServiceInstance]
     gpu: int | None
     context: WizardContext
     workdir: str | None
     environments: list[str]
     volumes: list[VolumeMount]
+    published_ports: dict[str, int] = field(default_factory=dict)
 
     @property
     def command(self) -> str:
@@ -112,21 +131,21 @@ class ContainerDefinition:
                 pid_var = f"PID{i}"
                 pid_vars.append(pid_var)
                 script_lines.append(f"{cmd} &")
-                script_lines.append(f"{pid_var}=\\$!")
+                script_lines.append(f"{pid_var}=$!")
                 script_lines.append("")
 
             # Add trap to kill all processes
-            pid_list = " ".join(f'"\\${pid}"' for pid in pid_vars)
+            pid_list = " ".join(f'"${pid}"' for pid in pid_vars)
             script_lines.append(f"trap 'kill {pid_list} 2>/dev/null' TERM INT")
             script_lines.append("")
 
             # Add wait loop
             script_lines.append("EXIT_CODE=0")
-            pid_list_wait = " ".join(f'"\\${pid}"' for pid in pid_vars)
+            pid_list_wait = " ".join(f'"${pid}"' for pid in pid_vars)
             script_lines.append(f"for pid in {pid_list_wait}; do")
-            script_lines.append('    wait "\\$pid" || EXIT_CODE=\\$?')
+            script_lines.append('    wait "$pid" || EXIT_CODE=$?')
             script_lines.append("done")
-            script_lines.append('exit "\\$EXIT_CODE"')
+            script_lines.append('exit "$EXIT_CODE"')
 
             return "\n".join(script_lines)
 
@@ -162,13 +181,13 @@ class ContainerDefinition:
         # Note: all service instances share the same ServiceConfig, volumes and environments
         first_instance = service_instances[0]
 
-        workdir = getattr(service_config, "workdir", None)
+        workdir = service_config.workdir
         environments = list(service_config.environments)
-        volumes: list[VolumeMount] = []
-        for volume_str in service_config.volumes:
-            volumes.append(VolumeMount.from_str(volume_str))
+        volumes = [
+            VolumeMount.from_str(volume_str) for volume_str in service_config.volumes
+        ]
 
-        if getattr(context.cfg.wizard, "validate_mount_points", False):
+        if context.cfg.wizard.validate_mount_points:
             for volume in volumes:
                 if not volume.host_exists():
                     raise FileNotFoundError(
@@ -203,21 +222,15 @@ class ContainerDefinition:
         context: WizardContext,
         service_name: str,
     ) -> str:
-        # Build command with all replacements
         command = " ".join(service_config.command)
-
-        assert (
-            "{port}" not in command or port is not None
-        ), f"Port is required for {service_name}"
-        # Apply all variable replacements
-        command = command.replace("{port}", str(port))
-        sceneset_path = getattr(context.cfg.scenes, "sceneset_path", None)
+        if "{port}" in command:
+            if port is None:
+                raise ValueError(f"Port is required for {service_name}")
+            command = command.replace("{port}", str(port))
+        sceneset_path = context.cfg.scenes.sceneset_path
         command = command.replace("{sceneset}", sceneset_path or "None")
-
-        # Runtime config name replacement
         runtime_config_name = f"generated-user-config-{int(os.environ.get('SLURM_ARRAY_TASK_ID', 0))}.yaml"
         command = command.replace("{runtime_config_name}", runtime_config_name)
-
         return command
 
     @staticmethod
@@ -252,8 +265,9 @@ class ContainerDefinition:
 class ContainerSet:
     """Container organization for deployment strategies."""
 
+    prometheus: ContainerDefinition
     sim: list[ContainerDefinition] = field(default_factory=list)
-    runtime: list[ContainerDefinition] = field(default_factory=list)
+    runtime: ContainerDefinition | None = None
 
 
 def create_gpu_assigner(gpu_ids: List[int] | None) -> Iterator[int | None]:
@@ -280,7 +294,7 @@ def build_container_set(
         ContainerSet populated with containers for all configured services
     """
     cfg = context.cfg
-    num_gpus = context.get_num_gpus()
+    num_gpus = context.num_gpus
 
     # Overwrite from config
     use_address_string = (
@@ -301,8 +315,8 @@ def build_container_set(
             return []
 
         # Check if service should be skipped (skip: true in runtime config)
-        if runtime_cfg:
-            endpoints = getattr(runtime_cfg, "endpoints", {})
+        if runtime_cfg is not None and "endpoints" in runtime_cfg:
+            endpoints = runtime_cfg.endpoints
             service_endpoint = endpoints.get(service_name, {})
             if service_endpoint.get("skip", False):
                 logger.debug(f"Skipping service {service_name} (marked as skip)")
@@ -384,7 +398,7 @@ def build_container_set(
 
     # Build containers for each service type
     sim_containers = []
-    runtime_containers = []
+    runtime_container = None
 
     # Simulation services
     for name in cfg.wizard.run_sim_services or []:
@@ -414,24 +428,76 @@ def build_container_set(
                 command=command,
                 address=runtime_address,
             )
-            runtime_containers = [
-                ContainerDefinition.create(
-                    name="runtime",
-                    service_instances=[runtime_instance],
-                    service_config=cfg.services.runtime,
-                    gpu=None,
-                    context=context,
-                )
-            ]
+            runtime_container = ContainerDefinition.create(
+                name="runtime",
+                service_instances=[runtime_instance],
+                service_config=cfg.services.runtime,
+                gpu=None,
+                context=context,
+            )
+            runtime_container.published_ports = (
+                context.telemetry_ports.runtime_worker_ports()
+            )
         else:
-            if config := getattr(cfg.services, name, None):
+            config = getattr(cfg.services, name)
+            if config is not None:
                 sim_containers.extend(
                     build_service_containers(name, config, cfg.runtime)
                 )
 
+    prometheus_container = _build_prometheus_container(
+        cfg,
+        context,
+        use_address_string,
+    )
+
     logger.info("Built %d simulation containers", len(sim_containers))
+    logger.info("Built Prometheus container %s", prometheus_container.uuid)
 
     return ContainerSet(
         sim=sim_containers,
-        runtime=runtime_containers,
+        prometheus=prometheus_container,
+        runtime=runtime_container,
     )
+
+
+def _build_prometheus_container(
+    cfg: Any,
+    context: WizardContext,
+    use_address_string: Literal["localhost", "0.0.0.0", "uuid"],
+) -> ContainerDefinition:
+    name = "prometheus"
+    config = cfg.services.prometheus
+    prometheus_ports = context.telemetry_ports.prometheus_service_ports()
+    readiness_port = prometheus_ports["prometheus"]
+    uuid = f"{name}-0"
+    address = ContainerDefinition._build_address(
+        readiness_port,
+        uuid,
+        use_address_string,
+    )
+    command = resolve_prometheus_command(context)
+    instance = ContainerDefinition.ServiceInstance(
+        replica_idx=0,
+        command=command,
+        address=address,
+    )
+    volumes = [VolumeMount.from_str(volume_str) for volume_str in config.volumes]
+    if context.cfg.wizard.validate_mount_points:
+        for volume in volumes:
+            if not volume.host_exists():
+                raise FileNotFoundError(f"Mount point does not exist: {volume.host}")
+    container = ContainerDefinition(
+        uuid=uuid,
+        name=name,
+        service_instances=[instance],
+        gpu=None,
+        service_config=config,
+        context=context,
+        workdir=config.workdir,
+        environments=list(config.environments),
+        volumes=volumes,
+        published_ports=prometheus_ports,
+    )
+    instance.parent_container_definition = container
+    return container

@@ -121,10 +121,37 @@ def setup_directories(cfg: AlpasimConfig) -> None:
     logger.debug(f"Creating log directory at path: {log_dir}")
 
     # Create subdirectories
-    for subdir in ("rollouts", "telemetry", "txt-logs", "controller"):
+    for subdir in (
+        "rollouts",
+        "txt-logs",
+        "controller",
+        "prometheus",
+    ):
         subdir_path = log_dir / subdir
         subdir_path.mkdir(parents=True, exist_ok=True, mode=0o777)
         os.chmod(subdir_path, 0o777)
+
+
+@dataclass
+class TelemetryPorts:
+    """Ports allocated together for telemetry services."""
+
+    workers: tuple[int, ...]
+    prometheus: int
+    node_exporter: int
+    process_exporter: int
+    dcgm_exporter: int
+
+    def prometheus_service_ports(self) -> dict[str, int]:
+        return {
+            "prometheus": self.prometheus,
+            "node_exporter": self.node_exporter,
+            "process_exporter": self.process_exporter,
+            "dcgm_exporter": self.dcgm_exporter,
+        }
+
+    def runtime_worker_ports(self) -> dict[str, int]:
+        return {f"runtime_worker_{idx}": port for idx, port in enumerate(self.workers)}
 
 
 @dataclass
@@ -137,18 +164,11 @@ class WizardContext:
 
     cfg: AlpasimConfig
     port_assigner: Iterator[int]
+    telemetry_ports: TelemetryPorts
 
     # Expensive operations (only loaded when needed for actual execution)
     artifact_list: list[SceneIdAndUuid] = field(default_factory=list)
     num_gpus: int = 0
-
-    def get_num_gpus(self) -> int:
-        """Get GPU count with fallback to 0."""
-        return self.num_gpus if self.num_gpus is not None else 0
-
-    def get_artifacts(self) -> list[SceneIdAndUuid]:
-        """Get artifacts with fallback to empty list."""
-        return self.artifact_list if self.artifact_list is not None else []
 
     @property
     def all_services_to_run(self) -> list[str]:
@@ -161,13 +181,31 @@ class WizardContext:
 
         # Always set these basic attributes
         artifact_list = fetch_artifacts(cfg)
+        port_assigner = create_port_assigner(cfg.wizard.baseport)
+        nr_workers = int(cfg.runtime.nr_workers)
+        # We preallocate them so they are consistent across call sites
+        telemetry_ports = TelemetryPorts(
+            workers=tuple(next(port_assigner) for _ in range(nr_workers)),
+            prometheus=next(port_assigner),
+            node_exporter=next(port_assigner),
+            process_exporter=next(port_assigner),
+            dcgm_exporter=next(port_assigner),
+        )
         context = WizardContext(
             cfg=cfg,
-            port_assigner=create_port_assigner(cfg.wizard.baseport),
+            port_assigner=port_assigner,
+            telemetry_ports=telemetry_ports,
             artifact_list=artifact_list,
             num_gpus=detect_gpus(),
         )
-
+        logger.info(
+            "Prometheus UI: http://localhost:%d",
+            telemetry_ports.prometheus,
+        )
+        logger.info(
+            "Prometheus file-SD dir: %s",
+            cfg.wizard.prometheus.file_sd_dir,
+        )
         setup_directories(cfg)
 
         return context

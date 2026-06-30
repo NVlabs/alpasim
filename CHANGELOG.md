@@ -2,6 +2,29 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## Runtime telemetry with Prometheus and Grafana (30.06.26)
+AlpaSim runs now start Prometheus telemetry by default. The wizard allocates
+metrics ports, starts Prometheus support services, writes scrape configuration,
+and preserves the Prometheus TSDB under the run directory. Runs still generate
+`metrics_plot.png`.
+
+Grafana dashboard resources and a helper script are available for inspecting
+local or shared Prometheus file-SD targets:
+
+```bash
+src/tools/scripts/start-prometheus-grafana.sh <file-sd-dir>
+```
+
+Eval aggregation no longer reads Prometheus runtime metric summaries or adds
+runtime performance fields to driving metric outputs. Runs no longer generate
+`prometheus/runtime_metrics_summary.json`; query Prometheus or use Grafana for
+runtime performance analysis.
+
+## SMART/CATK trafficsim integration (29.06.26)
+Added an integrated CATK-backed traffic simulation service. Use
+`trafficsim=catk` to run the SMART/CATK traffic predictor from the AlpaSim base
+image with model weights stored under `data/trafficsim-models`.
+
 ## Upgrade OSS renderer to NRE-GA 26.04 (11.06.26)
 Bumped the `base_config.yaml` renderer image to `nvcr.io/nvidia/nre/nre-ga:26.04` and repointed `defines.renderer_entrypoint` to the `/app/run` symlink (the old path was renamed in 26.04).
 

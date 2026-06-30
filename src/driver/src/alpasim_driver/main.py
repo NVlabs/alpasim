@@ -51,6 +51,7 @@ from alpasim_grpc.v0.egodriver_pb2_grpc import (
     add_EgodriverServiceServicer_to_server,
 )
 from alpasim_plugins.plugins import models as model_registry
+from alpasim_utils.geometry import quat_to_yaw, yaw_to_quat_components
 from omegaconf import OmegaConf
 from PIL import Image
 
@@ -100,22 +101,6 @@ def _get_external_ip() -> str:
         return "unknown"
 
 
-def _quat_to_yaw(quaternion: Quat) -> float:
-    """Extract the yaw component (rotation about +Z) from a quaternion."""
-
-    return np.arctan2(
-        2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
-        1.0 - 2.0 * (quaternion.y * quaternion.y + quaternion.z * quaternion.z),
-    )
-
-
-def _yaw_to_quat(yaw: float) -> Quat:
-    """Create a Z-only rotation quaternion from the provided yaw angle."""
-
-    half_yaw = 0.5 * yaw
-    return Quat(w=float(np.cos(half_yaw)), x=0.0, y=0.0, z=float(np.sin(half_yaw)))
-
-
 def _rig_est_offsets_to_local_positions(
     current_pose_in_local: PoseAtTime, offsets_in_rig: np.ndarray
 ) -> np.ndarray:
@@ -125,7 +110,7 @@ def _rig_est_offsets_to_local_positions(
     curr_y = current_pose_in_local.pose.vec.y
 
     curr_quat = current_pose_in_local.pose.quat
-    curr_yaw = _quat_to_yaw(curr_quat)
+    curr_yaw = quat_to_yaw(curr_quat)
 
     cos_yaw = np.cos(curr_yaw)
     sin_yaw = np.sin(curr_yaw)
@@ -1008,19 +993,20 @@ class EgoDriverService(EgodriverServiceServicer):
         timestamps_us = (time_now_us + steps * time_delta_us).tolist()
 
         # Transform model headings from rig frame to local frame
-        current_yaw = _quat_to_yaw(current_pose.pose.quat)
+        current_yaw = quat_to_yaw(current_pose.pose.quat)
         local_yaws = prediction.headings + current_yaw
 
         for local_xy, yaw, timestamp_us in zip(
             local_positions, local_yaws, timestamps_us, strict=True
         ):
             local_x, local_y = map(float, local_xy)
+            quat_w, quat_x, quat_y, quat_z = yaw_to_quat_components(float(yaw))
 
             trajectory.poses.append(
                 PoseAtTime(
                     pose=Pose(
                         vec=Vec3(x=local_x, y=local_y, z=curr_z),
-                        quat=_yaw_to_quat(float(yaw)),
+                        quat=Quat(w=quat_w, x=quat_x, y=quat_y, z=quat_z),
                     ),
                     timestamp_us=timestamp_us,
                 )

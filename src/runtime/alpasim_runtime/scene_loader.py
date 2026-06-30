@@ -135,6 +135,52 @@ class ArtifactSceneProvider:
             max_cache_size=max_cache_size,
         )
 
+    @classmethod
+    def from_path(
+        cls,
+        data_path: str | Path,
+        *,
+        smooth_trajectories: bool,
+        max_cache_size: int | None = None,
+    ) -> ArtifactSceneProvider:
+        """Build an artifact-backed provider from a USDZ file or directory."""
+        path = Path(data_path)
+        glob_query = str(path) if path.suffix == ".usdz" else str(path / "**/*.usdz")
+        discovered = Artifact.discover_from_glob(
+            glob_query,
+            smooth_trajectories=smooth_trajectories,
+        )
+        logger.info(
+            "Discovered %d USDZ scenes from %s",
+            len(discovered),
+            glob_query,
+        )
+
+        artifact_paths: dict[str, str] = {}
+        scene_infos: list[SceneInfo] = []
+        for scene_id, artifact in discovered.items():
+            existing = artifact_paths.get(scene_id)
+            if existing is not None:
+                raise ValueError(
+                    f"Duplicate scene_id {scene_id!r} discovered from USDZ sources "
+                    f"{existing!r} and {artifact.source!r}"
+                )
+            artifact_paths[scene_id] = artifact.source
+            scene_infos.append(
+                SceneInfo(
+                    scene_id=scene_id,
+                    provider_kind="usdz",
+                    metadata=artifact.metadata,
+                )
+            )
+
+        return cls(
+            artifact_paths,
+            sorted(scene_infos, key=lambda scene_info: scene_info.scene_id),
+            smooth_trajectories=smooth_trajectories,
+            max_cache_size=max_cache_size,
+        )
+
     @property
     def provider_kind(self) -> str:
         return "usdz"
@@ -181,6 +227,10 @@ class SceneLoader:
     @property
     def num_scenes(self) -> int:
         return len(self._scene_ids)
+
+    @property
+    def scene_ids(self) -> set[str]:
+        return set(self._scene_ids)
 
     @property
     def scene_infos(self) -> list[SceneInfo]:
@@ -233,39 +283,8 @@ def _build_artifact_scene_provider(
     if usdz_provider_config.data_dir is None:
         raise ValueError("scene_provider.usdz.data_dir is required")
 
-    path = Path(usdz_provider_config.data_dir)
-    glob_query = str(path) if path.suffix == ".usdz" else str(path / "**/*.usdz")
-    discovered = Artifact.discover_from_glob(
-        glob_query,
-        smooth_trajectories=False,
-    )
-    logger.info(
-        "Discovered %d USDZ scenes from %s",
-        len(discovered),
-        glob_query,
-    )
-
-    artifact_paths: dict[str, str] = {}
-    scene_infos: list[SceneInfo] = []
-    for scene_id, artifact in discovered.items():
-        existing = artifact_paths.get(scene_id)
-        if existing is not None:
-            raise ValueError(
-                f"Duplicate scene_id {scene_id!r} discovered from USDZ sources "
-                f"{existing!r} and {artifact.source!r}"
-            )
-        artifact_paths[scene_id] = artifact.source
-        scene_infos.append(
-            SceneInfo(
-                scene_id=scene_id,
-                provider_kind="usdz",
-                metadata=artifact.metadata,
-            )
-        )
-
-    return ArtifactSceneProvider(
-        artifact_paths,
-        sorted(scene_infos, key=lambda scene_info: scene_info.scene_id),
+    return ArtifactSceneProvider.from_path(
+        usdz_provider_config.data_dir,
         smooth_trajectories=user_config.smooth_trajectories,
         max_cache_size=usdz_provider_config.artifact_cache_size,
     )

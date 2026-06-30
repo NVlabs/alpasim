@@ -140,6 +140,8 @@ def start_worker_runtime(
     For ``nr_workers>1``, spawns subprocess workers with shared RPC tracking.
     """
     nr_workers = config.user.nr_workers
+    prometheus = config.user.prometheus
+    worker_ports = list(prometheus.worker_ports)
     job_queue: Queue = Queue()
     result_queue: Queue = Queue()
 
@@ -155,6 +157,7 @@ def start_worker_runtime(
             eval_config=eval_config,
             version_ids=version_ids,
             parent_pid=None,
+            telemetry_port=worker_ports[0],
         )
         runtime = WorkerRuntime(
             job_queue=job_queue,
@@ -178,6 +181,7 @@ def start_worker_runtime(
                 version_ids=version_ids,
                 parent_pid=parent_pid,
                 shared_rpc_tracking=shared_rpc_tracking,
+                telemetry_port=worker_ports[worker_id],
             )
             for worker_id in range(nr_workers)
         ]

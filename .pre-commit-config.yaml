@@ -51,4 +51,4 @@ repos:
         files: ^src/wizard/.*\.py$
         args:
           - --config-file=mypy.ini
-        additional_dependencies: ["types-PyYAML", "hydra-core", "GitPython", "pandas", "pandas-stubs", "polars>=1.0.0", "types-aiofiles"]
+        additional_dependencies: ["types-PyYAML", "hydra-core", "GitPython", "numpy<2.3", "pandas", "pandas-stubs", "polars>=1.0.0", "types-aiofiles"]

@@ -75,6 +75,7 @@ For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 - **[Video Model Renderer](docs/VIDEO_MODEL.md)**: Running OmniDreams through FlashDreams as the
   AlpaSim renderer backend
 - **[Operations Guide](docs/OPERATIONS.md)**: Performance tuning, configuration, and troubleshooting
+- **[Telemetry Guide](docs/TELEMETRY.md)**: Prometheus metrics, persistence, and central discovery
 - **[Data Pipeline](docs/DATA_PIPELINE.md)**: ASL log format and reading logs
 - **[Design Documentation](docs/DESIGN.md)**: Technical architecture and design decisions
 - **[Plugin System](docs/PLUGIN_SYSTEM.md)**: Extending AlpaSim with custom models, configs, and tools

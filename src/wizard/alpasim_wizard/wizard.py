@@ -12,7 +12,6 @@ from typing import cast
 
 import git
 
-# Import new refactored components
 from .configuration import ConfigurationManager
 from .context import WizardContext
 from .deployment import DockerComposeDeployment, SlurmDeployment
@@ -41,7 +40,6 @@ class AlpasimWizard:
             cfg.wizard.slurm_job_id = int(os.environ.get("SLURM_JOB_ID", "0"))
 
         context = WizardContext.create(cfg)
-        # Return wizard with context
         return AlpasimWizard(
             context=context,
         )
@@ -90,16 +88,19 @@ class AlpasimWizard:
         config_manager.generate_all(container_set, self.context)
 
         # Handle different run methods
-        if self.context.cfg.wizard.run_method == RunMethod.SLURM:
-            slurm_deployment.deploy_all_services()
-        elif self.context.cfg.wizard.run_method == RunMethod.DOCKER_COMPOSE:
-            docker_compose_deployment.deploy_all_services()
-        elif self.context.cfg.wizard.run_method == RunMethod.NONE:
-            logger.info(
-                "Config generated but not executed. "
-                "Run 'docker compose up --exit-code-from runtime-0' in %s "
-                "to start the simulation",
-                self.context.cfg.wizard.log_dir,
-            )
+        try:
+            if self.context.cfg.wizard.run_method == RunMethod.SLURM:
+                slurm_deployment.deploy_all_services()
+            elif self.context.cfg.wizard.run_method == RunMethod.DOCKER_COMPOSE:
+                docker_compose_deployment.deploy_all_services()
+            elif self.context.cfg.wizard.run_method == RunMethod.NONE:
+                logger.info(
+                    "Config generated but not executed. "
+                    "Run 'docker compose up --exit-code-from runtime-0' in %s "
+                    "to start the simulation",
+                    self.context.cfg.wizard.log_dir,
+                )
+        finally:
+            config_manager.cleanup_central_file_sd()
 
         logger.info("Alpasim finished")

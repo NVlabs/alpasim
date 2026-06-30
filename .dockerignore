@@ -16,6 +16,7 @@
 !src/plugins/**
 !src/driver/**
 !src/wizard/**
+!src/trafficsim/**
 !plugins/internal/**
 !plugins/transfuser_driver/**
 !e2e_challenge/

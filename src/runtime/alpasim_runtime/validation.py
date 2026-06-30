@@ -296,7 +296,6 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
                     address,
                     config.user.scenes,
                     timeout_s=config.user.endpoints.startup_timeout_s,
-                    use_metadata=(svc_name == "trafficsim"),
                 ),
                 label=f"Scenario validation probe for {svc_name} at {address}",
             )
@@ -315,35 +314,18 @@ async def _probe_scenario_compatibility(
     address: str,
     scenes: list[SceneConfig],
     timeout_s: int = 30,
-    use_metadata: bool = False,
 ) -> list[str]:
-    """Probe a service address to validate scenario compatibility without creating pools.
-
-    Args:
-        svc_name: Name of the service being probed (for logging).
-        use_metadata: If True, use get_metadata().supported_map_ids instead of
-            get_available_scenes().scene_ids (for trafficsim compatibility).
-    """
+    """Probe a service address to validate scenario compatibility without creating pools."""
     incompatibilities = []
 
     logger.info("Validating scenarios on %s at %s...", svc_name, address)
     channel = grpc.aio.insecure_channel(address)
     try:
         stub = stub_class(channel)
-        if use_metadata:
-            # trafficsim uses get_metadata with supported_map_ids
-            response = await stub.get_metadata(
-                Empty(), wait_for_ready=True, timeout=timeout_s
-            )
-            # trafficsim returns map_ids without the clipgt- prefix, so we add it
-            available_scenes = set(
-                f"clipgt-{map_id}" for map_id in response.supported_map_ids
-            )
-        else:
-            response = await stub.get_available_scenes(
-                Empty(), wait_for_ready=True, timeout=timeout_s
-            )
-            available_scenes = set(response.scene_ids)
+        response = await stub.get_available_scenes(
+            Empty(), wait_for_ready=True, timeout=timeout_s
+        )
+        available_scenes = set(response.scene_ids)
 
         for scene in scenes:
             if scene.scene_id not in available_scenes and "*" not in available_scenes:

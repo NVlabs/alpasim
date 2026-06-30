@@ -227,6 +227,10 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
     """
     user_config_path = test_data_dir / REQUIRED_TEST_FILES["user_config"]
     user_config = yaml.safe_load(user_config_path.read_text(encoding="utf-8"))
+    user_config["prometheus"] = {
+        "worker_ports": [0],
+        "url": "http://127.0.0.1:9090",
+    }
 
     test_user_config = tmp_path / "test-user-config.yaml"
     test_user_config.write_text(yaml.dump(user_config), encoding="utf-8")
@@ -250,7 +254,14 @@ def runtime_configs(test_data_dir: Path, tmp_path: Path) -> Dict[str, str]:
 
     # Create run_metadata.yaml required by get_run_name()
     run_metadata = log_dir / "run_metadata.yaml"
-    run_metadata.write_text("run_name: integration_replay_test\n")
+    run_metadata.write_text(
+        yaml.safe_dump(
+            {
+                "run_uuid": "integration-replay-run",
+                "run_name": "integration_replay_test",
+            }
+        )
+    )
 
     eval_config_path = test_data_dir / REQUIRED_TEST_FILES["eval_config"]
 

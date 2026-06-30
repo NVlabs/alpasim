@@ -6,6 +6,13 @@
 import pytest
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
+from alpasim_grpc.v0.traffic_pb2 import (
+    ObjectTrajectory,
+    ObjectTrajectoryUpdate,
+    TrafficRequest,
+    TrafficReturn,
+    TrafficSessionRequest,
+)
 from conftest import create_test_eval_config
 
 from eval.accumulator import EvalDataAccumulator
@@ -123,6 +130,58 @@ def _create_driver_return() -> LogEntry:
     return entry
 
 
+def _create_traffic_session_request() -> LogEntry:
+    entry = LogEntry()
+    entry.traffic_session_request.CopyFrom(
+        TrafficSessionRequest(
+            session_uuid="test-uuid-123",
+            scene_id="clipgt-test-scene",
+            handover_time_us=1_500_000,
+            logged_object_trajectories=[
+                ObjectTrajectory(object_id="EGO", is_static=False),
+                ObjectTrajectory(object_id="TRAFFIC_1", is_static=False),
+                ObjectTrajectory(object_id="STATIC_1", is_static=True),
+            ],
+        )
+    )
+    return entry
+
+
+def _create_traffic_request(time_query_us: int) -> LogEntry:
+    return LogEntry(
+        traffic_request=TrafficRequest(
+            session_uuid="test-uuid-123",
+            time_query_us=time_query_us,
+        )
+    )
+
+
+def _trajectory_update(
+    object_id: str, timestamps_us: list[int]
+) -> ObjectTrajectoryUpdate:
+    update = ObjectTrajectoryUpdate(object_id=object_id)
+    for idx, ts_us in enumerate(timestamps_us):
+        pose_at_time = update.trajectory.poses.add()
+        pose_at_time.timestamp_us = ts_us
+        pose_at_time.pose.vec.x = float(idx)
+        pose_at_time.pose.vec.y = float(idx + 1)
+        pose_at_time.pose.vec.z = 0.0
+        pose_at_time.pose.quat.w = 1.0
+    return update
+
+
+def _create_traffic_return() -> LogEntry:
+    return LogEntry(
+        traffic_return=TrafficReturn(
+            object_trajectory_updates=[
+                _trajectory_update("TRAFFIC_1", [200_000, 300_000, 400_000]),
+                _trajectory_update("STATIC_1", [200_000, 300_000, 400_000]),
+                _trajectory_update("EGO", [200_000, 300_000, 400_000]),
+            ]
+        )
+    )
+
+
 @pytest.fixture
 def default_eval_config() -> EvalConfig:
     """Create a default EvalConfig for testing."""
@@ -200,6 +259,26 @@ class TestEvalDataAccumulatorHandleMessage:
 
         accumulator.handle_message(_create_driver_request(300_000, 400_000))
         assert accumulator._pending_request == (300_000, 400_000)
+
+    def test_handles_traffic_prediction_pairing_and_static_filtering(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+
+        accumulator.handle_message(_create_traffic_session_request())
+        accumulator.handle_message(_create_traffic_request(200_000))
+        accumulator.handle_message(_create_traffic_return())
+
+        assert accumulator._pending_traffic_query_us is None
+        assert accumulator._static_actor_ids == {"STATIC_1"}
+        assert accumulator._traffic_predictions.timestamps_us == [200_000]
+        prediction = accumulator._traffic_predictions.per_timestep_predictions[0]
+        assert set(prediction.object_trajectories) == {"TRAFFIC_1"}
+        assert prediction.object_trajectories["TRAFFIC_1"].timestamps_us.tolist() == [
+            200_000,
+            300_000,
+            400_000,
+        ]
 
     def test_ignores_orphan_driver_return(
         self, default_eval_config: EvalConfig

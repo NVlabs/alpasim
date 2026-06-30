@@ -6,8 +6,6 @@ defines:
 
 services:
   renderer:
-    environments:
-      - OMP_NUM_THREADS=1
     replicas_per_container: 1
     gpus: [1]
 

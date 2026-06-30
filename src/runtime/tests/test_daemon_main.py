@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from argparse import Namespace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -404,12 +405,12 @@ async def test_runtime_daemon_app_shutdowns_engine_when_server_stop_fails(
     engine.shutdown.assert_awaited_once()
 
 
-def _make_one_shot_args() -> Namespace:
+def _make_one_shot_args(log_dir: str = "/tmp/log") -> Namespace:
     return Namespace(
         user_config="u.yaml",
         network_config="n.yaml",
         eval_config="e.yaml",
-        log_dir="/tmp/log",
+        log_dir=log_dir,
         array_job_dir=None,
     )
 
@@ -459,7 +460,10 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(run_in_runtime=False, enabled=False)
     _patch_one_shot_inputs(
@@ -493,11 +497,6 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         engine_cls,
     )
 
-    merge_metrics_files = Mock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.merge_metrics_files",
-        merge_metrics_files,
-    )
     generate_metrics_plot = Mock(return_value="/tmp/log/metrics_plot.png")
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.generate_metrics_plot",
@@ -521,8 +520,10 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
     )
     fake_engine.startup.assert_awaited_once()
     fake_engine.shutdown.assert_awaited_once()
-    merge_metrics_files.assert_called_once_with("/tmp/log/telemetry")
-    generate_metrics_plot.assert_called_once()
+    generate_metrics_plot.assert_called_once_with(
+        prometheus_url="http://prometheus-0:9090",
+        output_path=Path("/tmp/log/metrics_plot.png"),
+    )
 
     request = fake_engine.simulate.await_args.args[0]
     assert isinstance(request, runtime_pb2.SimulationRequest)
@@ -533,11 +534,75 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
 
 
 @pytest.mark.asyncio
+async def test_run_simulation_metrics_artifact_failure_is_best_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_config = SimpleNamespace(
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
+    )
+    fake_eval_config = SimpleNamespace(run_in_runtime=True, enabled=True)
+    _patch_one_shot_inputs(
+        monkeypatch,
+        fake_config=fake_config,
+        fake_eval_config=fake_eval_config,
+        request=runtime_pb2.SimulationRequest(
+            rollout_specs=[
+                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+            ]
+        ),
+    )
+    fake_engine = SimpleNamespace(
+        startup=AsyncMock(),
+        simulate=AsyncMock(
+            return_value=_make_simulation_return([("clipgt-a", True, None)])
+        ),
+        shutdown=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.DaemonEngine",
+        Mock(return_value=fake_engine),
+    )
+    generate_metrics_plot = Mock(
+        side_effect=RuntimeError("Prometheus query failed: bad result")
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.generate_metrics_plot",
+        generate_metrics_plot,
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.get_run_name",
+        Mock(return_value="run-name"),
+    )
+    run_aggregation_from_runtime = Mock(return_value=True)
+    monkeypatch.setattr(
+        "alpasim_runtime.simulate.__main__.run_aggregation_from_runtime",
+        run_aggregation_from_runtime,
+    )
+
+    success = await run_simulation(_make_one_shot_args(log_dir=str(tmp_path)))
+
+    assert success is True
+    generate_metrics_plot.assert_called_once()
+    run_aggregation_from_runtime.assert_called_once()
+    error_path = tmp_path / "prometheus" / "metrics_plot_error.txt"
+    assert error_path.read_text(encoding="utf-8") == (
+        "RuntimeError: Prometheus query failed: bad result"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_simulation_does_not_aggregate_failed_rollouts_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(run_in_runtime=True, enabled=True)
     _patch_one_shot_inputs(
@@ -568,10 +633,6 @@ async def test_run_simulation_does_not_aggregate_failed_rollouts_by_default(
         Mock(return_value=fake_engine),
     )
     monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.merge_metrics_files",
-        Mock(),
-    )
-    monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.generate_metrics_plot",
         Mock(return_value="/tmp/log/metrics_plot.png"),
     )
@@ -597,7 +658,10 @@ async def test_run_simulation_aggregates_failed_rollouts_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(
         run_in_runtime=True,
@@ -630,10 +694,6 @@ async def test_run_simulation_aggregates_failed_rollouts_when_enabled(
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.DaemonEngine",
         Mock(return_value=fake_engine),
-    )
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.merge_metrics_files",
-        Mock(),
     )
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.generate_metrics_plot",
@@ -670,7 +730,10 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(run_in_runtime=False, enabled=False)
     _patch_one_shot_inputs(
@@ -702,11 +765,6 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
         Mock(return_value=fake_engine),
     )
 
-    merge_metrics_files = Mock()
-    monkeypatch.setattr(
-        "alpasim_runtime.simulate.__main__.merge_metrics_files",
-        merge_metrics_files,
-    )
     generate_metrics_plot = Mock()
     monkeypatch.setattr(
         "alpasim_runtime.simulate.__main__.generate_metrics_plot",
@@ -723,7 +781,6 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
         await run_simulation(args)
 
     fake_engine.shutdown.assert_awaited_once()
-    merge_metrics_files.assert_not_called()
     generate_metrics_plot.assert_not_called()
 
 
@@ -732,7 +789,10 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_simulate_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(run_in_runtime=False, enabled=False)
     _patch_one_shot_inputs(
@@ -772,7 +832,10 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_startup_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_config = SimpleNamespace(
-        user=SimpleNamespace(nr_workers=1),
+        user=SimpleNamespace(
+            nr_workers=1,
+            prometheus=SimpleNamespace(url="http://prometheus-0:9090"),
+        ),
     )
     fake_eval_config = SimpleNamespace(run_in_runtime=False, enabled=False)
     _patch_one_shot_inputs(

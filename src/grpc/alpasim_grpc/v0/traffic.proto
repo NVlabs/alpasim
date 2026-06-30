@@ -12,6 +12,7 @@ service TrafficService {
     rpc close_session (TrafficSessionCloseRequest) returns (common.Empty);
     rpc simulate (TrafficRequest) returns (TrafficReturn);
     rpc get_metadata (common.Empty) returns (TrafficModuleMetadata);
+    rpc get_available_scenes (common.Empty) returns (common.AvailableScenesReturn);
 }
 
 message ObjectTrajectory {
@@ -22,6 +23,7 @@ message ObjectTrajectory {
     common.Trajectory trajectory = 2;
     string object_id = 3;
     bool is_static = 4;
+    string label_class = 5;
 }
 
 message ObjectTrajectoryUpdate {
@@ -33,14 +35,14 @@ message ObjectTrajectoryUpdate {
 
 message TrafficSessionRequest {
     string session_uuid = 1;
-    string map_id = 2;
+    string scene_id = 2;
     fixed64 random_seed = 3;
     repeated ObjectTrajectory logged_object_trajectories = 4;
-    // Earliest time in microseconds when the traffic model takes over control.
+    // Required positive time in microseconds when the traffic model takes over control.
     // For objects appearing later in the scene, they will be handed over after
-    // `traffic_models.minimum_hisotry_length` steps of log-history, but not
+    // `traffic_models.minimum_history_length` steps of log-history, but not
     // before `handover_time_us`.
-    optional fixed64 handover_time_us = 5;
+    fixed64 handover_time_us = 5;
 }
 
 message TrafficSessionCloseRequest {
@@ -57,8 +59,12 @@ message TrafficRequest {
 }
 
 message TrafficReturn {
-    // Returns the updated trajectories for all objects in the scene. 
-    // The last pose in the trajectory is the predicted pose at `time_query_us`.
+    // Returns updated trajectories for objects in the scene.
+    //
+    // Each returned trajectory must include a pose at the corresponding
+    // TrafficRequest.time_query_us. Dynamic objects may also include additional
+    // poses after time_query_us that represent the traffic model's available
+    // forecast horizon. Static objects may return just the time_query_us pose.
     // Convention: Maintains the order of objects in `TrafficSessionRequest`.
     repeated ObjectTrajectoryUpdate object_trajectory_updates = 1;
 }
@@ -66,5 +72,6 @@ message TrafficReturn {
 message TrafficModuleMetadata {
     common.VersionId version_id = 1;
     fixed64 minimum_history_length_us = 2;
-    repeated string supported_map_ids = 3;
+    reserved 3;
+    reserved "supported_map_ids";
 }
