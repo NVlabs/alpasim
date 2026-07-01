@@ -29,7 +29,7 @@ defines:
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
   sensordata: "${defines.filesystem}/nre-artifacts"
-  trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
+  trafficsim_models: "${defines.filesystem}/trafficsim-models"
 
   renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
   nre_max_workers: 4
@@ -95,6 +95,11 @@ wizard:
 
   # Global log level for all alpasim services (DEBUG, INFO, WARNING, ERROR)
   log_level: INFO
+  prometheus:
+    scrape_interval: 5s
+    # Central Prometheus file-SD publication directory. Deploy configs resolve
+    # `defines.filesystem`; override this to publish elsewhere.
+    file_sd_dir: "${defines.filesystem}/prometheus/file-sd"
 
 scenes:
   # Selection method (set one of these two)
@@ -126,6 +131,11 @@ services:
       - "${defines.sensordata}/ego-hoods:/mnt/ego-hoods"
     # \/ environments lets you set environment variables inside the container
     environments:
+      # Pyxis/enroot sets HOME to /home/$USER on Slurm. In the NRE image,
+      # /home/$USER/.cache points at an unmounted Lustre path, so tinycudann
+      # cache creation fails unless HOME resolves to a writable container path.
+      - HOME=/tmp
+      - XDG_CACHE_HOME=/tmp/.cache
       # this may not be necessary but at least on COLOSSUS by default pytorch had really stupid
       # configuration running to excessively parallelizing everything
       - OMP_NUM_THREADS=1
@@ -180,7 +190,7 @@ services:
   trafficsim:
     image: ${defines.base_image}
     command:
-      - "echo 'not yet included'"
+      - "echo 'no traffic simulation configured'"
 
   controller:
     image: ${defines.base_image}
@@ -223,6 +233,16 @@ services:
       - "--eval-config=/mnt/log_dir/eval-config.yaml"
     replicas_per_container: 1 # should only be one runtime orchestrator
 
+  prometheus:
+    image: ${services.runtime.image}
+    volumes:
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${repo-relative:'src'}:/repo/src"
+      - "${repo-relative:'plugins'}:/repo/plugins"
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/rootfs:ro"
+
 runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
@@ -239,19 +259,19 @@ runtime:
       artifact_cache_size: 10
 
     trajdata:
-      cache_location: "trajdata_cache"  # Eventually "${defines.trajdata_cache_mount}", requires additional mount
-      desired_dt: 0.1        # 10 Hz sampling rate for trajectories
-      load_vector_map: true  # Request vector map support from trajdata
-      rebuild_cache: false   # Set to true to force rebuild cache
-      rebuild_maps: false    # Set to true to force rebuild maps
-      num_workers: 4         # Parallel workers for cache creation
+      cache_location: "trajdata_cache" # Eventually "${defines.trajdata_cache_mount}", requires additional mount
+      desired_dt: 0.1 # 10 Hz sampling rate for trajectories
+      load_vector_map: true # Request vector map support from trajdata
+      rebuild_cache: false # Set to true to force rebuild cache
+      rebuild_maps: false # Set to true to force rebuild maps
+      num_workers: 4 # Parallel workers for cache creation
       dataset:
         name: null
         data_dir: null
         extra_params:
-          config_dir: null       # Set to enable YAML batch preprocessing mode
-          num_timesteps_before: 30  # Timesteps before central token
-          num_timesteps_after: 80   # Timesteps after central token
+          config_dir: null # Set to enable YAML batch preprocessing mode
+          num_timesteps_before: 30 # Timesteps before central token
+          num_timesteps_after: 80 # Timesteps after central token
 
   # Enable cubic spline smoothing for trajectories
   smooth_trajectories: true
@@ -278,7 +298,7 @@ runtime:
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
     # Which sensorsim bundled-render RPC to use (NONE = one render_rgb per camera).
     # Options: NONE | BATCH_RENDER_RGB (NRE) | RENDER_AGGREGATED (ODL).
-    render_bundling: NONE
+    render_bundling: BATCH_RENDER_RGB
 
     control_timestep_us: 100_000
     pose_reporting_interval_us: 0 # 0 = controller reports only the final pose
@@ -396,4 +416,6 @@ eval:
         - DRIVER_RESPONSES
         - ROUTE
         - AGENTS
+        - AGENT_IDS
+        - TRAFFIC_PREDICTIONS
 # driver config is loaded from the driver group (e.g., driver=vavam)

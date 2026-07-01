@@ -271,6 +271,89 @@ impl Polyline {
 
         (remaining_points, projection)
     }
+
+    /// Interpolate positions at sorted arc-length distances.
+    fn positions_at_distances_impl(&self, distances: &[f32]) -> PyResult<Vec<f32>> {
+        if self.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Cannot interpolate along an empty polyline",
+            ));
+        }
+
+        let arc_lengths = self.arc_lengths_impl();
+
+        // Handle duplicate arc lengths (zero-length segments)
+        let mut unique_lengths = Vec::new();
+        let mut unique_indices = Vec::new();
+        for (i, &len) in arc_lengths.iter().enumerate() {
+            if unique_lengths.is_empty() || len != *unique_lengths.last().unwrap() {
+                unique_lengths.push(len);
+                unique_indices.push(i);
+            }
+        }
+
+        if unique_lengths.is_empty() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Cannot interpolate along an empty polyline",
+            ));
+        }
+
+        // Validate distances are within range
+        if !distances.is_empty() {
+            let min_dist = distances.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max_dist = distances.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+            if min_dist < unique_lengths[0] || max_dist > unique_lengths[unique_lengths.len() - 1] {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Requested distances must lie within the polyline arc length range",
+                ));
+            }
+        }
+
+        if unique_lengths.len() == 1 {
+            let point = self.get_point(unique_indices[0]);
+            let mut result = Vec::with_capacity(distances.len() * self.dimension);
+            for _ in distances {
+                result.extend(point);
+            }
+            return Ok(result);
+        }
+
+        // Interpolate each dimension
+        let mut result = Vec::with_capacity(distances.len() * self.dimension);
+
+        for &dist in distances {
+            // Binary search for segment
+            let seg_idx = match unique_lengths.binary_search_by(|&len| {
+                len.partial_cmp(&dist).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                Ok(i) => i.min(unique_lengths.len() - 2),
+                Err(i) => (i.saturating_sub(1)).min(unique_lengths.len() - 2),
+            };
+
+            let next_idx = seg_idx + 1;
+
+            let len0 = unique_lengths[seg_idx];
+            let len1 = unique_lengths[next_idx];
+            let idx0 = unique_indices[seg_idx];
+            let idx1 = unique_indices[next_idx];
+
+            let alpha = if (len1 - len0).abs() < 1e-10 {
+                0.0
+            } else {
+                (dist - len0) / (len1 - len0)
+            };
+
+            let p0 = self.get_point(idx0);
+            let p1 = self.get_point(idx1);
+
+            for d in 0..self.dimension {
+                result.push(p0[d] + alpha * (p1[d] - p0[d]));
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 #[pymethods]
@@ -513,82 +596,7 @@ impl Polyline {
         distances: PyObject,
     ) -> PyResult<Bound<'py, PyArray2<f32>>> {
         let distances_slice = extract_array1_f32(py, &distances, "distances")?;
-
-        if self.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Cannot interpolate along an empty polyline",
-            ));
-        }
-
-        let arc_lengths = self.arc_lengths_impl();
-
-        // Handle duplicate arc lengths (zero-length segments)
-        let mut unique_lengths = Vec::new();
-        let mut unique_indices = Vec::new();
-        for (i, &len) in arc_lengths.iter().enumerate() {
-            if unique_lengths.is_empty() || len != *unique_lengths.last().unwrap() {
-                unique_lengths.push(len);
-                unique_indices.push(i);
-            }
-        }
-
-        if unique_lengths.is_empty() {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Cannot interpolate along an empty polyline",
-            ));
-        }
-
-        // Validate distances are within range
-        if !distances_slice.is_empty() {
-            let min_dist = distances_slice
-                .iter()
-                .cloned()
-                .fold(f32::INFINITY, f32::min);
-            let max_dist = distances_slice
-                .iter()
-                .cloned()
-                .fold(f32::NEG_INFINITY, f32::max);
-
-            if min_dist < unique_lengths[0] || max_dist > unique_lengths[unique_lengths.len() - 1] {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Requested distances must lie within the polyline arc length range",
-                ));
-            }
-        }
-
-        // Interpolate each dimension
-        let mut result = Vec::with_capacity(distances_slice.len() * self.dimension);
-
-        for &dist in &distances_slice {
-            // Binary search for segment
-            let seg_idx = match unique_lengths.binary_search_by(|&len| {
-                len.partial_cmp(&dist).unwrap_or(std::cmp::Ordering::Equal)
-            }) {
-                Ok(i) => i.min(unique_lengths.len() - 1),
-                Err(i) => (i.saturating_sub(1)).min(unique_lengths.len() - 2),
-            };
-
-            let seg_idx = seg_idx.min(unique_lengths.len() - 2);
-            let next_idx = seg_idx + 1;
-
-            let len0 = unique_lengths[seg_idx];
-            let len1 = unique_lengths[next_idx];
-            let idx0 = unique_indices[seg_idx];
-            let idx1 = unique_indices[next_idx];
-
-            let alpha = if (len1 - len0).abs() < 1e-10 {
-                0.0
-            } else {
-                (dist - len0) / (len1 - len0)
-            };
-
-            let p0 = self.get_point(idx0);
-            let p1 = self.get_point(idx1);
-
-            for d in 0..self.dimension {
-                result.push(p0[d] + alpha * (p1[d] - p0[d]));
-            }
-        }
+        let result = self.positions_at_distances_impl(&distances_slice)?;
 
         PyArray2::from_vec2(
             py,
@@ -598,6 +606,58 @@ impl Polyline {
                 .collect::<Vec<_>>(),
         )
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{}", e)))
+    }
+
+    /// Uniformly resample the full polyline by arc-length spacing.
+    ///
+    /// Args:
+    ///     spacing: Distance between samples.
+    ///     include_endpoint: Append the final waypoint if it does not land on the spacing grid.
+    ///
+    /// Returns:
+    ///     A new Polyline with resampled points.
+    #[pyo3(signature = (spacing, include_endpoint=true))]
+    fn resample_by_spacing(&self, spacing: f64, include_endpoint: bool) -> PyResult<Self> {
+        let spacing = spacing as f32;
+        if !spacing.is_finite() || spacing <= 0.0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "spacing must be positive and finite, got {spacing}",
+            )));
+        }
+
+        if self.is_empty() || self.len() == 1 {
+            return Ok(self.clone());
+        }
+
+        let total_length = self.total_length();
+        if total_length <= 1e-6 {
+            return Ok(Self {
+                points: self.get_point(0).to_vec(),
+                dimension: self.dimension,
+            });
+        }
+
+        let mut distances = Vec::new();
+        let mut distance = 0.0_f32;
+        while distance < total_length {
+            distances.push(distance);
+            distance += spacing;
+        }
+        if include_endpoint {
+            let should_append_endpoint = distances
+                .last()
+                .map(|last| (total_length - *last).abs() > 1e-5)
+                .unwrap_or(true);
+            if should_append_endpoint {
+                distances.push(total_length);
+            }
+        }
+
+        let points = self.positions_at_distances_impl(&distances)?;
+        Ok(Self {
+            points,
+            dimension: self.dimension,
+        })
     }
 
     /// Return the polyline remainder after projecting a point.

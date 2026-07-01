@@ -13,7 +13,7 @@ import sys
 import polars as pl
 from omegaconf import OmegaConf
 
-from eval.aggregation import processing, telemetry, utils
+from eval.aggregation import processing, utils
 from eval.aggregation.failed_rollouts import FailedRolloutInput
 from eval.aggregation.modifiers import (
     MetricAggregationModifiers,
@@ -100,16 +100,12 @@ def _aggregate_metrics(
         len(job_dirs),
     )
     df = pl.concat(all_dfs)
-    telemetry_summary = telemetry.collect_driver_drive_rpc_latency(job_dirs)
-
     return processing.aggregate_and_write_metrics_results_txt(
         df,
         force_same_run=True,
         output_path=str(aggregate_dir),
         additional_modifiers=modifiers,
         failed_rollouts=failed_rollouts,
-        run_level_metrics=telemetry.run_level_metrics_from_summary(telemetry_summary),
-        telemetry_summary=telemetry_summary,
         scene_score_config=scene_score_config,
     )
 

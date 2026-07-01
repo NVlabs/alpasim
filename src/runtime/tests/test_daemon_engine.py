@@ -32,6 +32,8 @@ def _make_config() -> SimpleNamespace:
             smooth_trajectories=True,
             scenes=[SimpleNamespace(scene_id="clipgt-a")],
             endpoints=SimpleNamespace(startup_timeout_s=1),
+            scene_affine_dispatch=False,
+            cache_refresh_interval_s=5.0,
         ),
         network=SimpleNamespace(),
     )
@@ -146,19 +148,12 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _make_config()
-    version_ids = MagicMock()
+    version_ids = _version_ids()
     eval_config = MagicMock()
     worker_runtime = SimpleNamespace(stop=AsyncMock())
 
     class _FakeScheduler:
-        def __init__(
-            self,
-            *,
-            pools,
-            runtime,
-            request_store=None,
-        ) -> None:
-            del pools, request_store
+        def __init__(self, *, runtime, **kwargs) -> None:
             assert runtime is worker_runtime
 
         async def shutdown(self, *, reason: str) -> None:
@@ -176,7 +171,7 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             eval_config=eval_config,
             version_ids=version_ids,
             scene_loader=MagicMock(),
-            pools={"driver": MagicMock()},
+            pools={"driver": AddressPool(["driver-a:50051"], 1, skip=False)},
             max_in_flight=1,
         )
 
@@ -192,7 +187,6 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
         "alpasim_runtime.daemon.engine.start_worker_runtime", _fake_start_worker_runtime
     )
     monkeypatch.setattr("alpasim_runtime.daemon.engine.DaemonScheduler", _FakeScheduler)
-
     engine = DaemonEngine(
         user_config="u.yaml",
         network_config="n.yaml",
@@ -210,19 +204,12 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _make_config()
-    version_ids = MagicMock()
+    version_ids = _version_ids()
     eval_config = MagicMock()
     worker_runtime = SimpleNamespace(stop=AsyncMock())
 
     class _FakeScheduler:
-        def __init__(
-            self,
-            *,
-            pools,
-            runtime,
-            request_store=None,
-        ) -> None:
-            del pools, request_store
+        def __init__(self, *, runtime, **kwargs) -> None:
             assert runtime is worker_runtime
 
         async def shutdown(self, *, reason: str) -> None:
@@ -240,7 +227,7 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
             eval_config=eval_config,
             version_ids=version_ids,
             scene_loader=MagicMock(),
-            pools={"driver": MagicMock()},
+            pools={"driver": AddressPool(["driver-a:50051"], 1, skip=False)},
             max_in_flight=1,
         )
 
@@ -256,7 +243,6 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
         "alpasim_runtime.daemon.engine.start_worker_runtime", _fake_start_worker_runtime
     )
     monkeypatch.setattr("alpasim_runtime.daemon.engine.DaemonScheduler", _FakeScheduler)
-
     engine = DaemonEngine(
         user_config="u.yaml",
         network_config="n.yaml",

@@ -1,0 +1,50 @@
+hydra:
+  job:
+    chdir: false
+
+server:
+  host: 0.0.0.0
+  port: 6200
+  max_workers: 1
+  log_file: null
+
+
+catk:
+  device: cuda
+  filter_distance_th: 100.0
+  predict_static: false
+  min_valid_history_steps: 5
+  loader:
+    usdz_folder: ???  # set via CLI --usdz-folder or wizard volume mount
+    # Service timing controls.
+    num_history_steps: 16
+    minimum_future_steps: 5
+    time_step: 0.1
+
+    # TarCache-style map preprocessing.
+    map_element_names:
+      - lane_lines
+      - lane_centers
+      - road_boundaries
+      - road_islands
+      - crosswalks
+      - wait_lines
+    map_polyline_length_k: 4
+    map_resample_interval_m: 1.0
+    map_polyline_filter_mode: v_to_ego_and_obs
+    map_max_pts_to_ego_distance: 25.0
+    map_polyline_number_control_mode: adv
+    map_adv_max_lane_polylines_num: 1000
+    map_adv_max_road_boundary_num: 750
+    map_adv_max_other_polylines_num: 250
+
+    # Keep runtime EnvData map un-cropped at load time.
+    # CATK-specific map filtering is configured below.
+    map_distance_x: 0.0
+    map_distance_y: 0.0
+  model:
+    config_path: /mnt/trafficsim-models/catk_v120/config.yaml
+    ckpt_path: /mnt/trafficsim-models/catk_v120/latest.ckpt
+    token_pkl_dir: /mnt/trafficsim-models/tokens
+    disable_sub_plyline_type: true
+    use_downsampled_lines: false

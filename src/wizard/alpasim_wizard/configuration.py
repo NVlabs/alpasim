@@ -15,10 +15,11 @@ from typing import Any, Dict, List, cast
 
 from alpasim_wizard.context import WizardContext
 from alpasim_wizard.schema import AlpasimConfig, RunMode
+from alpasim_wizard.telemetry.prometheus import generate_prometheus_configs
 from omegaconf import OmegaConf
 
 from .services import ContainerDefinition, ContainerSet
-from .utils import save_loadable_wizard_config, write_yaml
+from .utils import read_yaml, save_loadable_wizard_config, write_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,9 @@ class ConfigurationManager:
 
     def __init__(self, log_dir: str):
         self.log_dir = Path(log_dir)
-        self.generated_configs: Dict[str, Path] = {}
+        self._central_file_sd_path: Path | None = None
 
-    def generate_all(
-        self, container_set: ContainerSet, context: WizardContext
-    ) -> Dict[str, Path]:
+    def generate_all(self, container_set: ContainerSet, context: WizardContext) -> None:
         """Generate all required configurations.
 
         Args:
@@ -50,10 +49,13 @@ class ConfigurationManager:
         logger.info("Generating all configurations...")
 
         cfg = context.cfg
-        artifact_list = context.get_artifacts()
+        artifact_list = context.artifact_list
+
+        run_metadata = self._load_or_create_run_metadata(cfg)
+        self._write_config("run_metadata.yaml", run_metadata)
 
         # Generate each configuration
-        self._generate_runtime_config(cfg, artifact_list)
+        self._generate_runtime_config(cfg, artifact_list, context)
 
         # Get sim containers from service_manager for network config
         sim_containers = container_set.sim
@@ -62,18 +64,24 @@ class ConfigurationManager:
 
         self._generate_trafficsim_config(cfg)
         self._generate_eval_config(cfg)
-        self._generate_run_metadata(cfg)
+        self._central_file_sd_path = generate_prometheus_configs(
+            self.log_dir,
+            run_metadata,
+            context,
+        )
         self._generate_driver_config(cfg)
         self._generate_controller_config(cfg)
 
         # Save wizard config
         self._save_wizard_config(cfg)
 
-        logger.info(f"Generated {len(self.generated_configs)} configuration files")
-        return self.generated_configs
+        logger.info("Generated configuration files")
 
     def _generate_runtime_config(
-        self, cfg: Any, artifact_list: List[Any]
+        self,
+        cfg: Any,
+        artifact_list: List[Any],
+        context: WizardContext,
     ) -> str | None:
         """Generate runtime configuration."""
         runtime_config = OmegaConf.to_container(cfg.runtime, resolve=True)
@@ -96,7 +104,18 @@ class ConfigurationManager:
 
         # Write simulation params directly (was: fan out per scene)
         simulation_config = runtime_config.pop("simulation_config", {})
+        telemetry_ports = context.telemetry_ports
+        prometheus_host = (
+            "localhost"
+            if cfg.wizard.debug_flags.use_localhost
+            or cfg.wizard.run_method.name == "SLURM"
+            else "prometheus-0"
+        )
         runtime_config["simulation_config"] = simulation_config
+        runtime_config["prometheus"] = {
+            "worker_ports": list(telemetry_ports.workers),
+            "url": f"http://{prometheus_host}:{telemetry_ports.prometheus}",
+        }
 
         # Write flat scene list
         runtime_config["scenes"] = [{"scene_id": s.scene_id} for s in artifact_list]
@@ -206,13 +225,13 @@ class ConfigurationManager:
         if cfg.wizard.run_mode != RunMode.SERVER:
             return
 
-        runtime_containers = container_set.runtime or []
-        if not runtime_containers:
+        runtime_container = container_set.runtime
+        if runtime_container is None:
             raise ValueError(
                 "Server mode requires `runtime` in wizard.run_sim_services"
             )
 
-        runtime_addresses = runtime_containers[0].get_all_addresses()
+        runtime_addresses = runtime_container.get_all_addresses()
         if not runtime_addresses:
             raise ValueError("Runtime server mode requires a runtime address")
 
@@ -271,8 +290,17 @@ class ConfigurationManager:
         self._write_config("controller-config.yaml", controller_config)
         logger.debug("Generated controller config")
 
-    def _generate_run_metadata(self, cfg: Any) -> None:
-        """Generate run metadata."""
+    def _load_or_create_run_metadata(self, cfg: Any) -> dict[str, Any]:
+        """Load existing run metadata, or create it for a new run.
+
+        Makes sure e.g. run_uuid stays the same across restarts of the same run.
+        """
+        metadata_path = self.log_dir / "run_metadata.yaml"
+        if metadata_path.exists():
+            run_metadata = read_yaml(str(metadata_path))
+            run_metadata.setdefault("run_uuid", str(uuid.uuid4()))
+            return run_metadata
+
         run_uuid = uuid.uuid4()
         run_name = (
             cfg.wizard.run_name
@@ -300,9 +328,7 @@ class ConfigurationManager:
                 else None
             ),
         }
-
-        self._write_config("run_metadata.yaml", run_metadata)
-        logger.debug("Generated run metadata")
+        return run_metadata
 
     def _save_wizard_config(self, cfg: Any) -> None:
         """Save the complete wizard configuration."""
@@ -320,9 +346,22 @@ class ConfigurationManager:
     def _write_config(self, filename: str, data: Dict) -> Path:
         """Write configuration to file."""
         filepath = self.log_dir / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         write_yaml(data, str(filepath))
-        self.generated_configs[filename] = filepath
         return filepath
+
+    def cleanup_central_file_sd(self) -> None:
+        """Remove this run's central file-SD publication after deployment exits."""
+        if self._central_file_sd_path is None:
+            return
+        try:
+            self._central_file_sd_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Failed to remove Prometheus file-SD %s: %s",
+                self._central_file_sd_path,
+                exc,
+            )
 
     def _remove_none_values(self, d: Any) -> Any:
         """Recursively remove all keys with None values from the dictionary."""

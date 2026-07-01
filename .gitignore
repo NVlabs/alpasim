@@ -13,6 +13,7 @@ __pycache__/
 
 # AI stuff
 .claude
+.agents/skills/iad-slurm
 .serena
 .zed
 CLAUDE.md

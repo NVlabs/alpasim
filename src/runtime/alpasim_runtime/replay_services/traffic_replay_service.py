@@ -33,9 +33,6 @@ class TrafficReplayService(BaseReplayServicer, traffic_pb2_grpc.TrafficServiceSe
         version_id = self.get_version(request, context)
         metadata.version_id.CopyFrom(version_id)
         metadata.minimum_history_length_us = 1000000  # 1 second default
-
-        map_id = self.asl_reader.get_map_id()
-        metadata.supported_map_ids.append(map_id)
         return metadata
 
     def simulate(

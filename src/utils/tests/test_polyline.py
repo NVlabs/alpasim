@@ -211,6 +211,52 @@ def test_polyline_resample_from_point_cases() -> None:
     assert np.allclose(off_path.waypoints[-1], [20, 0, 0])
 
 
+def test_polyline_resample_by_spacing() -> None:
+    polyline_obj = Polyline(points=np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]))
+
+    resampled = polyline_obj.resample_by_spacing(3.0)
+
+    assert np.allclose(
+        resampled.waypoints,
+        np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [6.0, 0.0, 0.0],
+                [9.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_polyline_resample_by_spacing_can_skip_endpoint() -> None:
+    polyline_obj = Polyline(points=np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]))
+
+    resampled = polyline_obj.resample_by_spacing(3.0, include_endpoint=False)
+
+    assert np.allclose(
+        resampled.waypoints,
+        np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [3.0, 0.0, 0.0],
+                [6.0, 0.0, 0.0],
+                [9.0, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_polyline_resample_by_spacing_rejects_non_positive_spacing() -> None:
+    polyline_obj = Polyline(points=np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]))
+
+    with pytest.raises(ValueError, match="spacing must be positive"):
+        polyline_obj.resample_by_spacing(0.0)
+
+
 def test_polyline_get_cumulative_distances_from_point() -> None:
     polyline_obj = Polyline(
         points=np.array(

@@ -1,5 +1,53 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "alpasim-trafficsim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Traffic simulation micro-service for Alpasim"
 requires-python = ">=3.11,<3.13"
+dependencies = [
+  "alpasim_grpc",
+  "alpasim-runtime",
+  "alpasim-utils[geometry]",
+  "trajdata-alpasim",
+  "grpcio>=1.70.0",
+  "torch",
+  "torch-geometric",
+  "numpy",
+  "omegaconf",
+  "hydra-core",
+  "pyyaml",
+  "loguru",
+]
+
+# NOTE: torch-cluster, torch-scatter, torch-sparse (PyG compiled extensions)
+# are required at runtime but need matching CUDA at build time.
+# Install them in Docker via pre-built wheels from data.pyg.org.
+
+[dependency-groups]
+dev = [
+  "pytest>=7.0.0",
+  "ruff>=0.5.0",
+]
+
+[project.scripts]
+catk_trafficsim_server = "alpasim_trafficsim.grpc.catk_trafficsim:main"
+
+[tool.uv.sources]
+alpasim_grpc = {workspace = true}
+alpasim-runtime = {workspace = true}
+alpasim-utils = {workspace = true}
+
+[tool.setuptools]
+packages = {find = {where = ["."], include = ["alpasim_trafficsim*"]}}
+
+[tool.setuptools.package-data]
+alpasim_trafficsim = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+  "integration: requires external assets (USDZ data, model weights, CUDA, or PyG extensions)",
+]

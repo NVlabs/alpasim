@@ -42,6 +42,9 @@ asyncio_default_fixture_loop_scope = "function"
 # at startup, enabling automatic config search path registration from plugins.
 include = ["alpasim_wizard*", "hydra_plugins*"]
 
+[tool.setuptools.package-data]
+alpasim_wizard = ["telemetry/resources/*.sh"]
+
 [project.scripts]
 alpasim_wizard = "alpasim_wizard.__main__:main"
 alpasim_check_config = "alpasim_wizard.check_config:main"

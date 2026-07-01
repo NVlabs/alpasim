@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from alpasim_wizard.context import WizardContext
+from alpasim_wizard.context import TelemetryPorts, WizardContext
 from alpasim_wizard.deployment.slurm import SlurmDeployment
 from alpasim_wizard.schema import DebugFlags, RunMode
 
@@ -30,6 +30,13 @@ def _context(tmp_path: Path, *, dry_run: bool = False) -> WizardContext:
     return WizardContext(
         cfg=cfg,
         port_assigner=iter(()),
+        telemetry_ports=TelemetryPorts(
+            workers=(),
+            prometheus=6100,
+            node_exporter=6101,
+            process_exporter=6102,
+            dcgm_exporter=6103,
+        ),
         artifact_list=[],
         num_gpus=0,
     )
@@ -86,6 +93,29 @@ def test_slurm_run_exports_explicit_gpu_zero(
         assert "CUDA_VISIBLE_DEVICES" not in command
     else:
         assert expected in command
+
+
+def test_slurm_run_isolates_submit_environment_except_job_id_unless_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path)
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: f"{image}.sqsh",
+    )
+
+    default_command = deployment._to_slurm_run(
+        _slurm_container(deployment, None), RunMode.ONESHOT
+    )
+    container = _slurm_container(deployment, None)
+    container.environments = ["HF_TOKEN", "HOME=/tmp", "XDG_CACHE_HOME=/tmp/.cache"]
+    explicit_command = deployment._to_slurm_run(container, RunMode.ONESHOT)
+
+    assert "--export=SLURM_JOB_ID " in default_command
+    assert "--export=SLURM_JOB_ID,HF_TOKEN " in explicit_command
+    assert "export HOME=/tmp;" in explicit_command
+    assert "export XDG_CACHE_HOME=/tmp/.cache;" in explicit_command
 
 
 def test_slurm_cleanup_runs_after_blocking_runtime_srun(

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
+import json
 import logging
 import os
 import re
@@ -40,7 +41,15 @@ def write_yaml(data: dict[str, Any], file_path: str) -> None:
     IndentedListDumper.add_representer(LiteralStr, represent_literal_str)
 
     with open(file_path, "w") as stream:
-        yaml.dump(data, stream, Dumper=IndentedListDumper)
+        yaml.dump(data, stream, Dumper=IndentedListDumper, sort_keys=False)
+
+
+def write_json(data: Any, file_path: str | Path) -> None:
+    """Write indented JSON, creating the parent directory first."""
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
 
 def nre_image_to_nre_version(image: str) -> str:

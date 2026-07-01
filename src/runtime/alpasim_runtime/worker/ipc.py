@@ -112,3 +112,4 @@ class WorkerArgs:
     parent_pid: int | None = None
     # Shared RPC tracking for global queue depth metrics across processes
     shared_rpc_tracking: SharedRpcTracking | None = None
+    telemetry_port: int | None = None

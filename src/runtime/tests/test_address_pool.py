@@ -147,6 +147,47 @@ class TestAddressPool:
             assert pool.try_acquire() is not None
         assert pool.try_acquire() is None
 
+    def test_free_addresses(self):
+        """free_addresses should return addresses with available slots."""
+        pool = AddressPool(["A", "B"], n_concurrent=1, skip=False)
+        assert pool.free_addresses() == {"A", "B"}
+
+        slot = pool.try_acquire()
+        remaining = pool.free_addresses()
+        # One address consumed
+        assert len(remaining) == 1
+
+        pool.release(slot)
+        assert pool.free_addresses() == {"A", "B"}
+
+    def test_try_acquire_for_address(self):
+        """Should acquire a specific address's slot."""
+        pool = AddressPool(["A", "B"], n_concurrent=1, skip=False)
+
+        slot = pool.try_acquire_for_address("B")
+        assert slot is not None
+        assert slot.address == "B"
+
+        # B is now exhausted
+        assert pool.try_acquire_for_address("B") is None
+        # A still available
+        assert pool.try_acquire_for_address("A") is not None
+
+    def test_try_acquire_for_address_skip(self):
+        """Skip pool should return skip slot for any address."""
+        pool = AddressPool([], n_concurrent=0, skip=True)
+        slot = pool.try_acquire_for_address("anything")
+        assert slot is not None
+        assert slot.skip is True
+
+    def test_all_addresses(self):
+        pool = AddressPool(["A", "B", "C"], n_concurrent=2, skip=False)
+        assert pool.all_addresses() == frozenset({"A", "B", "C"})
+
+    def test_all_addresses_skip(self):
+        pool = AddressPool(["A"], n_concurrent=2, skip=True)
+        assert pool.all_addresses() == frozenset()
+
 
 class TestTryAcquireAll:
     """Tests for try_acquire_all function."""
@@ -207,6 +248,44 @@ class TestTryAcquireAll:
         """No pools should return empty dict."""
         result = try_acquire_all({})
         assert result == {}
+
+    def test_pre_acquired_renderer_slot(self):
+        """try_acquire_all with renderer_slot skips renderer pool."""
+        pools = {
+            "driver": AddressPool(["D"], n_concurrent=2, skip=False),
+            "renderer": AddressPool(["GPU-0", "GPU-1"], n_concurrent=1, skip=False),
+        }
+
+        # Pre-acquire a renderer slot (as the scheduler would)
+        r_slot = pools["renderer"].try_acquire()
+        assert r_slot is not None
+
+        result = try_acquire_all(pools, renderer_slot=r_slot)
+        assert result is not None
+        assert result["renderer"] is r_slot
+        assert result["driver"].address == "D"
+
+    def test_pre_acquired_slot_rolled_back_on_failure(self):
+        """If another pool fails, the pre-acquired renderer slot is released."""
+        pools = {
+            "driver": AddressPool(["D"], n_concurrent=1, skip=False),
+            "renderer": AddressPool(["GPU-0"], n_concurrent=1, skip=False),
+        }
+
+        # Exhaust driver
+        pools["driver"].try_acquire()
+
+        # Pre-acquire renderer
+        r_slot = pools["renderer"].try_acquire()
+        assert r_slot is not None
+
+        result = try_acquire_all(pools, renderer_slot=r_slot)
+        assert result is None
+
+        # renderer slot should have been released back by rollback
+        recovered = pools["renderer"].try_acquire()
+        assert recovered is not None
+        assert recovered.address == "GPU-0"
 
 
 class TestReleaseAll:

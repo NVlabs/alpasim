@@ -21,7 +21,6 @@ import logging
 import multiprocessing as mp
 import os
 import sys
-import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import Queue
@@ -41,7 +40,10 @@ from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
 from alpasim_runtime.services.video_model_service import VideoModelService
 from alpasim_runtime.telemetry.rpc_wrapper import set_shared_rpc_tracking
-from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
+from alpasim_runtime.telemetry.telemetry_context import (
+    TelemetryContext,
+    try_get_context,
+)
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
@@ -288,6 +290,9 @@ async def run_worker_loop(
             )
             result_queue.put(result)
             rollout_count += 1
+            telemetry_ctx = try_get_context()
+            if telemetry_ctx is not None:
+                telemetry_ctx.record_rollout_complete()
 
     # Spawn num_consumers consumer tasks -- each handles one job at a time
     try:
@@ -325,7 +330,6 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
-    telemetry_dir = os.path.join(args.log_dir, "telemetry")
     os.makedirs(txt_logs_dir, exist_ok=True)
 
     # Configure logging with worker_id in format.
@@ -360,16 +364,12 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     camera_catalog = CameraCatalog(user_config.extra_cameras)
 
-    start_time = time.perf_counter()
-
-    # TelemetryContext for telemetry collection.
-    # Worker 0 samples resources (CPU/GPU); other workers only collect RPC/rollout/step timing.
+    # TelemetryContext for live Prometheus scraping.
     async with TelemetryContext(
-        output_dir=telemetry_dir,
         worker_id=args.worker_id,
-        sample_resources=(args.worker_id == 0),
-    ) as ctx:
-        rollout_count = await run_worker_loop(
+        port=args.telemetry_port,
+    ):
+        await run_worker_loop(
             worker_id=args.worker_id,
             job_queue=args.job_queue,
             result_queue=args.result_queue,
@@ -382,9 +382,5 @@ async def worker_async_main(args: WorkerArgs) -> None:
             eval_config=args.eval_config,
             parent_pid=args.parent_pid,
         )
-
-        # Record simulation summary with actual measured values
-        total_time = time.perf_counter() - start_time
-        ctx.record_simulation_summary(total_time, rollout_count)
 
     module_logger.info("Worker %d exiting", args.worker_id)

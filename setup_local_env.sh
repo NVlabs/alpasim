@@ -93,6 +93,10 @@ for plugin_dir in "${!PLUGIN_EXTRAS[@]}"; do
         extra_name="${PLUGIN_EXTRAS[$plugin_dir]}"
         echo "  Found plugin: ${plugin_dir} (extra: ${extra_name})"
         EXTRAS+=("--extra" "${extra_name}")
+
+        if [[ -x "${REPO_ROOT}/${plugin_dir}/data/install-agent-skills.sh" ]]; then
+            "${REPO_ROOT}/${plugin_dir}/data/install-agent-skills.sh"
+        fi
     fi
 done
 
