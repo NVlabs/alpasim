@@ -26,7 +26,7 @@ services:
     environments:
       - UV_LINK_MODE=copy
       # Build gsplat's CUDA kernels for sm_90 + PTX
-      - TORCH_CUDA_ARCH_LIST=9.0+PTX
+      - "TORCH_CUDA_ARCH_LIST=8.9;9.0+PTX"
     command:
       - "uv run alpasim-mtgs-server"
       - "--user-config=/mnt/log_dir/{runtime_config_name}"
