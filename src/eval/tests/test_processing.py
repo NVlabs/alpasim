@@ -22,7 +22,6 @@ from eval.aggregation.processing import (
     aggregate_over_clips,
     get_avg_dist_between_incidents,
 )
-from eval.aggregation.telemetry import collect_driver_drive_rpc_latency
 from eval.schema import SceneScoreConfig
 
 
@@ -666,145 +665,6 @@ class TestAggregateAndWriteMetricsResultsTxt:
         assert summary_payload["metrics_results"]
 
     @patch("eval.aggregation.processing.plot_metrics_results")
-    def test_results_summary_json_includes_driver_latency_telemetry(
-        self,
-        mock_plot: MagicMock,
-        unified_metrics_df: pl.DataFrame,
-        temp_directory: pathlib.Path,
-    ) -> None:
-        """Test that run-level telemetry is included in aggregate outputs."""
-        del mock_plot
-
-        telemetry_summary = {
-            "driver_drive_rpc_duration_mean_s": 0.025,
-            "driver_drive_rpc_duration_sum_s": 2.5,
-            "driver_drive_rpc_duration_count": 100,
-            "source": "telemetry/metrics.prom",
-        }
-        aggregate_and_write_metrics_results_txt(
-            unified_metrics_df,
-            output_path=str(temp_directory),
-            run_level_metrics={
-                "driver_drive_rpc_duration_mean_s": 0.025,
-                "driver_drive_rpc_duration_sum_s": 2.5,
-                "driver_drive_rpc_duration_count": 100,
-            },
-            telemetry_summary=telemetry_summary,
-        )
-
-        summary_payload = json.loads(
-            (temp_directory / "results-summary.json").read_text()
-        )
-
-        assert summary_payload["telemetry"] == telemetry_summary
-        assert (
-            summary_payload["metrics_results"][0]["driver_drive_rpc_duration_mean_s"]
-            == 0.025
-        )
-        assert (
-            summary_payload["metrics_results"][0]["driver_drive_rpc_duration_count"]
-            == 100
-        )
-
-    def test_collect_driver_drive_rpc_latency_from_prometheus(
-        self,
-        temp_directory: pathlib.Path,
-    ) -> None:
-        """Test driver latency extraction from runtime telemetry metrics.prom."""
-        telemetry_dir = temp_directory / "job0" / "telemetry"
-        telemetry_dir.mkdir(parents=True)
-        drive_labels = 'method="drive",service="driver",tag="default",worker_id="0"'
-        warmup_labels = 'method="drive",service="driver",tag="warmup",worker_id="0"'
-        (telemetry_dir / "metrics.prom").write_text(
-            "\n".join(
-                [
-                    "# HELP rpc_duration_seconds RPC call duration in seconds",
-                    "# TYPE rpc_duration_seconds histogram",
-                    f"rpc_duration_seconds_count{{{drive_labels}}} 197.0",
-                    f"rpc_duration_seconds_sum{{{drive_labels}}} 0.26537357791676186",
-                    f"rpc_duration_seconds_count{{{warmup_labels}}} 10.0",
-                    f"rpc_duration_seconds_sum{{{warmup_labels}}} 99.0",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        telemetry_summary = collect_driver_drive_rpc_latency([temp_directory / "job0"])
-
-        assert telemetry_summary is not None
-        assert telemetry_summary["driver_drive_rpc_duration_count"] == 197
-        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
-            0.26537357791676186
-        )
-        assert telemetry_summary["driver_drive_rpc_duration_mean_s"] == pytest.approx(
-            0.26537357791676186 / 197.0
-        )
-
-    def test_collect_driver_drive_rpc_latency_preserves_utf8_label_escapes(
-        self,
-        temp_directory: pathlib.Path,
-    ) -> None:
-        """Test Prometheus label unescaping preserves UTF-8 text."""
-        telemetry_dir = temp_directory / "job0" / "telemetry"
-        telemetry_dir.mkdir(parents=True)
-        labels = 'method="drive",service="driver",tag="dev\\nβ",worker_id="0"'
-        (telemetry_dir / "metrics.prom").write_text(
-            "\n".join(
-                [
-                    f"rpc_duration_seconds_count{{{labels}}} 2.0",
-                    f"rpc_duration_seconds_sum{{{labels}}} 0.5",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        telemetry_summary = collect_driver_drive_rpc_latency(
-            [temp_directory / "job0"],
-            tag="dev\nβ",
-        )
-
-        assert telemetry_summary is not None
-        assert telemetry_summary["driver_drive_rpc_duration_count"] == 2
-        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
-            0.5
-        )
-
-    def test_collect_driver_drive_rpc_latency_skips_incomplete_files(
-        self,
-        temp_directory: pathlib.Path,
-    ) -> None:
-        """Test files missing sum or count are not included in latency totals."""
-        complete_dir = temp_directory / "complete" / "telemetry"
-        complete_dir.mkdir(parents=True)
-        incomplete_dir = temp_directory / "incomplete" / "telemetry"
-        incomplete_dir.mkdir(parents=True)
-        labels = 'method="drive",service="driver",tag="default",worker_id="0"'
-        (complete_dir / "metrics.prom").write_text(
-            "\n".join(
-                [
-                    f"rpc_duration_seconds_count{{{labels}}} 4.0",
-                    f"rpc_duration_seconds_sum{{{labels}}} 1.0",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        (incomplete_dir / "metrics.prom").write_text(
-            f"rpc_duration_seconds_count{{{labels}}} 100.0\n",
-            encoding="utf-8",
-        )
-
-        telemetry_summary = collect_driver_drive_rpc_latency(
-            [temp_directory / "complete", temp_directory / "incomplete"]
-        )
-
-        assert telemetry_summary is not None
-        assert telemetry_summary["driver_drive_rpc_duration_count"] == 4
-        assert telemetry_summary["driver_drive_rpc_duration_sum_s"] == pytest.approx(
-            1.0
-        )
-        assert telemetry_summary["files_used"] == [str(complete_dir / "metrics.prom")]
-
-    @patch("eval.aggregation.processing.plot_metrics_results")
     def test_results_summary_json_contains_rollout_pass_fail_and_metrics_results(
         self,
         mock_plot: MagicMock,
@@ -837,7 +697,8 @@ class TestAggregateAndWriteMetricsResultsTxt:
         )
 
         processed = aggregate_and_write_metrics_results_txt(
-            metrics_df, output_path=str(temp_directory)
+            metrics_df,
+            output_path=str(temp_directory),
         )
 
         result_summary = temp_directory / "results-summary.json"

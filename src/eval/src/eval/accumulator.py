@@ -21,6 +21,7 @@ import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
+from alpasim_grpc.v0.traffic_pb2 import TrafficReturn, TrafficSessionRequest
 from alpasim_utils.geometry import (
     Pose,
     Trajectory,
@@ -36,6 +37,7 @@ from eval.data import (
     RenderableTrajectory,
     Routes,
     ScenarioEvalInput,
+    TrafficPredictions,
 )
 from eval.schema import EvalConfig
 
@@ -88,6 +90,13 @@ class EvalDataAccumulator:
         default_factory=list, init=False
     )
 
+    # Traffic request/response pairing and metadata
+    _pending_traffic_query_us: int | None = field(default=None, init=False)
+    _static_actor_ids: set[str] = field(default_factory=set, init=False)
+    _traffic_predictions: TrafficPredictions = field(
+        default_factory=TrafficPredictions, init=False
+    )
+
     # Camera and route data
     _cameras: Cameras = field(default_factory=Cameras, init=False)
     _routes: Routes = field(default_factory=Routes, init=False)
@@ -133,6 +142,12 @@ class EvalDataAccumulator:
                     (*self._pending_request, message.driver_return)
                 )
                 self._pending_request = None
+        elif msg_type == "traffic_session_request":
+            self._handle_traffic_session_request(message.traffic_session_request)
+        elif msg_type == "traffic_request":
+            self._pending_traffic_query_us = int(message.traffic_request.time_query_us)
+        elif msg_type == "traffic_return":
+            self._handle_traffic_return(message.traffic_return)
         elif msg_type == "available_cameras_return":
             for available_camera in message.available_cameras_return.available_cameras:
                 self._cameras.add_calibration(available_camera)
@@ -178,6 +193,31 @@ class EvalDataAccumulator:
         self._gt_ego_trajectory = trajectory_from_grpc(
             metadata.ego_rig_recorded_ground_truth_trajectory
         ).transform(self._ego_coords_rig_to_aabb_center, is_relative=True)
+
+    def _handle_traffic_session_request(self, request: TrafficSessionRequest) -> None:
+        self._static_actor_ids = {
+            str(obj.object_id)
+            for obj in request.logged_object_trajectories
+            if obj.is_static
+        }
+
+    def _handle_traffic_return(self, traffic_return: TrafficReturn) -> None:
+        if self._pending_traffic_query_us is None:
+            return
+
+        query_time_us = self._pending_traffic_query_us
+        self._pending_traffic_query_us = None
+        object_trajectories: dict[str, Trajectory] = {}
+        for update in traffic_return.object_trajectory_updates:
+            object_id = str(update.object_id)
+            if object_id == "EGO" or object_id in self._static_actor_ids:
+                continue
+            trajectory = trajectory_from_grpc(update.trajectory)
+            if trajectory.is_empty() or trajectory.time_range_us.stop <= query_time_us:
+                continue
+            object_trajectories[object_id] = trajectory
+
+        self._traffic_predictions.add_prediction(query_time_us, object_trajectories)
 
     def _handle_actor_poses(self, poses_message: ActorPoses) -> None:
         """Accumulate actor poses for trajectory building.
@@ -365,6 +405,7 @@ class EvalDataAccumulator:
             actor_trajectories=actor_trajectories,
             ego_recorded_ground_truth_trajectory=self._gt_ego_trajectory,
             driver_responses=driver_responses,
+            traffic_predictions=self._traffic_predictions,
             vec_map=vec_map,
             cameras=self._cameras if self._cameras.camera_by_logical_id else None,
             routes=self._routes if self._routes.routes_in_rig_frame else None,

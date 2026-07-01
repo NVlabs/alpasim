@@ -43,3 +43,6 @@ utils_rs = {workspace = true}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["alpasim_utils*"]
+
+[tool.setuptools.package-data]
+"alpasim_utils.telemetry" = ["*.json", "*.yml"]

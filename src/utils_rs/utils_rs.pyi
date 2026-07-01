@@ -532,6 +532,21 @@ class Polyline:
         """
         ...
 
+    def resample_by_spacing(
+        self,
+        spacing: float,
+        include_endpoint: bool = True,
+    ) -> Polyline:
+        """
+        Uniformly resample the full polyline by arc-length spacing.
+
+        :param spacing: Distance between samples.
+        :param include_endpoint: Append the final waypoint if it does not land
+            on the spacing grid.
+        :return: A new Polyline with resampled points.
+        """
+        ...
+
     def remaining_from_point(
         self,
         point: NDArray[np.floating],

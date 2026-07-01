@@ -179,16 +179,23 @@ async def _profiled_rpc_call_once(
 
         if ctx is not None:
             tag = get_telemetry_tag()
-            ctx.rpc_queue_depth.labels(service=service_type, tag=tag).observe(
-                queue_depth_at_start
-            )
+            worker_id = str(ctx.worker_id)
+            ctx.rpc_queue_depth_latest.labels(
+                service=service_type, tag=tag, worker_id=worker_id
+            ).set(queue_depth_at_start)
             ctx.rpc_duration.labels(
-                service=service_type, method=method_name, tag=tag
+                service=service_type,
+                method=method_name,
+                tag=tag,
+                worker_id=worker_id,
             ).observe(duration)
 
             # Only record blocking time if callback was successfully registered
             if t_done is not None:
                 blocking = max(0, t_resume - t_done)
                 ctx.rpc_blocking.labels(
-                    service=service_type, method=method_name, tag=tag
+                    service=service_type,
+                    method=method_name,
+                    tag=tag,
+                    worker_id=worker_id,
                 ).observe(blocking)

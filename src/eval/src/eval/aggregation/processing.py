@@ -273,7 +273,6 @@ def write_results_summary_json(
     df_wide_avg_t_clip_rollout: pl.DataFrame,
     output_path: str,
     failed_rollouts: list[FailedRolloutInput] | None = None,
-    telemetry_summary: dict[str, object] | None = None,
     scene_score_config: SceneScoreConfig | None = None,
 ) -> None:
     """Write per-rollout scoring results with run-level aggregate metrics."""
@@ -360,9 +359,6 @@ def write_results_summary_json(
             "collision_at_fault": "== 0",
             "offroad": "== 0",
         }
-    if telemetry_summary:
-        payload["telemetry"] = telemetry_summary
-
     output_file = os.path.join(output_path, "results-summary.json")
     with open(output_file, "w") as f:
         json.dump(_json_safe(payload), f, indent=2, sort_keys=True, allow_nan=False)
@@ -690,8 +686,6 @@ def aggregate_and_write_metrics_results_txt(
     output_path: str | None = None,
     additional_modifiers: list[MetricAggregationModifiers] | None = None,
     failed_rollouts: list[FailedRolloutInput] | None = None,
-    run_level_metrics: dict[str, object] | None = None,
-    telemetry_summary: dict[str, object] | None = None,
     scene_score_config: SceneScoreConfig | None = None,
 ) -> ProcessedMetricDFs:
     """
@@ -790,22 +784,6 @@ def aggregate_and_write_metrics_results_txt(
         how="left",
     )
 
-    if run_level_metrics:
-        scalar_metrics = {
-            key: value
-            for key, value in run_level_metrics.items()
-            if value is None or isinstance(value, (bool, int, float, str))
-        }
-        if scalar_metrics:
-            df_wide_avg_t_clip_rollout = df_wide_avg_t_clip_rollout.with_columns(
-                [pl.lit(value).alias(key) for key, value in scalar_metrics.items()]
-                + [
-                    pl.lit(None).alias(f"{key}_std")
-                    for key in scalar_metrics
-                    if not key.endswith("_std")
-                ]
-            )
-
     df_wide_avg_t = df_wide_avg_t.join(
         trajectory_uid_df.select(
             pl.col("trajectory_uid"),
@@ -835,7 +813,6 @@ def aggregate_and_write_metrics_results_txt(
             df_wide_avg_t_clip_rollout,
             output_path,
             failed_rollouts=failed_rollouts,
-            telemetry_summary=telemetry_summary,
             scene_score_config=scene_score_config,
         )
         plot_metrics_results(df_wide_avg_t_clip, trajectory_uid_df, output_path)

@@ -1,0 +1,154 @@
+groups:
+  - name: alpasim_metrics_plot
+    rules:
+      - record: alpasim:rpc_duration_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, method, le)
+          (alpasim_rpc_duration_seconds_bucket{method=~"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb"})
+      - record: alpasim:rpc_duration_seconds_bucket:rate1m
+        expr: >-
+          sum by (run_uuid, run_name, method, le)
+          (rate(alpasim_rpc_duration_seconds_bucket{method=~"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb"}[1m]))
+      - record: alpasim:rpc_blocking_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, method, le)
+          (alpasim_rpc_blocking_seconds_bucket{method=~"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb"})
+      - record: alpasim:rpc_queue_depth_at_start_latest:max
+        expr: >-
+          max by (run_uuid, run_name, service)
+          (alpasim_rpc_queue_depth_at_start_latest)
+      - record: alpasim:rpc_queue_depth_at_start_latest:min
+        expr: >-
+          min by (run_uuid, run_name, service)
+          (alpasim_rpc_queue_depth_at_start_latest)
+      - record: alpasim:rollout_duration_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (alpasim_rollout_duration_seconds_bucket)
+      - record: alpasim:step_duration_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (alpasim_step_duration_seconds_bucket)
+      - record: alpasim:driver_drive_rpc_duration_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (alpasim_rpc_duration_seconds_bucket{service="driver",method="drive",tag="default"})
+      - record: alpasim:driver_drive_rpc_duration_seconds_bucket:rate1m
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (rate(alpasim_rpc_duration_seconds_bucket{service="driver",method="drive",tag="default"}[1m]))
+      - record: alpasim:nre_render_rpc_duration_seconds_bucket:sum
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated",tag="default"})
+      - record: alpasim:nre_render_rpc_duration_seconds_bucket:rate1m
+        expr: >-
+          sum by (run_uuid, run_name, le)
+          (rate(alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated",tag="default"}[1m]))
+      - record: alpasim:rpc_duration_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, method, le)
+          (rate(alpasim:rpc_duration_seconds_bucket:sum[1m])))
+      - record: alpasim:rpc_blocking_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, method, le)
+          (rate(alpasim:rpc_blocking_seconds_bucket:sum[1m])))
+      - record: alpasim:rollout_duration_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, le)
+          (rate(alpasim:rollout_duration_seconds_bucket:sum[1m])))
+      - record: alpasim:rollout_duration_seconds:p95_by_worker
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, worker_id, le)
+          (rate(alpasim_rollout_duration_seconds_bucket[1m])))
+      - record: alpasim:step_duration_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, le)
+          (rate(alpasim:step_duration_seconds_bucket:sum[1m])))
+      - record: alpasim:driver_drive_rpc_duration_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, le)
+          (alpasim:driver_drive_rpc_duration_seconds_bucket:rate1m))
+      - record: alpasim:nre_render_rpc_duration_seconds:p95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (run_uuid, run_name, le)
+          (alpasim:nre_render_rpc_duration_seconds_bucket:rate1m))
+      - record: alpasim:event_loop_idle_fraction:ratio
+        expr: >-
+          sum by (run_uuid, run_name)
+          (alpasim_event_loop_idle_seconds_total) /
+          sum by (run_uuid, run_name)
+          (alpasim_event_loop_idle_seconds_total +
+          alpasim_event_loop_poll_seconds_total +
+          alpasim_event_loop_work_seconds_total)
+      - record: alpasim:simulation_rollouts_completed:sum
+        expr: >-
+          sum by (run_uuid, run_name)
+          (alpasim_simulation_rollouts_completed_total)
+      - record: alpasim:simulation_seconds_per_rollout:avg
+        expr: >-
+          (
+          max by (run_uuid, run_name)
+          (alpasim_simulation_elapsed_seconds) /
+          sum by (run_uuid, run_name)
+          (alpasim_simulation_rollouts_completed_total)
+          )
+          and on (run_uuid, run_name)
+          (
+          sum by (run_uuid, run_name)
+          (alpasim_simulation_rollouts_completed_total) > 0
+          )
+      - record: alpasim:simulation_seconds_per_rollout:rate5m
+        expr: >-
+          (
+          max by (run_uuid, run_name)
+          (increase(alpasim_simulation_elapsed_seconds[5m])) /
+          sum by (run_uuid, run_name)
+          (increase(alpasim_simulation_rollouts_completed_total[5m]))
+          )
+          and on (run_uuid, run_name)
+          (
+          sum by (run_uuid, run_name)
+          (increase(alpasim_simulation_rollouts_completed_total[5m])) > 0
+          )
+      - record: alpasim:process_cpu_utilization_percent:rate30s
+        expr: >-
+          100 * sum by (run_uuid, run_name, groupname)
+          (rate(namedprocess_namegroup_cpu_seconds_total[30s]))
+      - record: alpasim:process_cpu_utilization_percent:per_process:rate30s
+        expr: >-
+          100 * rate(alpasim_process_cpu_seconds_total[30s])
+      - record: alpasim:process_cpu_utilization_percent:max_by_group:rate30s
+        expr: >-
+          max by (run_uuid, run_name, groupname)
+          (alpasim:process_cpu_utilization_percent:per_process:rate30s)
+      - record: alpasim:gpu_utilization_percent:avg
+        expr: >-
+          avg by (run_uuid, run_name, gpu)
+          (DCGM_FI_DEV_GPU_UTIL)
+      - record: alpasim:gpu_memory_gb:avg
+        expr: >-
+          avg by (run_uuid, run_name, gpu)
+          (DCGM_FI_DEV_FB_USED) / 1024
+      - record: alpasim:gpu_memory_total_gb:avg
+        expr: >-
+          avg by (run_uuid, run_name, gpu)
+          (DCGM_FI_DEV_FB_TOTAL) / 1024
+      - record: alpasim:gpu_memory_pressure_percent:avg
+        expr: >-
+          100 *
+          sum by (run_uuid, run_name, node, gpu)
+          (DCGM_FI_DEV_FB_USED) /
+          (
+          sum by (run_uuid, run_name, node, gpu)
+          (DCGM_FI_DEV_FB_USED) +
+          sum by (run_uuid, run_name, node, gpu)
+          (DCGM_FI_DEV_FB_FREE)
+          )

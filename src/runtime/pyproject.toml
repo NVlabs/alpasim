@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 # Trivial comment to trigger CI build-services (for test-slurm dependency).
 [project]
 name = "alpasim-runtime"
-version = "1.118.0"
+version = "1.123.0"
 description = "Runtime of the Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 authors = [{name = "Michal Tyszkiewicz", email = "mtyszkiewicz@nvidia.com"}]
@@ -21,13 +21,10 @@ dependencies = [
     "polars>=1.0.0",  # Metrics data processing
     "pyarrow>=15.0.0",  # Required for polars to_pandas() conversion
     "prometheus-client>=0.21.0",
-    "psutil>=5.9",
-    "nvidia-ml-py>=11.5.0",  # GPU monitoring
     "protobuf>=4.25.3",
     "pyyaml>=6.0.2",
     "rich>=13.0.0",
     "scipy>=1.15.0",
-    "seaborn>=0.13.0",  # Metrics plotting
     "csaps>=1.2.0",
     "trajdata-alpasim",
     "pandas<3",  # pandas 3.x breaks trajdata

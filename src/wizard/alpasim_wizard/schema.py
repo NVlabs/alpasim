@@ -86,6 +86,12 @@ class RunMode(Enum):
 
 
 @dataclass
+class WizardPrometheusConfig:
+    scrape_interval: str = "5s"
+    file_sd_dir: str | None = None
+
+
+@dataclass
 class WizardConfig:
     # Name of the run, used to identify the run in the databases.
     run_name: str | None = None
@@ -94,6 +100,7 @@ class WizardConfig:
 
     # Global log level for all alpasim services (DEBUG, INFO, WARNING, ERROR)
     log_level: str = "INFO"
+    prometheus: WizardPrometheusConfig = field(default_factory=WizardPrometheusConfig)
     description: str | None = None  # TODO(mwatson): is this redundant to run_name?
     submitter: str | None = None
 
@@ -145,26 +152,30 @@ class ServicesConfig:
     trafficsim: ServiceConfig | None = MISSING
     controller: ServiceConfig | None = MISSING
     runtime: RuntimeServiceConfig = MISSING
+    prometheus: ContainerConfig = MISSING
 
 
 @dataclass
-class ServiceConfig:
+class ContainerConfig:
     volumes: list[str] = field(default_factory=list)
     image: str = MISSING
     # Images that don't correspond to a service in the repo.
     # No Dockerfile path is added to the docker-compose.yaml.
     external_image: bool = False
     pull_policy: str = "missing"
+    environments: list[str] = field(default_factory=list)
+    workdir: str | None = None
+    remap_root: bool = False
+
+
+@dataclass
+class ServiceConfig(ContainerConfig):
     command: list[str] = MISSING
     # Number of service replicas to run per container.
     # If gpus is None or empty, creates a single container with this many replicas.
     # If gpus is specified, creates one container per GPU, each with this many replicas.
     replicas_per_container: int = MISSING
     gpus: list[int] | None = MISSING
-
-    environments: list[str] = field(default_factory=list)
-    workdir: str | None = None
-    remap_root: bool = False
 
 
 @dataclass

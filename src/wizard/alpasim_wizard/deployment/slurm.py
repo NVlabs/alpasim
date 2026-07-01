@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import socket
 import time
 from pathlib import Path
@@ -37,10 +38,12 @@ class SlurmDeployment:
         """Deploy simulation services (including runtime) on SLURM."""
         logger.info("Running simulation services")
         containers_to_start_last = (
-            self.container_set.runtime if self.container_set.runtime else []
+            [self.container_set.runtime] if self.container_set.runtime else []
         )
+        containers = list(self.container_set.sim)
+        containers.append(self.container_set.prometheus)
         self.deploy(
-            containers=self.container_set.sim,
+            containers=containers,
             containers_to_start_last=containers_to_start_last,
         )
 
@@ -190,16 +193,15 @@ class SlurmDeployment:
             if container.gpu is not None
             else ""
         )
-
         # Separate environment variables:
         #  - 'VAR=value' format to export in bash. The value will be logged, not secure for secrets.
         #  - 'VAR' format pass-through from host. The value will not be logged, secure for secrets.
         env_export_set = []  # VAR=value format
-        env_passthrough_set = []  # VAR only format
+        env_passthrough_set = ["SLURM_JOB_ID"]  # VAR only format
         for e in container.environments or []:
             if "=" in e:
                 env_export_set.append(e)
-            else:
+            elif e not in env_passthrough_set:
                 env_passthrough_set.append(e)
 
         # Construct environment variable arguments
@@ -209,10 +211,9 @@ class SlurmDeployment:
             if env_export_set
             else ""
         )
-        # Use --export for pass-through variables from host environment
-        s_env_passthrough = (
-            f"--export={','.join(env_passthrough_set)} " if env_passthrough_set else ""
-        )
+        # Slurm exports the submit environment by default. Keep container steps
+        # isolated, while preserving the job id needed for Slurm-scoped telemetry.
+        s_env_export_arg = f"--export={','.join(env_passthrough_set)} "
 
         s_mnt = ",".join([v.to_str() for v in container.volumes])
 
@@ -238,11 +239,12 @@ class SlurmDeployment:
         if not container.service_config.remap_root:
             cmd += " --no-container-remap-root "
 
-        escaped_command = container.command.replace("$$", r"\$")
+        expanded_command = container.command.replace("$$", "$")
+        bash_command = shlex.quote(f"{s_gpu}{s_env_exports}{expanded_command}")
 
         if mode in (RunMode.ONESHOT, RunMode.SERVER):
-            cmd += f"--output={s_log} --error={s_log} {s_env_passthrough}"
-            cmd += f'bash -c "{s_gpu}{s_env_exports}{escaped_command}"'
+            cmd += f"--output={s_log} --error={s_log} {s_env_export_arg}"
+            cmd += f"bash -c {bash_command}"
         else:
             raise ValueError(f"Unknown run mode: {mode}")
         return cmd
@@ -294,7 +296,8 @@ class SlurmDeployment:
                     if timeout is not None and s_waited > timeout:
                         if raise_on_timeout:
                             raise TimeoutError(
-                                f"Address {service_instance.address} of {container.name} "
+                                f"Address {service_instance.address} of "
+                                f"{container.name} "
                                 "did not open in time"
                             )
                         else:

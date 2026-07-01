@@ -863,6 +863,114 @@ class DriverResponses:
 
 
 @dataclasses.dataclass
+class TrafficPredictionAtTime:
+    """Traffic model predictions produced for one query timestamp."""
+
+    query_time_us: int
+    object_trajectories: dict[str, geometry.Trajectory]
+
+
+@dataclasses.dataclass
+class TrafficPredictions:
+    """Traffic forecast trajectories keyed by their query timestamps."""
+
+    timestamps_us: list[int] = dataclasses.field(default_factory=list)
+    per_timestep_predictions: list[TrafficPredictionAtTime] = dataclasses.field(
+        default_factory=list
+    )
+    artists: dict[str, list[plt.Artist]] | None = None
+
+    def add_prediction(
+        self,
+        query_time_us: int,
+        object_trajectories: dict[str, geometry.Trajectory],
+    ) -> None:
+        if not object_trajectories:
+            return
+        self.timestamps_us.append(int(query_time_us))
+        self.per_timestep_predictions.append(
+            TrafficPredictionAtTime(
+                query_time_us=int(query_time_us),
+                object_trajectories=object_trajectories,
+            )
+        )
+
+    def get_prediction_for_time(
+        self,
+        time: int,
+        *,
+        fallback: Literal["exact", "previous"] = "previous",
+    ) -> TrafficPredictionAtTime | None:
+        if not self.timestamps_us:
+            return None
+        if fallback == "exact":
+            idx = np.searchsorted(self.timestamps_us, time)
+            if idx == len(self.timestamps_us) or self.timestamps_us[idx] != time:
+                return None
+            return self.per_timestep_predictions[idx]
+        if fallback != "previous":
+            raise ValueError(f"Unsupported traffic-prediction fallback: {fallback}")
+        idx = np.searchsorted(self.timestamps_us, time, side="right") - 1
+        if idx < 0:
+            return None
+        return self.per_timestep_predictions[idx]
+
+    @staticmethod
+    def _future_xy_points(
+        trajectory: geometry.Trajectory,
+        time: int,
+    ) -> np.ndarray:
+        if trajectory.is_empty() or trajectory.time_range_us.stop <= time:
+            return np.zeros((0, 2), dtype=np.float32)
+
+        future_positions: list[np.ndarray] = []
+        if time in trajectory.time_range_us:
+            future_positions.append(trajectory.interpolate_pose(int(time)).vec3[:2])
+        for idx, ts_us in enumerate(trajectory.timestamps_us):
+            if int(ts_us) > time:
+                future_positions.append(trajectory.positions[idx, :2])
+        if len(future_positions) < 2:
+            return np.zeros((0, 2), dtype=np.float32)
+        return np.asarray(future_positions, dtype=np.float32)
+
+    def remove_artists(self) -> None:
+        if self.artists is None:
+            return
+        for artist_list in self.artists.values():
+            for artist in artist_list:
+                artist.remove()
+        self.artists = None
+
+    def render_at_time(
+        self,
+        ax: plt.Axes,
+        time: int,
+    ) -> dict[str, list[plt.Artist]]:
+        self.remove_artists()
+        prediction = self.get_prediction_for_time(time, fallback="previous")
+        if prediction is None:
+            self.artists = {}
+            return self.artists
+
+        artists: dict[str, list[plt.Artist]] = {}
+        for object_id, trajectory in prediction.object_trajectories.items():
+            future_xy = self._future_xy_points(trajectory, time)
+            if future_xy.shape[0] < 2:
+                continue
+            artists[object_id] = ax.plot(
+                future_xy[:, 0],
+                future_xy[:, 1],
+                "-",
+                color="magenta",
+                linewidth=1.2,
+                alpha=0.75,
+                zorder=9,
+            )
+        self.artists = artists
+        return artists
+
+
+@dataclasses.dataclass
 class ActorPolygonsAtTime:
     """Captures actor polygons at a given time. Crucially also has an STRtree.
 
@@ -960,6 +1068,7 @@ class ActorPolygonsAtTime:
         center: shapely.Point | None = None,
         max_dist: float | None = None,
         only_agents: list[str] | None = None,
+        show_labels: bool = False,
     ) -> dict[str, list[plt.Artist]]:
         """Render the actor polygons.
 
@@ -1008,6 +1117,29 @@ class ActorPolygonsAtTime:
                     polygon.exterior.xy[0], polygon.exterior.xy[1]
                 )
                 old_agent_artists[agent_id][1].set_xy(polygon.exterior.coords)
+                if show_labels and agent_id != "EGO":
+                    label_xy = polygon.centroid.coords[0]
+                    if len(old_agent_artists[agent_id]) >= 3:
+                        label_artist = old_agent_artists[agent_id][2]
+                        label_artist.set_position(label_xy)
+                        label_artist.set_text(agent_id)
+                        label_artist.set_visible(True)
+                    else:
+                        old_agent_artists[agent_id].append(
+                            ax.text(
+                                label_xy[0],
+                                label_xy[1],
+                                agent_id,
+                                fontsize=6,
+                                color="black",
+                                ha="center",
+                                va="center",
+                                zorder=20,
+                            )
+                        )
+                elif len(old_agent_artists[agent_id]) >= 3:
+                    old_agent_artists[agent_id][2].remove()
+                    old_agent_artists[agent_id] = old_agent_artists[agent_id][:2]
                 new_agent_artists[agent_id] = old_agent_artists[agent_id]
             else:
                 new_artists = []
@@ -1027,6 +1159,20 @@ class ActorPolygonsAtTime:
                         alpha=0.1 if agent_id != "EGO" else 0.3,
                     )
                 )
+                if show_labels and agent_id != "EGO":
+                    label_xy = polygon.centroid.coords[0]
+                    new_artists.append(
+                        ax.text(
+                            label_xy[0],
+                            label_xy[1],
+                            agent_id,
+                            fontsize=6,
+                            color="black",
+                            ha="center",
+                            va="center",
+                            zorder=20,
+                        )
+                    )
                 new_agent_artists[agent_id] = new_artists
 
         # Remove unused artists
@@ -1094,6 +1240,7 @@ class ActorPolygons:
         center: shapely.Point | None = None,
         max_dist: float | None = None,
         only_agents: list[str] | None = None,
+        show_labels: bool = False,
     ) -> dict[str, list[plt.Artist]]:
         """Render the actor polygons at a given time.
 
@@ -1115,7 +1262,7 @@ class ActorPolygons:
         """
         polygons_at_time = self.get_polygons_at_time(time)
         self.artists = polygons_at_time.render(
-            ax, self.artists, center, max_dist, only_agents
+            ax, self.artists, center, max_dist, only_agents, show_labels=show_labels
         )
         return self.artists
 
@@ -1772,6 +1919,9 @@ class ScenarioEvalInput:
     # Driver responses (optional, needed for some metrics)
     driver_responses: DriverResponses | None = None
 
+    # Traffic model forecast trajectories (optional, used for video rendering)
+    traffic_predictions: TrafficPredictions | None = None
+
     # Vector map (needed for offroad detection)
     vec_map: VectorMap | None = None
 
@@ -1819,6 +1969,10 @@ class SimulationResult:
     actor_polygons: ActorPolygons
     cameras: Cameras
     routes: Routes
+    # Traffic model forecast trajectories for non-static actors
+    traffic_predictions: TrafficPredictions = dataclasses.field(
+        default_factory=TrafficPredictions
+    )
     # See ScenarioEvalInput.force_gt_duration_us.
     force_gt_duration_us: int | None = None
 
@@ -1918,6 +2072,10 @@ class SimulationResult:
                 ),
             )
 
+        traffic_predictions = scenario_input.traffic_predictions
+        if traffic_predictions is None:
+            traffic_predictions = TrafficPredictions()
+
         # Create actor polygons from trajectories
         actor_polygons = ActorPolygons.from_actor_trajectories(actor_trajectories)
 
@@ -1935,6 +2093,7 @@ class SimulationResult:
             actor_trajectories=actor_trajectories,
             driver_estimated_trajectory=driver_estimated_trajectory,
             driver_responses=driver_responses,
+            traffic_predictions=traffic_predictions,
             ego_recorded_ground_truth_trajectory=ego_recorded_ground_truth_trajectory,
             vec_map=scenario_input.vec_map,
             actor_polygons=actor_polygons,

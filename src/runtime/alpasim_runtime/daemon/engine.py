@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
+from alpasim_runtime.config import RendererKind
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
 from alpasim_runtime.errors import UnknownSceneError
 from alpasim_runtime.runtime_context import (
@@ -274,19 +275,48 @@ class DaemonEngine:
             nr_workers=runtime_context.config.user.nr_workers,
         )
 
-        worker_runtime = start_worker_runtime(
-            config=runtime_context.config,
-            user_config_path=self._user_config_path,
-            num_consumers=num_consumers_per_worker,
-            log_dir=self._log_dir,
-            eval_config=runtime_context.eval_config,
-            version_ids=runtime_context.version_ids,
-        )
+        worker_runtime: WorkerRuntime | None = None
+        try:
+            worker_runtime = start_worker_runtime(
+                config=runtime_context.config,
+                user_config_path=self._user_config_path,
+                num_consumers=num_consumers_per_worker,
+                log_dir=self._log_dir,
+                eval_config=runtime_context.eval_config,
+                version_ids=runtime_context.version_ids,
+            )
 
-        scheduler = DaemonScheduler(
-            pools=runtime_context.pools,
-            runtime=worker_runtime,
-        )
+            scene_affine = runtime_context.config.user.scene_affine_dispatch
+            if runtime_context.config.user.renderer.kind == RendererKind.video_model:
+                if scene_affine:
+                    logger.info(
+                        "Scene-affine dispatch auto-disabled: video_model renderer "
+                        "has no per-scene GPU cache"
+                    )
+                scene_affine = False
+
+            scheduler = DaemonScheduler(
+                pools=runtime_context.pools,
+                runtime=worker_runtime,
+                scene_affine_dispatch=scene_affine,
+                cache_refresh_interval_s=(
+                    runtime_context.config.user.cache_refresh_interval_s
+                    if scene_affine
+                    else None
+                ),
+            )
+        except Exception:
+            if worker_runtime is not None:
+                await worker_runtime.stop()
+            raise
+
+        try:
+            if scene_affine:
+                await scheduler.warm_start()
+        except BaseException:
+            await scheduler.shutdown(reason="warm_start failed")
+            await worker_runtime.stop()
+            raise
 
         self._version_ids = runtime_context.version_ids
         self._runtime_context = runtime_context

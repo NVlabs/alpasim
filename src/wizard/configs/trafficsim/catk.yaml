@@ -1,0 +1,56 @@
+# @package _global_
+# CATK-based trafficsim service (integrated into the base image).
+# Usage: trafficsim=catk
+#
+# Runs the CATK traffic prediction model from the alpasim base image.
+# Requires model weights checked in via Git LFS under data/trafficsim-models.
+#
+# Static CATK service settings are written to trafficsim-config.yaml. Dynamic
+# wizard values such as the allocated port and sceneset path remain CLI overrides.
+
+defaults:
+  - _self_
+
+runtime:
+  endpoints:
+    trafficsim:
+      skip: false
+
+services:
+  trafficsim:
+    image: ${services.runtime.image}
+    volumes:
+      - "${scenes.scene_cache}:/mnt/nre-data"
+      - "${defines.trafficsim_models}:/mnt/trafficsim-models"
+      - "${wizard.log_dir}:/mnt/log_dir"
+      - "${repo-relative:'src'}:/repo/src"
+    command:
+      - "uv run catk_trafficsim_server"
+      - "--config-path=/mnt/log_dir"
+      - "--config-name=trafficsim-config.yaml"
+      - "server.port={port}"
+      - "catk.loader.usdz_folder=/mnt/nre-data/{sceneset}"
+
+trafficsim:
+  hydra:
+    job:
+      chdir: false
+  server:
+    host: 0.0.0.0
+    port: 6200
+    max_workers: 1
+    log_file: /mnt/log_dir/txt-logs/trafficsim.log
+  catk:
+    device: cuda
+    filter_distance_th: 100.0
+    predict_static: false
+    min_valid_history_steps: 5
+    loader:
+      usdz_folder: /mnt/nre-data
+      time_step: 0.1
+      num_history_steps: 16
+      minimum_future_steps: 45
+    model:
+      config_path: /mnt/trafficsim-models/catk_v120/config.yaml
+      ckpt_path: /mnt/trafficsim-models/catk_v120/latest.ckpt
+      token_pkl_dir: /mnt/trafficsim-models/tokens

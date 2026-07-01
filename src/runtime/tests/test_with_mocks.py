@@ -37,6 +37,18 @@ _MOCK_CAMERA_IDS = (
 )
 
 
+def _write_run_metadata(log_dir: Path, run_name: str) -> None:
+    (log_dir / "run_metadata.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "run_uuid": f"{run_name}-uuid",
+                "run_name": run_name,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _make_available_cameras() -> sensorsim_pb2.AvailableCamerasReturn:
     response = sensorsim_pb2.AvailableCamerasReturn()
     for logical_id in _MOCK_CAMERA_IDS:
@@ -129,7 +141,11 @@ async def _start_fake_sensorsim_server(
 
 
 def _write_sensorsim_mock_configs(
-    tmp_path: Path, sensorsim_address: str, *, batch_render: bool = False
+    tmp_path: Path,
+    sensorsim_address: str,
+    *,
+    telemetry_worker_port: int,
+    batch_render: bool = False,
 ) -> dict:
     base_user_config = yaml.safe_load(
         (_MOCK_DATA_DIR / "user-config.yaml").read_text(encoding="utf-8")
@@ -137,6 +153,10 @@ def _write_sensorsim_mock_configs(
     base_user_config["scene_provider"]["usdz"]["data_dir"] = str(_MOCK_DATA_DIR)
     base_user_config["endpoints"]["renderer"]["skip"] = False
     base_user_config["endpoints"]["renderer"]["n_concurrent_rollouts"] = 1
+    base_user_config["prometheus"] = {
+        "worker_ports": [telemetry_worker_port],
+        "url": "http://127.0.0.1:9090",
+    }
     base_user_config["simulation_config"]["n_sim_steps"] = 1
     if batch_render:
         base_user_config["simulation_config"]["render_bundling"] = "BATCH_RENDER_RGB"
@@ -176,10 +196,13 @@ async def test_sensorsim_mocks_with_fake_server(tmp_path: Path):
     servicer = _FakeSensorsimServicer()
     server, address = await _start_fake_sensorsim_server(servicer)
     try:
-        configs = _write_sensorsim_mock_configs(tmp_path, address)
+        configs = _write_sensorsim_mock_configs(
+            tmp_path,
+            address,
+            telemetry_worker_port=0,
+        )
 
-        run_metadata = tmp_path / "run_metadata.yaml"
-        run_metadata.write_text("run_name: test_sensorsim_mocks\n")
+        _write_run_metadata(tmp_path, "test_sensorsim_mocks")
 
         parser = create_arg_parser()
         parsed_args = parser.parse_args(
@@ -210,10 +233,14 @@ async def test_sensorsim_mocks_batch_render(tmp_path: Path):
     servicer = _FakeSensorsimServicer()
     server, address = await _start_fake_sensorsim_server(servicer)
     try:
-        configs = _write_sensorsim_mock_configs(tmp_path, address, batch_render=True)
+        configs = _write_sensorsim_mock_configs(
+            tmp_path,
+            address,
+            telemetry_worker_port=0,
+            batch_render=True,
+        )
 
-        run_metadata = tmp_path / "run_metadata.yaml"
-        run_metadata.write_text("run_name: test_sensorsim_batch\n")
+        _write_run_metadata(tmp_path, "test_sensorsim_batch")
 
         parser = create_arg_parser()
         parsed_args = parser.parse_args(
@@ -297,7 +324,12 @@ async def _start_fake_video_model_server(
     return server, f"127.0.0.1:{port}"
 
 
-def _write_video_model_mock_configs(tmp_path: Path, video_model_address: str) -> dict:
+def _write_video_model_mock_configs(
+    tmp_path: Path,
+    video_model_address: str,
+    *,
+    telemetry_worker_port: int,
+) -> dict:
     base_user_config = yaml.safe_load(
         (_MOCK_DATA_DIR / "user-config.yaml").read_text(encoding="utf-8")
     )
@@ -306,6 +338,10 @@ def _write_video_model_mock_configs(tmp_path: Path, video_model_address: str) ->
     base_user_config.pop("extra_cameras", None)
     base_user_config["endpoints"]["renderer"]["skip"] = False
     base_user_config["endpoints"]["renderer"]["n_concurrent_rollouts"] = 1
+    base_user_config["prometheus"] = {
+        "worker_ports": [telemetry_worker_port],
+        "url": "http://127.0.0.1:9090",
+    }
     base_user_config["renderer"] = {
         "kind": "video_model",
         "video_model_config": {
@@ -355,10 +391,13 @@ async def test_video_model_mocks(tmp_path: Path):
     servicer = _FakeWorldModelServicer()
     server, address = await _start_fake_video_model_server(servicer)
     try:
-        configs = _write_video_model_mock_configs(tmp_path, address)
+        configs = _write_video_model_mock_configs(
+            tmp_path,
+            address,
+            telemetry_worker_port=0,
+        )
 
-        run_metadata = tmp_path / "run_metadata.yaml"
-        run_metadata.write_text("run_name: test_video_model_mocks\n")
+        _write_run_metadata(tmp_path, "test_video_model_mocks")
 
         parser = create_arg_parser()
         parsed_args = parser.parse_args(

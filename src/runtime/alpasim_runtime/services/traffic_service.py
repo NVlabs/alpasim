@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import random
-import re
 from typing import Type
 
 import numpy as np
@@ -29,19 +28,6 @@ from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
 from alpasim_utils.geometry import Pose, pose_to_grpc, trajectory_to_grpc
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_map_id(scene_id: str) -> str:
-    """Extract map ID from scene ID."""
-    # Assuming scene_id clipgt-<sequence_id>
-    pattern = r"^clipgt-([0-9a-fA-F-]{36})$"
-    match = re.match(pattern, scene_id)
-    if match is None:
-        # Fallback to more generic pattern
-        match = re.search(r"([a-fA-F0-9-]+)$", scene_id)
-        if match is None:
-            raise RuntimeError("scene_id does not contain a valid map ID")
-    return match.group(1)
 
 
 class TrafficService(ServiceBase[TrafficServiceStub]):
@@ -69,9 +55,12 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         ego_aabb = cfg.ego_aabb
         gt_ego_aabb_trajectory = cfg.gt_ego_aabb_trajectory
         start_timestamp_us = cfg.start_timestamp_us
-
-        # Extract map ID from scene ID
-        map_id = _extract_map_id(scene_id)
+        # Traffic responses are committed on the following StepEvent, so keep
+        # CATK on logged traffic state through the last frame that runtime
+        # renders from force-GT.
+        handover_time_us = (
+            start_timestamp_us + cfg.force_gt_duration_us + cfg.control_timestep_us
+        )
 
         # Convert traffic objects to ObjectTrajectory format
         logged_object_trajectories = []
@@ -94,16 +83,17 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
                     trajectory=trajectory_to_grpc(obj.trajectory),
                     aabb=obj.aabb.to_grpc(),
                     is_static=obj.is_static,
+                    label_class=obj.label_class,
                 )
             )
 
         # Create session request
         session_request = TrafficSessionRequest(
             session_uuid=session_info.uuid,
-            map_id=map_id,
+            scene_id=scene_id,
             random_seed=random.randint(0, 2**32 - 1),
             logged_object_trajectories=logged_object_trajectories,
-            handover_time_us=start_timestamp_us + int(1e6),  # Add 1 second for warm-up
+            handover_time_us=handover_time_us,
         )
 
         # Log and start session

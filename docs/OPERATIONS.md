@@ -276,9 +276,10 @@ After a run completes, results are in `wizard.log_dir` (e.g., `runs/{RUN_DIR}/`)
   - `metrics_results.png` - Visual summary of driving quality metrics
   - `metrics_unprocessed.parquet` - Combined metrics from all rollouts
   - `videos/` - Organized by violation types
-- **`metrics/`** - Performance profiling data:
-  - `metrics.prom` - Prometheus metrics from simulation
-  - `metrics_plot.png` - Performance visualization (CPU/GPU/RPC metrics)
+- **`prometheus/`** - Performance profiling data:
+  - `data/` - local Prometheus TSDB for the run
+  - `targets/alpasim.json` - generated Prometheus file-SD targets
+- **`metrics_plot.png`** - Performance visualization (CPU/GPU/RPC metrics)
 - **`txt-logs/`** - Service logs for debugging
 - **`wizard-config.yaml`** - Resolved configuration used for this run
 
@@ -334,7 +335,7 @@ problematic scenarios.
 After each simulation run, Alpasim automatically generates a comprehensive performance
 visualization:
 
-**Location**: `runs/{RUN_DIR}/metrics/metrics_plot.png`
+**Location**: `runs/{RUN_DIR}/metrics_plot.png`
 
 This 3×3 grid plot includes:
 
@@ -349,7 +350,7 @@ This 3×3 grid plot includes:
 
 - Rollout Duration histogram - Total time per rollout
 - Step Duration histogram - Time per simulation step
-- Service Configuration table - Shows replica counts and capacity
+- Run summary - Shows runtime idle fraction and seconds per rollout
 
 **Row 3: Resource Utilization**
 
@@ -423,8 +424,6 @@ request addresses override the configured driver pool for that RPC only.
 
 To stop the server, call `RuntimeService.shut_down()`. In managed deployments,
 Docker Compose or Slurm tears down backing services after the runtime exits.
-The legacy `runtime.endpoints.do_shutdown` setting is kept for compatibility
-but no longer controls backing-service RPC shutdown.
 
 When running a generated `docker-compose.yaml` manually for one-shot simulations,
 start Compose with `--exit-code-from runtime-0`, for example:

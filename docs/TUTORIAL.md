@@ -50,6 +50,8 @@ Let's start by executing a run with default settings.
 1. Run the wizard to create the necessary config files, download the scene (if necessary), and run a
    simulation: `uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial`. This will create a
    `tutorial/` directory with all necessary config files and run the simulation.
+1. Alternatively, to run with the catk traffic model enabled, run:
+   `uv run alpasim_wizard deploy=local topology=1gpu driver=vavam trafficsim=catk wizard.log_dir=$PWD/tutorial_catk`.
 
 ## Results structure
 
@@ -122,10 +124,18 @@ tutorial/
 ├── eval-config.yaml
 ├── generated-network-config.yaml
 ├── generated-user-config-0.yaml
-├── metrics
+├── metrics_plot.png
+├── prometheus
+│   ├── data
+│   ├── process-exporter.yml
+│   ├── prometheus.yml
+│   ├── rules
+│   │   └── alpasim-recording-rules.yml
+│   └── targets
+│       └── alpasim.json
 ├── run_metadata.yaml
 ├── run.sh
-├── trafficsim-config.yaml
+├── trafficsim-config.yaml  # optional
 ├── txt-logs
 ├── wizard-config-loadable.yaml
 └── wizard-config.yaml
@@ -153,18 +163,24 @@ Some noteworthy files and directories:
   - `metrics_results.png` - Visual summary of driving quality metrics
   - `metrics_unprocessed.parquet` - Combined metrics from all rollouts
   - `videos/` - Videos organized by violation type (collision_at_fault, offroad, etc.)
-* `metrics/` contains performance profiling data (see
-  [OPERATIONS.md](OPERATIONS.md#how-do-i-view-performance-metrics) for details):
-  - `metrics.prom` - Prometheus metrics from simulation
-  - `metrics_plot.png` - Performance visualization (CPU/GPU/RPC metrics)
+* `prometheus/` contains performance telemetry data and Prometheus config:
+  - `prometheus/data/` - local Prometheus TSDB for the run
+  - `prometheus/prometheus.yml` - generated local Prometheus scrape config
+  - `prometheus/targets/alpasim.json` - generated file-SD targets
+  - `prometheus/rules/alpasim-recording-rules.yml` - generated recording rules for common
+    runtime dashboard queries
+  - `prometheus/process-exporter.yml` - generated process grouping config
+* `metrics_plot.png` is the automatically generated performance visualization (CPU/GPU/RPC
+  metrics). See [Performance telemetry](TELEMETRY.md) to inspect live or persisted metrics with
+  Prometheus and Grafana.
 * `driver` is a directory with logs written by the driver service, useful to debug policy-internal
   problems.
 * `wizard-config.yaml` contains the config the wizard used for this run **after applying the
   inheritance of hydra**. This is useful for debugging configuration issues.
 * `generated-user-config-{ARRAY_ID}.yaml` contains an expanded version of the simulation config
   provided by the user, possibly split into chunks when simulating on multiple nodes.
-* `trafficsim-config.yaml`. A copy of the traffic simulation config used for simulation, useful for
-  debugging traffic simulation.
+* `trafficsim-config.yaml` is present only for traffic backends that consume a wizard-generated
+  backend config. It is useful for debugging backend settings.
 * `generated-network-config.yaml` describes which services listen on which ports during simulation.
   Not useful unless debugging the simulator itself.
 
@@ -181,7 +197,6 @@ The console contains logs from all microservices, and is the first place one sho
 something goes wrong. When an error happens (for example the `rollouts` directory does not appear),
 it's best to consult that log to see where the first errors occurred. The microservices may produce
 additional logs that can be useful for debugging, but that is not covered here.
-
 
 ### Configuration axes
 

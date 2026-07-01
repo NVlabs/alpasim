@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.91.0"
+version = "0.96.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -19,6 +19,7 @@ physics = ["alpasim-physics"]
 tools = ["alpasim-tools"]
 driver = ["alpasim_driver"]
 wizard = ["alpasim_wizard"]
+trafficsim = ["alpasim-trafficsim"]
 
 # -- Composite extras --
 # All core (non-plugin) packages
@@ -33,6 +34,7 @@ all = [
   "alpasim-tools",
   "alpasim_driver",
   "alpasim_wizard",
+  "alpasim-trafficsim",
 ]
 
 # -- Plugin extras --
@@ -51,6 +53,7 @@ members = [
   "src/physics",
   "src/tools",
   "src/driver",
+  "src/trafficsim",
   "plugins/*",
 ]
 
@@ -67,6 +70,7 @@ alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
 trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
+alpasim-trafficsim = { workspace = true }
 
 [tool.uv]
 python-preference = "only-managed"

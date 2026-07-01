@@ -1,5 +1,9 @@
 nr_workers: 1
 
+prometheus:
+  url: http://127.0.0.1:9090
+  worker_ports: [0]
+
 scene_provider:
   kind: usdz
   usdz:

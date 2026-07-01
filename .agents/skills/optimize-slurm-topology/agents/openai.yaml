@@ -1,0 +1,13 @@
+interface:
+  display_name: "Optimize Slurm Topology"
+  short_description: "Tune AlpaSim Slurm topology throughput."
+  default_prompt: |
+    Optimize an AlpaSim Slurm topology using persistent local telemetry.
+    Treat `alpasim:simulation_seconds_per_rollout:avg` as the primary
+    throughput target once it has stabilized, typically after 30-45 minutes.
+    Use `alpasim:simulation_seconds_per_rollout:rate5m` only as an early and
+    recent-behavior diagnostic.
+    Use the Grafana RPC latency distribution heatmaps and recording rules
+    `alpasim:driver_drive_rpc_duration_seconds_bucket:rate1m` and
+    `alpasim:nre_render_rpc_duration_seconds_bucket:rate1m` to distinguish
+    driver/NRE tail spikes from broad service latency shifts.

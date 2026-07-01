@@ -105,6 +105,7 @@ class DockerComposeDeployment:
             Docker Compose service configuration dict
         """
         ret: dict[str, Any] = {}
+        service_config = container.service_config
         use_host_network = self.context.cfg.wizard.debug_flags.use_localhost
         if use_host_network:
             # Tell Docker to use the host network
@@ -112,16 +113,16 @@ class DockerComposeDeployment:
         else:
             ret["networks"] = ["microservices_network"]
         ret["volumes"] = [v.to_str() for v in container.volumes]
-        ret["pull_policy"] = container.service_config.pull_policy
-        ret["image"] = container.service_config.image
+        ret["pull_policy"] = service_config.pull_policy
+        ret["image"] = service_config.image
 
         repo_root = str(find_repo_root(__file__))
 
-        if not container.service_config.external_image:
+        if not service_config.external_image:
             build_config: dict[str, Any] = {
                 "context": repo_root,
                 "dockerfile": "Dockerfile",
-                "tags": [container.service_config.image],
+                "tags": [service_config.image],
             }
             if _netrc_secret_file() is not None:
                 build_config["secrets"] = ["netrc"]
@@ -134,7 +135,7 @@ class DockerComposeDeployment:
             # We use \$ to declare fields that should not be interpreted by
             # 'our' OmegaConf parser, but by downstream parsers in the service.
             # Furhtermore, for docker-compose, we need to escape $ as $$
-            command = command.replace(r"\$", "$$")
+            command = command.replace("$", "$$")
             # Set permissive umask so files written to bind-mounted volumes
             # are accessible by the host user (containers run as root).
             command = "umask 0000\n" + command
@@ -152,8 +153,14 @@ class DockerComposeDeployment:
             container.name == "runtime"
             and self.context.cfg.wizard.run_mode == RunMode.SERVER
         )
+        ports: list[str] = []
+        if not use_host_network and container.published_ports:
+            ports.extend(
+                f"{port}:{port}" for port in container.published_ports.values()
+            )
         if addresses and (use_host_network or publish_runtime_server_port):
-            ports = [f"{addr.port}:{addr.port}" for addr in addresses]
+            ports.extend(f"{addr.port}:{addr.port}" for addr in addresses)
+        if ports:
             ret["ports"] = ports
 
         if container.gpu is not None:
@@ -165,6 +172,20 @@ class DockerComposeDeployment:
                                 "driver": "nvidia",
                                 "capabilities": ["gpu"],
                                 "device_ids": [str(container.gpu)],
+                            }
+                        ]
+                    }
+                }
+            }
+        elif container.name == "prometheus" and self.context.num_gpus > 0:
+            ret["deploy"] = {
+                "resources": {
+                    "reservations": {
+                        "devices": [
+                            {
+                                "driver": "nvidia",
+                                "count": "all",
+                                "capabilities": ["gpu"],
                             }
                         ]
                     }
@@ -192,26 +213,13 @@ class DockerComposeDeployment:
             service = self._to_docker_compose_service(c)
             services[c.uuid] = service
 
-        # Add runtime services last
-        for c in container_set.runtime or []:
-            service = self._to_docker_compose_service(c)
-            # Runtime needs host PID namespace for process monitoring
-            service["pid"] = "host"
-            # Runtime needs access to all GPUs for telemetry/resource monitoring
-            service["deploy"] = {
-                "resources": {
-                    "reservations": {
-                        "devices": [
-                            {
-                                "driver": "nvidia",
-                                "count": "all",
-                                "capabilities": ["gpu"],
-                            }
-                        ]
-                    }
-                }
-            }
-            services[c.uuid] = service
+        service = self._to_docker_compose_service(container_set.prometheus)
+        services[container_set.prometheus.uuid] = service
+
+        # Add runtime service last
+        if container_set.runtime is not None:
+            service = self._to_docker_compose_service(container_set.runtime)
+            services[container_set.runtime.uuid] = service
 
         # Create compose structure with ordered services
         compose: dict[str, Any] = {
