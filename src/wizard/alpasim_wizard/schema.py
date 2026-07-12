@@ -87,8 +87,12 @@ class RunMode(Enum):
 
 @dataclass
 class WizardPrometheusConfig:
+    """Prometheus ownership, identity, and discovery settings."""
+
     scrape_interval: str = "5s"
     file_sd_dir: str | None = None
+    start_prometheus: bool = True
+    run_uuid: str | None = None
 
 
 @dataclass
@@ -136,6 +140,11 @@ class WizardConfig:
     # SLURM nodes where the batch step binds all CPUs (e.g. non-exclusive
     # allocations on CI nodes), otherwise overlapping steps are killed.
     slurm_cpu_bind_none: bool = False
+
+    # Run GPU services through CUDA MPS so kernels from co-located processes
+    # execute concurrently instead of time-slicing between CUDA contexts.
+    # Starts a per-job MPS control daemon on the node. SLURM only.
+    enable_mps: bool = False
 
     # External service addresses for services running outside the deployment.
     # Maps service name to list of addresses (e.g., {"driver": ["localhost:6789"]}).

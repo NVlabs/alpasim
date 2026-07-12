@@ -5,6 +5,10 @@ defines:
   nre_cache_size: 17  # renderer.n_concurrent_rollouts + 1
   physics_cache_size: 6
 
+trafficsim:
+  server:
+    max_workers: 16
+
 eval:
   num_processes: 32
 
@@ -26,8 +30,10 @@ services:
     gpus: null
 
   trafficsim:
+    # CATK loads a complete model per replica. Keep one model per GPU; four
+    # replicas per GPU exhaust node memory before the runtime can start.
     replicas_per_container: 1
-    gpus: [0, 1]
+    gpus: [0, 1, 2, 3]
 
 runtime:
   nr_workers: 8
@@ -37,6 +43,7 @@ runtime:
     # DRIV: 4 x 8  x 2  = 64
     # PHYS: 4 x 4  x 4  = 64
     # CONT: 1 (CPU) x 16 x 4 = 64
+    # TRAF: 4 x 1  x 16 = 64
     renderer:
       n_concurrent_rollouts: 16
     driver:
@@ -48,4 +55,4 @@ runtime:
     controller:
       n_concurrent_rollouts: 4
     trafficsim:
-      skip: true
+      n_concurrent_rollouts: 16

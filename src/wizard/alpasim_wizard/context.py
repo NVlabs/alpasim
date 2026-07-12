@@ -198,10 +198,11 @@ class WizardContext:
             artifact_list=artifact_list,
             num_gpus=detect_gpus(),
         )
-        logger.info(
-            "Prometheus UI: http://localhost:%d",
-            telemetry_ports.prometheus,
-        )
+        if cfg.wizard.prometheus.start_prometheus:
+            logger.info(
+                "Prometheus UI: http://localhost:%d",
+                telemetry_ports.prometheus,
+            )
         logger.info(
             "Prometheus file-SD dir: %s",
             cfg.wizard.prometheus.file_sd_dir,

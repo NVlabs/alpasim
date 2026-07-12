@@ -63,6 +63,7 @@ def _make_prediction_input(
         speed=10.0,
         acceleration=0.0,
         ego_pose_history=[],
+        inference_seed=seed,
     )
 
 

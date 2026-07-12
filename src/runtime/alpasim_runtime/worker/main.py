@@ -26,9 +26,11 @@ from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import Queue
 from queue import Empty as QueueEmpty
 
+from alpasim_grpc.v0 import runtime_pb2
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import RendererKind, UserSimulatorConfig
+from alpasim_runtime.errors import RolloutError
 from alpasim_runtime.event_loop import create_event_rollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
@@ -178,6 +180,11 @@ async def run_single_rollout(
             error=str(exc),
             error_traceback=tb,
             rollout_uuid=rollout.rollout_uuid if rollout else None,
+            error_code=(
+                exc.error_code
+                if isinstance(exc, RolloutError)
+                else runtime_pb2.ROLLOUT_ERROR_CODE_UNSPECIFIED
+            ),
         )
 
 
@@ -277,22 +284,32 @@ async def run_worker_loop(
                 shutdown_event.set()
                 break
 
-            # Process the job
-            result = await run_single_rollout(
-                job=job,
-                user_config=user_config,
-                data_source=scene_loader.get_data_source(job.scene_id),
-                camera_catalog=camera_catalog,
-                version_ids=version_ids,
-                rollouts_dir=rollouts_dir,
-                eval_config=eval_config,
-                eval_executor=eval_executor,
-            )
-            result_queue.put(result)
-            rollout_count += 1
             telemetry_ctx = try_get_context()
             if telemetry_ctx is not None:
-                telemetry_ctx.record_rollout_complete()
+                telemetry_ctx.record_renderer_rollout_started(
+                    dispatch_kind=job.dispatch_kind,
+                    scheduler_wait_seconds=job.scheduler_wait_seconds,
+                )
+            try:
+                result = await run_single_rollout(
+                    job=job,
+                    user_config=user_config,
+                    data_source=scene_loader.get_data_source(job.scene_id),
+                    camera_catalog=camera_catalog,
+                    version_ids=version_ids,
+                    rollouts_dir=rollouts_dir,
+                    eval_config=eval_config,
+                    eval_executor=eval_executor,
+                )
+            finally:
+                if telemetry_ctx is not None:
+                    telemetry_ctx.record_renderer_rollout_stopped()
+            result_queue.put(result)
+            rollout_count += 1
+            if telemetry_ctx is not None:
+                telemetry_ctx.record_rollout_finished(
+                    "completed" if result.success else "failed"
+                )
 
     # Spawn num_consumers consumer tasks -- each handles one job at a time
     try:
@@ -366,8 +383,9 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     # TelemetryContext for live Prometheus scraping.
     async with TelemetryContext(
-        worker_id=args.worker_id,
         port=args.telemetry_port,
+        worker_id=args.worker_id,
+        job_queue_depth_fn=args.job_queue.qsize,
     ):
         await run_worker_loop(
             worker_id=args.worker_id,

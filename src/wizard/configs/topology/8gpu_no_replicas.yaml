@@ -7,6 +7,10 @@
 defines:
   nre_cache_size: 3  # renderer.n_concurrent_rollouts + 1
 
+trafficsim:
+  server:
+    max_workers: 10
+
 services:
   renderer:
     gpus: [3, 4, 5, 6, 7]
@@ -52,4 +56,3 @@ runtime:
 
     trafficsim:
       n_concurrent_rollouts: 10
-      skip: false

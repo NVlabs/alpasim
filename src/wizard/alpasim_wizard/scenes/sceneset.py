@@ -175,6 +175,7 @@ def scan_local_usdz_directory(usdz_dir: str) -> tuple[pl.DataFrame, pl.DataFrame
                         {
                             "test_suite_id": str(ArtifactRepository.LOCAL),
                             "scene_id": scene_id,
+                            "uuid": uuid,
                         }
                     )
 
@@ -244,7 +245,7 @@ class USDZManager:
         else:
             sim_scenes = _load_and_merge_csvs(cfg.scenes_csv, dedup_key="uuid")
             sim_suites = _load_and_merge_csvs(
-                cfg.suites_csv, dedup_key=["test_suite_id", "scene_id"]
+                cfg.suites_csv, dedup_key=["test_suite_id", "uuid"]
             )
             cache_dir = cfg.scene_cache
 
@@ -298,28 +299,27 @@ class USDZManager:
 
         df = suite_scenes.join(
             self.sim_scenes,
-            on="scene_id",
+            on=["scene_id", "uuid"],
             how="left",
-        ).select(["uuid", "scene_id", "nre_version_string", "last_modified"])
+        ).select(["uuid", "scene_id", "nre_version_string"])
 
         if df.height == 0:
             raise USDZQueryError(f"Failed to find any scenes for {test_suite_id=}.")
 
-        if df["uuid"].null_count() > 0:
-            missing = df.filter(pl.col("uuid").is_null())["scene_id"].to_list()
+        if df["nre_version_string"].null_count() > 0:
+            missing = (
+                df.filter(pl.col("nre_version_string").is_null())
+                .select(["scene_id", "uuid"])
+                .to_dicts()
+            )
             raise USDZQueryError(
                 f"Failed to find some scenes for scene suite {test_suite_id}. "
-                f"Missing: {missing}."
-                "A sceneset is expected to contain a valid artifact for each scene_id."
+                f"Missing (scene_id, uuid) pairs: {missing}."
             )
 
-        _warn_duplicate_scenes(df)
-        deduplicated = _deduplicate(df)
-        logger.info(
-            f"Scenes: \n{deduplicated.select(['scene_id', 'nre_version_string'])}"
-        )
+        logger.info(f"Scenes: \n{df.select(['scene_id', 'nre_version_string'])}")
 
-        return SceneIdAndUuid.list_from_df(deduplicated)
+        return SceneIdAndUuid.list_from_df(df)
 
     def get_paths(self, uuids: list[str]) -> dict[str, str]:
         """Get artifact paths for given UUIDs."""

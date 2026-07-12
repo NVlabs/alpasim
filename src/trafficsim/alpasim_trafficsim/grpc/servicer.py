@@ -14,7 +14,10 @@ from alpasim_trafficsim.catk.scene_adapter import (
     preprocess_runtime_map,
 )
 from alpasim_trafficsim.grpc import API_VERSION_MESSAGE, VersionId
-from alpasim_trafficsim.grpc.catk_predictor import CATKTrafficPredictor
+from alpasim_trafficsim.grpc.catk_predictor import (
+    CatkPredictionUnavailableError,
+    CATKTrafficPredictor,
+)
 from alpasim_trafficsim.grpc.config import CatkConfig, CatkLoaderConfig
 from alpasim_trafficsim.grpc.pipeline.env_builder import (
     InsufficientEgoTrajectoryError,
@@ -72,8 +75,8 @@ def preprocess_session_map(
     )
 
 
-class CatkPredictionUnavailableError(RuntimeError):
-    """Raised when CATK cannot produce predictions for the current request."""
+class PredictionHorizonExceededError(ValueError):
+    """Raised when a request advances beyond CATK's fixed prediction horizon."""
 
 
 class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
@@ -86,13 +89,16 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
         service_version: str = "simple-traffic-service",
     ) -> None:
         self._server = server
-        self._lock = threading.Lock()
+        self._registry_lock = threading.Lock()
         self._sessions: dict[str, SessionState] = {}
+        self._session_locks: dict[str, threading.Lock] = {}
         self._service_version = service_version
         self._time_step_s = catk_config.loader.time_step
-        self._dt_us = int(round(self._time_step_s * 1e6))
+        self._dt_us = round(self._time_step_s * 1e6)
         self._loader_cfg = catk_config.loader
-        self._minimum_future_steps = self._loader_cfg.minimum_future_steps
+        self._prediction_steps = self._loader_cfg.prediction_steps
+        if self._prediction_steps < 1:
+            raise ValueError("catk.loader.prediction_steps must be at least 1")
         self._minimum_history_length = self._loader_cfg.num_history_steps
         self._scene_loader = SceneLoader(
             ArtifactSceneProvider.from_path(
@@ -181,8 +187,15 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
             bool(v) for v in env_data["env"].get("agent_is_static", [])
         )
 
-        with self._lock:
+        with self._registry_lock:
+            if request.session_uuid in self._sessions:
+                context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                context.set_details(
+                    f"Session already exists for session_uuid: {request.session_uuid}"
+                )
+                return common_pb2.SessionRequestStatus()
             self._sessions[request.session_uuid] = session_state
+            self._session_locks[request.session_uuid] = threading.Lock()
 
         logger.info(
             "start_session: session={} scene_id={} initial_ts_us={} first_ego_pose_ts_us={} "
@@ -208,8 +221,9 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
         request: traffic_pb2.TrafficSessionCloseRequest,
         context: grpc.ServicerContext,
     ) -> common_pb2.Empty:
-        with self._lock:
+        with self._registry_lock:
             removed = self._sessions.pop(request.session_uuid, None)
+            self._session_locks.pop(request.session_uuid, None)
 
             if removed is None:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -222,27 +236,26 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
     def _apply_model_predictions(
         self,
         *,
-        session_uuid: str,
-        query_ts_us: int,
         session_state: SessionState,
         future_step_indices: list[int],
     ) -> list[int]:
         if not future_step_indices:
             return []
+        if len(future_step_indices) > self._prediction_steps:
+            raise PredictionHorizonExceededError(
+                "traffic request requires "
+                f"{len(future_step_indices)} future steps, but CATK is configured "
+                f"for {self._prediction_steps} prediction steps"
+            )
 
         env_data = session_state.env_data
         current_step_idx = int(env_data["env"].get("curr_t", 0))
-        predict_steps = max(len(future_step_indices), self._minimum_future_steps)
-        actions = self._catk_predictor.run_inference(
-            env_data,
-            predict_steps=predict_steps,
-        )
-        if actions is None:
-            raise CatkPredictionUnavailableError(
-                "CATK did not produce predictions for the current request"
-            )
+        actions = self._catk_predictor.run_inference(env_data)
 
-        forecast_steps = _prediction_step_count(actions, fallback=predict_steps)
+        forecast_steps = _prediction_step_count(
+            actions,
+            fallback=self._prediction_steps,
+        )
         forecast_step_indices = list(
             range(current_step_idx + 1, current_step_idx + forecast_steps + 1)
         )
@@ -283,133 +296,157 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
         session_state.current_ts_us = int(query_ts_us)
         return result
 
+    def _simulate_session(
+        self,
+        request: traffic_pb2.TrafficRequest,
+        context: grpc.ServicerContext,
+        session_state: SessionState,
+    ) -> traffic_pb2.TrafficReturn:
+        query_ts_us = request.time_query_us
+        merge_object_trajectory_updates(
+            session_state.closed_loop_trajectories,
+            request.object_trajectory_updates,
+        )
+
+        if query_ts_us <= session_state.handover_time_us:
+            return self._simulate_logged_replay(
+                session_state=session_state,
+                session_uuid=request.session_uuid,
+                query_ts_us=query_ts_us,
+            )
+
+        request_update_trajectories = {
+            update.object_id: trajectory_from_grpc(update.trajectory)
+            for update in request.object_trajectory_updates
+        }
+        history_end_ts_us = int(session_state.current_ts_us)
+        if history_end_ts_us < session_state.handover_time_us < int(query_ts_us):
+            history_end_ts_us = session_state.handover_time_us
+
+        try:
+            env_data = build_resampled_env_data(
+                session_state,
+                end_ts_us=history_end_ts_us,
+                history_steps=self._minimum_history_length,
+                dt_us=self._dt_us,
+            )
+            session_state.env_data = env_data
+            current_step_idx = self._minimum_history_length - 1
+
+            future_step_indices = self._future_step_indices_from_history_window(
+                current_step_idx=current_step_idx,
+                current_ts_us=history_end_ts_us,
+                query_ts_us=query_ts_us,
+            )
+            ego_trajectory = (
+                request_update_trajectories.get("EGO")
+                or session_state.closed_loop_trajectories["EGO"]
+            )
+            populate_ego_future_from_trajectory(
+                env_data,
+                ego_trajectory,
+                current_step_idx=current_step_idx,
+                requested_timestamp_us=query_ts_us,
+                future_step_indices=future_step_indices,
+                dt_us=self._dt_us,
+            )
+
+            forecast_step_indices = self._apply_model_predictions(
+                session_state=session_state,
+                future_step_indices=future_step_indices,
+            )
+
+            result, _response_current_ts_us = build_simulation_response(
+                session_uuid=request.session_uuid,
+                env_data=env_data,
+                query_ts_us=query_ts_us,
+                future_step_indices=future_step_indices,
+                forecast_step_indices=forecast_step_indices,
+                dt_us=self._dt_us,
+                minimum_history_length=self._minimum_history_length,
+            )
+            merge_env_step_trajectories(
+                session_state.closed_loop_trajectories,
+                env_data,
+                step_indices=future_step_indices,
+                dt_us=self._dt_us,
+                include_ego=True,
+            )
+            merge_env_step_trajectories(
+                session_state.closed_loop_trajectories,
+                env_data,
+                step_indices=forecast_step_indices,
+                dt_us=self._dt_us,
+                include_ego=False,
+            )
+            merge_object_trajectory_updates(
+                session_state.closed_loop_trajectories,
+                result.object_trajectory_updates,
+            )
+        except CatkPredictionUnavailableError as exc:
+            logger.warning(
+                "simulate rejected: session={} query_ts_us={} reason={}",
+                request.session_uuid,
+                query_ts_us,
+                exc,
+            )
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(str(exc))
+            return traffic_pb2.TrafficReturn()
+        except (InsufficientEgoTrajectoryError, PredictionHorizonExceededError) as exc:
+            logger.warning(
+                "simulate rejected: session={} query_ts_us={} reason={}",
+                request.session_uuid,
+                query_ts_us,
+                exc,
+            )
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return traffic_pb2.TrafficReturn()
+        except Exception as exc:  # noqa: BLE001 - surface as a gRPC status
+            logger.exception(
+                "simulate failed: session={} query_ts_us={}",
+                request.session_uuid,
+                query_ts_us,
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"simulation step failed: {exc}")
+            return traffic_pb2.TrafficReturn()
+
+        session_state.current_ts_us = int(query_ts_us)
+        return result
+
     def simulate(
         self,
         request: traffic_pb2.TrafficRequest,
         context: grpc.ServicerContext,
     ) -> traffic_pb2.TrafficReturn:
-        with self._lock:
-            query_ts_us = request.time_query_us
+        with self._registry_lock:
             session_state = self._sessions.get(request.session_uuid)
-            if session_state is None:
+            session_lock = self._session_locks.get(request.session_uuid)
+        if session_state is None or session_lock is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Unknown session_uuid: {request.session_uuid}")
+            return traffic_pb2.TrafficReturn()
+
+        with session_lock:
+            # close_session removes the entry before waiting for an in-flight
+            # request. Revalidate after acquiring the lock so a request that was
+            # queued behind close cannot mutate detached session state.
+            with self._registry_lock:
+                session_is_current = (
+                    self._sessions.get(request.session_uuid) is session_state
+                    and self._session_locks.get(request.session_uuid) is session_lock
+                )
+            if not session_is_current:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details(f"Unknown session_uuid: {request.session_uuid}")
                 return traffic_pb2.TrafficReturn()
-
-            request_update_trajectories = {
-                update.object_id: trajectory_from_grpc(update.trajectory)
-                for update in request.object_trajectory_updates
-            }
-            merge_object_trajectory_updates(
-                session_state.closed_loop_trajectories,
-                request.object_trajectory_updates,
+            return self._simulate_session(
+                request,
+                context,
+                session_state=session_state,
             )
-
-            if query_ts_us <= session_state.handover_time_us:
-                return self._simulate_logged_replay(
-                    session_state=session_state,
-                    session_uuid=request.session_uuid,
-                    query_ts_us=query_ts_us,
-                )
-
-            history_end_ts_us = int(session_state.current_ts_us)
-            if history_end_ts_us < session_state.handover_time_us < int(query_ts_us):
-                history_end_ts_us = session_state.handover_time_us
-
-            try:
-                env_data = build_resampled_env_data(
-                    session_state,
-                    end_ts_us=history_end_ts_us,
-                    history_steps=self._minimum_history_length,
-                    dt_us=self._dt_us,
-                )
-                session_state.env_data = env_data
-                current_step_idx = self._minimum_history_length - 1
-
-                future_step_indices = self._future_step_indices_from_history_window(
-                    current_step_idx=current_step_idx,
-                    current_ts_us=history_end_ts_us,
-                    query_ts_us=query_ts_us,
-                )
-                ego_trajectory = (
-                    request_update_trajectories.get("EGO")
-                    or session_state.closed_loop_trajectories["EGO"]
-                )
-                populate_ego_future_from_trajectory(
-                    env_data,
-                    ego_trajectory,
-                    current_step_idx=current_step_idx,
-                    requested_timestamp_us=query_ts_us,
-                    future_step_indices=future_step_indices,
-                    dt_us=self._dt_us,
-                )
-
-                forecast_step_indices = self._apply_model_predictions(
-                    session_uuid=request.session_uuid,
-                    query_ts_us=query_ts_us,
-                    session_state=session_state,
-                    future_step_indices=future_step_indices,
-                )
-
-                result, _response_current_ts_us = build_simulation_response(
-                    session_uuid=request.session_uuid,
-                    env_data=env_data,
-                    query_ts_us=query_ts_us,
-                    future_step_indices=future_step_indices,
-                    forecast_step_indices=forecast_step_indices,
-                    dt_us=self._dt_us,
-                    minimum_history_length=self._minimum_history_length,
-                )
-                merge_env_step_trajectories(
-                    session_state.closed_loop_trajectories,
-                    env_data,
-                    step_indices=future_step_indices,
-                    dt_us=self._dt_us,
-                    include_ego=True,
-                )
-                merge_env_step_trajectories(
-                    session_state.closed_loop_trajectories,
-                    env_data,
-                    step_indices=forecast_step_indices,
-                    dt_us=self._dt_us,
-                    include_ego=False,
-                )
-                merge_object_trajectory_updates(
-                    session_state.closed_loop_trajectories,
-                    result.object_trajectory_updates,
-                )
-            except CatkPredictionUnavailableError as exc:
-                logger.warning(
-                    "simulate rejected: session={} query_ts_us={} reason={}",
-                    request.session_uuid,
-                    query_ts_us,
-                    exc,
-                )
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(str(exc))
-                return traffic_pb2.TrafficReturn()
-            except InsufficientEgoTrajectoryError as exc:
-                logger.warning(
-                    "simulate rejected: session={} query_ts_us={} reason={}",
-                    request.session_uuid,
-                    query_ts_us,
-                    exc,
-                )
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(str(exc))
-                return traffic_pb2.TrafficReturn()
-            except Exception as exc:  # noqa: BLE001 - surface as a gRPC status
-                logger.exception(
-                    "simulate failed: session={} query_ts_us={}",
-                    request.session_uuid,
-                    query_ts_us,
-                )
-                context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details(f"simulation step failed: {exc}")
-                return traffic_pb2.TrafficReturn()
-
-            session_state.current_ts_us = int(query_ts_us)
-            return result
 
     def get_metadata(
         self,

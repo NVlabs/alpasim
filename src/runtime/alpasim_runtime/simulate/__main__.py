@@ -238,10 +238,11 @@ async def run_simulation(args: argparse.Namespace) -> bool:
             if len(failed) > 3:
                 logger.error("  ... and %d more", len(failed) - 3)
 
-        _generate_metrics_artifacts(
-            prometheus_url=config.user.prometheus.url,
-            log_dir=Path(args.log_dir),
-        )
+        if config.user.prometheus.url is not None:
+            _generate_metrics_artifacts(
+                prometheus_url=config.user.prometheus.url,
+                log_dir=Path(args.log_dir),
+            )
 
     success = all_rollouts_successful
 

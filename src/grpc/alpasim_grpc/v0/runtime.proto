@@ -81,6 +81,12 @@ enum TimeAggregation {
     TIME_AGGREGATION_LAST = 5;
 }
 
+enum RolloutErrorCode {
+    ROLLOUT_ERROR_CODE_NONE = 0;
+    ROLLOUT_ERROR_CODE_UNSPECIFIED = 1;
+    ROLLOUT_ERROR_CODE_INVALID_SCENE = 2;
+}
+
 message SimulationReturn {
     // A single named metric sampled at each simulation timestep.
     message TimestepMetric {
@@ -98,6 +104,7 @@ message SimulationReturn {
         string error = 4;
         repeated TimestepMetric timestep_metrics = 5;
         map<string, double> aggregated_metrics = 6;
+        RolloutErrorCode error_code = 7;
     }
 
     common.VersionId runtime_version = 1;

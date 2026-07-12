@@ -77,7 +77,7 @@ class StepEvent(RecurringEvent):
             step_duration = time.perf_counter() - state.step_wall_start
             telemetry_ctx = try_get_context()
             if telemetry_ctx is not None:
-                telemetry_ctx.step_duration.observe(step_duration)
+                telemetry_ctx.record_step_duration(step_duration)
         else:
             # --- Initial case: log initial actor poses ---
             t0_us = state.unbound.egomotion_context_start_us

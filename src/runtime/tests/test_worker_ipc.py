@@ -37,8 +37,9 @@ class TestPendingRolloutJob:
     """Tests for PendingRolloutJob dataclass."""
 
     def test_creation(self):
-        """Pending jobs contain only identity and scene."""
+        """Pending jobs include identity, scene, rollout position, and retry state."""
         job = PendingRolloutJob(
+            request_id="req-1",
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=2,
@@ -51,6 +52,7 @@ class TestPendingRolloutJob:
     def test_pickling(self):
         """PendingRolloutJob should be picklable."""
         job = PendingRolloutJob(
+            request_id="req-1",
             job_id="test-123",
             scene_id="test-scene",
             rollout_spec_index=1,
@@ -61,6 +63,7 @@ class TestPendingRolloutJob:
         assert unpickled.job_id == job.job_id
         assert unpickled.scene_id == job.scene_id
         assert unpickled.rollout_spec_index == job.rollout_spec_index
+        assert unpickled.retry_attempt == 0
 
 
 class TestAssignedRolloutJob:
@@ -75,6 +78,8 @@ class TestAssignedRolloutJob:
             scene_id="test-scene",
             rollout_spec_index=0,
             endpoints=ep,
+            dispatch_kind="fifo",
+            scheduler_wait_seconds=0.0,
         )
         assert job.endpoints.driver.address == "driver:50051"
 
@@ -87,6 +92,8 @@ class TestAssignedRolloutJob:
             scene_id="test-scene",
             rollout_spec_index=0,
             endpoints=ep,
+            dispatch_kind="fifo",
+            scheduler_wait_seconds=0.0,
         )
 
         pickled = pickle.dumps(job)
@@ -220,6 +227,7 @@ class TestWorkerArgs:
             user_config_path="/tmp/config.yaml",
             log_dir="/tmp/logs",
             eval_config=MagicMock(),
+            telemetry_port=9200,
             version_ids=version_ids,
         )
         assert args.version_ids is version_ids

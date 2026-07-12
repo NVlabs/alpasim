@@ -19,6 +19,11 @@ runtime:
 services:
   trafficsim:
     image: ${services.runtime.image}
+    environments:
+      # Request-level concurrency already keeps the CPU busy. Prevent each
+      # small PyTorch CPU operation from recruiting a node-sized thread pool.
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
       - "${defines.trafficsim_models}:/mnt/trafficsim-models"
@@ -35,11 +40,10 @@ trafficsim:
   hydra:
     job:
       chdir: false
-  server:
+  server: # parameters set by the wizard
     host: 0.0.0.0
     port: 6200
-    max_workers: 1
-    log_file: /mnt/log_dir/txt-logs/trafficsim.log
+    log_file: null
   catk:
     device: cuda
     filter_distance_th: 100.0
@@ -49,7 +53,7 @@ trafficsim:
       usdz_folder: /mnt/nre-data
       time_step: 0.1
       num_history_steps: 16
-      minimum_future_steps: 45
+      prediction_steps: 15
     model:
       config_path: /mnt/trafficsim-models/catk_v120/config.yaml
       ckpt_path: /mnt/trafficsim-models/catk_v120/latest.ckpt

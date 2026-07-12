@@ -42,10 +42,64 @@ class SlurmDeployment:
         )
         containers = list(self.container_set.sim)
         containers.append(self.container_set.prometheus)
-        self.deploy(
-            containers=containers,
-            containers_to_start_last=containers_to_start_last,
+        if self.context.cfg.wizard.enable_mps:
+            self._start_mps_daemon()
+        try:
+            self.deploy(
+                containers=containers,
+                containers_to_start_last=containers_to_start_last,
+            )
+        finally:
+            if self.context.cfg.wizard.enable_mps:
+                self._stop_mps_daemon()
+
+    def _mps_pipe_dir(self) -> str:
+        """Job-scoped CUDA MPS pipe directory.
+
+        Lives under /tmp rather than the run log dir because Unix socket paths
+        are capped at ~108 characters, which Lustre log paths exceed. Scoped by
+        job id so daemons of jobs sharing a node cannot collide.
+        """
+        return f"/tmp/nvidia-mps-{self.context.cfg.wizard.slurm_job_id}"
+
+    def _start_mps_daemon(self) -> None:
+        """Start the CUDA MPS control daemon on the host for this job."""
+        cfg = self.context.cfg.wizard
+        pipe_dir = self._mps_pipe_dir()
+        mps_log_dir = f"{cfg.log_dir}/mps"
+        # Remove a stale pipe dir (e.g. from a requeued job) so the daemon
+        # does not fail on leftover sockets.
+        dispatch_command(
+            f"rm -rf {pipe_dir} && mkdir -p {pipe_dir} {mps_log_dir} && "
+            f"CUDA_MPS_PIPE_DIRECTORY={pipe_dir} CUDA_MPS_LOG_DIRECTORY={mps_log_dir} "
+            "nvidia-cuda-mps-control -d",
+            log_dir=Path(cfg.log_dir),
+            dry_run=cfg.dry_run,
+            blocking=True,
         )
+
+    def _stop_mps_daemon(self) -> None:
+        """Stop the CUDA MPS control daemon and remove its pipe directory."""
+        cfg = self.context.cfg.wizard
+        pipe_dir = self._mps_pipe_dir()
+        try:
+            try:
+                dispatch_command(
+                    f"echo quit | CUDA_MPS_PIPE_DIRECTORY={pipe_dir} "
+                    "nvidia-cuda-mps-control",
+                    log_dir=Path(cfg.log_dir),
+                    dry_run=cfg.dry_run,
+                    blocking=True,
+                )
+            finally:
+                dispatch_command(
+                    f"rm -rf {pipe_dir}",
+                    log_dir=Path(cfg.log_dir),
+                    dry_run=cfg.dry_run,
+                    blocking=True,
+                )
+        except Exception as e:
+            logger.warning("Failed to stop MPS daemon: %s", e)
 
     def deploy(
         self,
@@ -175,9 +229,10 @@ class SlurmDeployment:
         ), "SLURM environment not detected"
         slurm_job_id = container.context.cfg.wizard.slurm_job_id
 
+        restart_count = os.environ.get("SLURM_RESTART_COUNT", "0")
         s_log = (
             f"{container.context.cfg.wizard.log_dir}/txt-logs/"
-            f"out-{slurm_job_id}-{container.uuid}-log.txt"
+            f"out-{slurm_job_id}-attempt-{restart_count}-{container.uuid}-log.txt"
         )
 
         sqsh = ensure_sqsh_path(
@@ -188,11 +243,14 @@ class SlurmDeployment:
         # Note that we cannot use --export=CUDA_VISIBLE_DEVICES=... with srun because SLURM
         # overrides CUDA_VISIBLE_DEVICES even when exported as an environment variable.
         # Instead we set it in the command line. Use export to allow chaining commands with &&.
-        s_gpu = (
-            f"export CUDA_VISIBLE_DEVICES={container.gpu};"
-            if container.gpu is not None
-            else ""
+        mps_enabled = (
+            container.context.cfg.wizard.enable_mps and container.gpu is not None
         )
+        s_gpu = ""
+        if container.gpu is not None:
+            s_gpu = f"export CUDA_VISIBLE_DEVICES={container.gpu};"
+        if mps_enabled:
+            s_gpu += f"export CUDA_MPS_PIPE_DIRECTORY={self._mps_pipe_dir()};"
         # Separate environment variables:
         #  - 'VAR=value' format to export in bash. The value will be logged, not secure for secrets.
         #  - 'VAR' format pass-through from host. The value will not be logged, secure for secrets.
@@ -215,7 +273,12 @@ class SlurmDeployment:
         # isolated, while preserving the job id needed for Slurm-scoped telemetry.
         s_env_export_arg = f"--export={','.join(env_passthrough_set)} "
 
-        s_mnt = ",".join([v.to_str() for v in container.volumes])
+        mounts = [v.to_str() for v in container.volumes]
+        if mps_enabled:
+            # enroot containers have an isolated rootfs; the MPS pipe directory
+            # must be mounted explicitly for clients to reach the daemon.
+            mounts.append(f"{self._mps_pipe_dir()}:{self._mps_pipe_dir()}")
+        s_mnt = ",".join(mounts)
 
         # Pin child srun steps to the wizard's node so services are co-located
         # and reachable via localhost.  Without --nodelist, SLURM may schedule

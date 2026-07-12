@@ -13,7 +13,9 @@ from alpasim_wizard.deployment.slurm import SlurmDeployment
 from alpasim_wizard.schema import DebugFlags, RunMode
 
 
-def _context(tmp_path: Path, *, dry_run: bool = False) -> WizardContext:
+def _context(
+    tmp_path: Path, *, dry_run: bool = False, enable_mps: bool = False
+) -> WizardContext:
     cfg = SimpleNamespace(
         wizard=SimpleNamespace(
             log_dir=str(tmp_path),
@@ -24,6 +26,7 @@ def _context(tmp_path: Path, *, dry_run: bool = False) -> WizardContext:
             slurm_job_id=123,
             sqshcaches=[],
             slurm_cpu_bind_none=False,
+            enable_mps=enable_mps,
             debug_flags=DebugFlags(use_localhost=False),
         )
     )
@@ -42,9 +45,11 @@ def _context(tmp_path: Path, *, dry_run: bool = False) -> WizardContext:
     )
 
 
-def _deployment(tmp_path: Path, *, dry_run: bool = False) -> SlurmDeployment:
+def _deployment(
+    tmp_path: Path, *, dry_run: bool = False, enable_mps: bool = False
+) -> SlurmDeployment:
     deployment = SlurmDeployment.__new__(SlurmDeployment)
-    deployment.context = _context(tmp_path, dry_run=dry_run)
+    deployment.context = _context(tmp_path, dry_run=dry_run, enable_mps=enable_mps)
     return deployment
 
 
@@ -288,3 +293,94 @@ def test_slurm_dry_run_does_not_cleanup(
     deployment.deploy([driver], containers_to_start_last=[runtime])
 
     assert commands == [False, True]
+
+
+def test_slurm_run_mps_env_and_mount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path, enable_mps=True)
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: f"{image}.sqsh",
+    )
+
+    gpu_command = deployment._to_slurm_run(
+        _slurm_container(deployment, gpu=1), RunMode.ONESHOT
+    )
+    assert "export CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps-123;" in gpu_command
+    assert "--container-mounts=/tmp/nvidia-mps-123:/tmp/nvidia-mps-123" in gpu_command
+
+    cpu_command = deployment._to_slurm_run(
+        _slurm_container(deployment, gpu=None), RunMode.ONESHOT
+    )
+    assert "nvidia-mps" not in cpu_command
+
+
+def test_slurm_run_without_mps_has_no_mps_plumbing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path)
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: f"{image}.sqsh",
+    )
+
+    command = deployment._to_slurm_run(
+        _slurm_container(deployment, gpu=1), RunMode.ONESHOT
+    )
+    assert "nvidia-mps" not in command
+
+
+def test_mps_daemon_start_and_stop_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path, enable_mps=True)
+    commands = []
+
+    def fake_dispatch(command, *, log_dir, dry_run, blocking):
+        del log_dir, dry_run, blocking
+        commands.append(command)
+        return ""
+
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.dispatch_command",
+        fake_dispatch,
+    )
+
+    deployment._start_mps_daemon()
+    deployment._stop_mps_daemon()
+
+    start, stop, cleanup = commands
+    assert "nvidia-cuda-mps-control -d" in start
+    assert "CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps-123" in start
+    assert f"CUDA_MPS_LOG_DIRECTORY={tmp_path}/mps" in start
+    assert stop.startswith("echo quit |")
+    assert cleanup == "rm -rf /tmp/nvidia-mps-123"
+
+
+def test_mps_pipe_dir_cleanup_runs_when_daemon_shutdown_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path, enable_mps=True)
+    commands = []
+
+    def fake_dispatch(command, *, log_dir, dry_run, blocking):
+        del log_dir, dry_run, blocking
+        commands.append(command)
+        if command.startswith("echo quit |"):
+            raise RuntimeError("MPS shutdown failed")
+        return ""
+
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.dispatch_command",
+        fake_dispatch,
+    )
+
+    deployment._stop_mps_daemon()
+
+    assert len(commands) == 2
+    assert commands[1] == "rm -rf /tmp/nvidia-mps-123"

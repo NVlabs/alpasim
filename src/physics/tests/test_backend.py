@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3
 from alpasim_physics.backend import PhysicsBackend
-from alpasim_physics.ply_io import save_mesh_vf
 from alpasim_physics.utils import aabb_to_ndarray, pose_grpc_to_ndarray
+from alpasim_utils.ply_io import save_mesh_vf
 
 
 @pytest.fixture

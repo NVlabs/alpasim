@@ -577,7 +577,7 @@ class EventBasedRollout:
             rollout_duration = time.perf_counter() - rollout_start_time
             ctx = try_get_context()
             if ctx is not None:
-                ctx.rollout_duration.observe(rollout_duration)
+                ctx.record_rollout_duration(rollout_duration)
 
             eval_result = await self._runtime_evaluator.run_evaluation(
                 self.eval_executor

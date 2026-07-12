@@ -64,6 +64,9 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config = MagicMock()
     config.user.nr_workers = nr_workers
     config.user.smooth_trajectories = True
+    config.user.scene_affine_dispatch.enabled = False
+    config.user.scene_affine_dispatch.max_renderers_per_scene = 2
+    config.user.scene_affine_dispatch.max_scenes_per_renderer = None
     config.user.renderer = RendererConfig(kind=RendererKind.sensorsim)
     config.user.endpoints.driver.skip = False
     config.user.endpoints.driver.n_concurrent_rollouts = 2
@@ -320,6 +323,8 @@ def _make_assigned_job(request_id: str, job_id: str) -> AssignedRolloutJob:
         scene_id="scene-A",
         rollout_spec_index=0,
         endpoints=_make_endpoints(),
+        dispatch_kind="fifo",
+        scheduler_wait_seconds=0.0,
     )
 
 

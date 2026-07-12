@@ -9,6 +9,7 @@ from eval.scorers.image import ImageScorer
 from eval.scorers.min_distance_to_obstacle import MinDistanceToObstacleScorer
 from eval.scorers.minADE import MinADEScorer
 from eval.scorers.offroad import OffRoadScorer
+from eval.scorers.open_loop_collision import OpenLoopCollisionScorer
 from eval.scorers.plan_deviation import PlanDeviationScorer
 from eval.scorers.safety import SafetyScorer
 
@@ -16,6 +17,7 @@ SCORERS = [
     CollisionScorer,
     OffRoadScorer,
     MinDistanceToObstacleScorer,
+    OpenLoopCollisionScorer,
     GroundTruthScorer,
     MinADEScorer,
     PlanDeviationScorer,

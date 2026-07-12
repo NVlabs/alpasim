@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.96.0"
+version = "0.111.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -69,7 +69,7 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "3caf3a8bd1a68f4a1545352aea82c535be9510b2" }
+trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "a0c1310c5fba190c181c6fb4f00c06fc5c77b417" }
 alpasim-trafficsim = { workspace = true }
 
 [tool.uv]

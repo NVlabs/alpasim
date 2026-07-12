@@ -9,7 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0.sensorsim_pb2 import BatchRGBRenderReturnItem, RGBRenderReturn
-from alpasim_runtime.services.sensorsim_service import SensorsimService
+from alpasim_runtime.services.sensorsim_service import (
+    MAX_GRPC_MESSAGE_BYTES,
+    SensorsimService,
+)
 from alpasim_runtime.types import Clock, RuntimeCamera
 
 
@@ -27,6 +30,40 @@ def _triggers() -> dict[str, Clock.Trigger]:
         "cam_a": Clock.Trigger(range(0, 33_000), sequential_idx=0),
         "cam_b": Clock.Trigger(range(100_000, 133_000), sequential_idx=1),
     }
+
+
+@pytest.mark.asyncio
+async def test_sensorsim_service_uses_large_grpc_message_limits(monkeypatch):
+    captured: dict[str, object] = {}
+    fake_channel = object()
+
+    def fake_insecure_channel(address, options=None):
+        captured["address"] = address
+        captured["options"] = options
+        return fake_channel
+
+    class FakeStub:
+        def __init__(self, channel):
+            captured["channel"] = channel
+
+    monkeypatch.setattr(
+        "alpasim_runtime.services.sensorsim_service.grpc.aio.insecure_channel",
+        fake_insecure_channel,
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.services.sensorsim_service.SensorsimServiceStub",
+        FakeStub,
+    )
+
+    service = SensorsimService("localhost:50051", False, MagicMock())
+    await service._open_connection()
+
+    assert captured["address"] == "localhost:50051"
+    assert captured["channel"] is fake_channel
+    assert captured["options"] == [
+        ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+        ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+    ]
 
 
 def test_batch_return_maps_images_by_camera_name():

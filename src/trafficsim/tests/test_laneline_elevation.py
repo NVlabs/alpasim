@@ -27,7 +27,6 @@ def _predictor(
     predictor.history_window_steps = cfg.loader.num_history_steps
     predictor.min_valid_history_steps = cfg.min_valid_history_steps
     predictor.model = None
-    predictor._token_stride = 5
     return predictor
 
 

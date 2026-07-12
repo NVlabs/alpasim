@@ -102,6 +102,7 @@ class TestPolicyEvent:
         await event.run(rollout_state, EventQueue())
 
         mock_driver.submit_trajectory.assert_awaited_once()
+        mock_driver.submit_route.assert_not_awaited()
         trajectory, dynamic_states = mock_driver.submit_trajectory.call_args.args
         assert trajectory.timestamps_us.tolist() == [0, 100_000, 200_000]
         assert len(dynamic_states) == 3

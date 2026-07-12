@@ -11,6 +11,7 @@ trajectory into the context for downstream pipeline events.
 from __future__ import annotations
 
 import logging
+import time
 
 import numpy as np
 from alpasim_runtime.events.base import (
@@ -22,6 +23,7 @@ from alpasim_runtime.events.base import (
 from alpasim_runtime.events.force_gt_utils import controller_reference_trajectory
 from alpasim_runtime.events.state import RolloutState, ServiceBundle
 from alpasim_runtime.route_generator import RouteGenerator
+from alpasim_runtime.telemetry.telemetry_context import try_get_context
 from alpasim_utils import geometry
 
 logger = logging.getLogger(__name__)
@@ -119,7 +121,13 @@ class PolicyEvent(RecurringEvent):
 
         # Barrier: all observations (images + egopose + route + GT) must
         # reach the driver before we call drive().
+        barrier_start = time.perf_counter()
         await ctx.drain_outstanding_tasks()
+        telemetry_ctx = try_get_context()
+        if telemetry_ctx is not None:
+            telemetry_ctx.record_observation_barrier(
+                time.perf_counter() - barrier_start
+            )
         state.last_egopose_update_us = step_start_us
 
         if ctx.force_gt and state.unbound.skip_driver_during_force_gt:

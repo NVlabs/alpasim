@@ -1,0 +1,18 @@
+# DCGM fields exported by dcgm-exporter (passed via -f in prometheus_sidecar.sh).
+# This replaces the exporter's built-in default set, so every field used by
+# dashboards or recording rules must be listed here.
+# Format: DCGM field, Prometheus metric type, help message
+
+DCGM_FI_DEV_GPU_UTIL,      gauge, GPU utilization (in %).
+DCGM_FI_DEV_FB_TOTAL,      gauge, Total framebuffer memory (in MiB).
+DCGM_FI_DEV_FB_USED,       gauge, Used framebuffer memory (in MiB).
+DCGM_FI_DEV_FB_FREE,       gauge, Free framebuffer memory (in MiB).
+DCGM_FI_DEV_FB_RESERVED,   gauge, Reserved framebuffer memory (in MiB).
+
+# Profiling (DCP) fields; measure real SM/memory usage rather than the coarse
+# "any kernel resident" signal of DCGM_FI_DEV_GPU_UTIL. Unsupported fields are
+# skipped by dcgm-exporter with a warning on GPUs without profiling support.
+DCGM_FI_PROF_SM_ACTIVE,          gauge, Ratio of cycles at least one warp was resident on an SM, averaged over all SMs.
+DCGM_FI_PROF_SM_OCCUPANCY,       gauge, Ratio of resident warps to maximum resident warps, averaged over all SMs.
+DCGM_FI_PROF_PIPE_TENSOR_ACTIVE, gauge, Ratio of cycles the tensor core pipe was active.
+DCGM_FI_PROF_DRAM_ACTIVE,        gauge, Ratio of cycles the device memory interface was active.

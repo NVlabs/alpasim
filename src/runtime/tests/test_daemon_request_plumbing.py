@@ -9,29 +9,6 @@ from alpasim_runtime.daemon.engine import build_pending_jobs_from_request
 from alpasim_runtime.errors import UnknownSceneError
 
 
-def test_adapter_expands_nr_rollouts() -> None:
-    req = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=3)]
-    )
-
-    jobs = build_pending_jobs_from_request(req, lambda scene_id: scene_id == "clipgt-a")
-    assert [job.scene_id for job in jobs] == ["clipgt-a", "clipgt-a", "clipgt-a"]
-    assert [job.rollout_spec_index for job in jobs] == [0, 0, 0]
-
-
-def test_adapter_drops_zero_nr_rollouts_with_warning(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level("WARNING", logger="alpasim_runtime.daemon.engine")
-    req = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a")]
-    )
-
-    jobs = build_pending_jobs_from_request(req, lambda _scene_id: True)
-    assert jobs == []
-    assert "Dropping rollout spec with nr_rollouts=0" in caplog.text
-
-
 def test_adapter_rejects_scene_without_artifact() -> None:
     req = runtime_pb2.SimulationRequest(
         rollout_specs=[
@@ -40,7 +17,7 @@ def test_adapter_rejects_scene_without_artifact() -> None:
     )
 
     with pytest.raises(UnknownSceneError):
-        build_pending_jobs_from_request(req, lambda _scene_id: False)
+        build_pending_jobs_from_request(req, "req-1", lambda _scene_id: False)
 
 
 def test_adapter_assigns_rollout_spec_indexes_in_request_order() -> None:
@@ -52,7 +29,7 @@ def test_adapter_assigns_rollout_spec_indexes_in_request_order() -> None:
     )
 
     jobs = build_pending_jobs_from_request(
-        req, lambda scene_id: scene_id in {"clipgt-a", "clipgt-b"}
+        req, "req-1", lambda scene_id: scene_id in {"clipgt-a", "clipgt-b"}
     )
     assert len(jobs) == 3
     assert [job.scene_id for job in jobs] == ["clipgt-a", "clipgt-b", "clipgt-b"]
@@ -68,7 +45,7 @@ def test_adapter_ignores_zero_rollout_specs_when_indexing() -> None:
     )
 
     jobs = build_pending_jobs_from_request(
-        req, lambda scene_id: scene_id in {"clipgt-a", "clipgt-b"}
+        req, "req-1", lambda scene_id: scene_id in {"clipgt-a", "clipgt-b"}
     )
     assert len(jobs) == 2
     assert [job.scene_id for job in jobs] == ["clipgt-b", "clipgt-b"]
@@ -86,17 +63,8 @@ def test_adapter_propagates_session_uuids_in_order() -> None:
         ]
     )
 
-    jobs = build_pending_jobs_from_request(req, lambda _scene_id: True)
+    jobs = build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
     assert [job.session_uuid for job in jobs] == ["u0", "u1", "u2"]
-
-
-def test_adapter_omits_session_uuids_when_empty() -> None:
-    req = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=2)]
-    )
-
-    jobs = build_pending_jobs_from_request(req, lambda _scene_id: True)
-    assert [job.session_uuid for job in jobs] == ["", ""]
 
 
 def test_adapter_rejects_mismatched_session_uuids_length() -> None:
@@ -111,4 +79,4 @@ def test_adapter_rejects_mismatched_session_uuids_length() -> None:
     )
 
     with pytest.raises(ValueError, match="session_uuids"):
-        build_pending_jobs_from_request(req, lambda _scene_id: True)
+        build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)

@@ -19,6 +19,7 @@ model:
   # # Alternative local path to a pre-downloaded model
   # checkpoint_path: "/mnt/drivers/alpamayo1/Alpamayo-R1-10B"
   device: "cuda"
+  force_determinism: false
 
 # Server configuration
 host: "0.0.0.0"

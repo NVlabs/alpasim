@@ -17,7 +17,7 @@
 
 Prometheus file-SD targets are written to
 `<run_dir>/prometheus/targets/alpasim.json`. Central file-SD publication uses
-`wizard.telemetry.file_sd_dir` when configured.
+`wizard.prometheus.file_sd_dir` when configured.
 
 ## Query Surface
 
@@ -121,6 +121,10 @@ those raw exporter internals matter.
 | `DCGM_FI_DEV_FB_USED` | `alpasim-dcgm` | `gpu` | GPU framebuffer memory used in MiB. | Above 90% is a hard constraint signal. Reduce cache, concurrency, replicas, or co-location. |
 | `DCGM_FI_DEV_FB_FREE` | `alpasim-dcgm` | `gpu` | Free GPU framebuffer memory in MiB. | Use directly as allocatable memory headroom; add used and reserved memory to derive physical total memory. |
 | `DCGM_FI_DEV_FB_RESERVED` | `alpasim-dcgm` | `gpu` | Driver-reserved GPU framebuffer memory in MiB. | Add to used and free memory to derive total physical framebuffer memory. |
+| `DCGM_FI_PROF_SM_ACTIVE` | `alpasim-dcgm` | `gpu` | Fraction of cycles at least one warp was resident on an SM, averaged over all SMs (0-1). | Real chip usage. High `DCGM_FI_DEV_GPU_UTIL` with low SM active means small or serialized kernels (e.g. co-located processes time-slicing); the GPU has compute headroom. |
+| `DCGM_FI_PROF_SM_OCCUPANCY` | `alpasim-dcgm` | `gpu` | Fraction of resident warps relative to maximum resident warps, averaged over all SMs (0-1). | Distinguishes many-SMs-thin-work from genuinely packed SMs. Low occupancy with high SM active suggests latency-bound kernels. |
+| `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE` | `alpasim-dcgm` | `gpu` | Fraction of cycles the tensor core pipe was active (0-1). | Proximity to peak matmul throughput for NN inference workloads; near zero during inference means work is not hitting tensor cores. |
+| `DCGM_FI_PROF_DRAM_ACTIVE` | `alpasim-dcgm` | `gpu` | Fraction of cycles the device memory interface was active (0-1). | High with low SM/tensor activity means memory-bandwidth-bound; co-locating more compute on the GPU will not help. |
 | `node_cpu_seconds_total` | `alpasim-node` | `mode` | Node CPU seconds by mode. | Dashboard converts idle rate to node CPU utilization. If node CPU is saturated, service scaling may not help. |
 | `node_memory_MemAvailable_bytes` | `alpasim-node` | none | Available host memory. | Low available memory indicates node memory pressure. |
 | `node_memory_MemTotal_bytes` | `alpasim-node` | none | Total host memory. | Used with available memory to compute host memory utilization. |

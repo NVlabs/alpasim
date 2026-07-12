@@ -8,6 +8,10 @@ from alpasim_runtime import config
 from alpasim_runtime.scene_loader import trajdata_provider_config_to_params
 
 
+def test_rollout_retry_default() -> None:
+    assert config.UserSimulatorConfig().max_rollout_retries == 2
+
+
 def test_usdz_provider_config_defaults() -> None:
     cfg = config.UsdzProviderConfig(data_dir="/data/usdz")
 

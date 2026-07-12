@@ -94,25 +94,6 @@
       },
       {
         "type": "query",
-        "name": "tag",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
-        "query": "label_values(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\"}, tag)",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".*",
-        "hide": 2,
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        }
-      },
-      {
-        "type": "query",
         "name": "node",
         "datasource": {
           "type": "prometheus",
@@ -185,7 +166,7 @@
     },
     {
       "type": "timeseries",
-      "title": "RPC duration p95",
+      "title": "RPC duration",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -198,10 +179,121 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
+          "expr": "min by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} min",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "avg by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} avg",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "quantile by (run_uuid, run_name, method) (0.90, sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} p90",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} max",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
           "expr": "alpasim:rpc_duration_seconds:p95{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}",
-          "legendFormat": "p95 {{method}}"
+          "legendFormat": "{{method}} pooled event p95",
+          "refId": "E"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    2,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Per-worker five-minute event mean summarized by method as min, equal-worker average, worker p90, and max, plus the solid p95 pooled across all RPC events."
     },
     {
       "type": "histogram",
@@ -245,7 +337,7 @@
     },
     {
       "type": "timeseries",
-      "title": "RPC blocking p95",
+      "title": "RPC blocking duration",
       "gridPos": {
         "x": 6,
         "y": 33,
@@ -258,10 +350,121 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
+          "expr": "min by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} min",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "avg by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} avg",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "quantile by (run_uuid, run_name, method) (0.90, sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} p90",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max by (run_uuid, run_name, method) (sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])) / sum by (run_uuid, run_name, method, worker_id) (rate(alpasim_rpc_blocking_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",method=~\"run_controller_and_vehicle|drive|submit_egomotion_observation|submit_image_observation|submit_route|ground_intersection|render_rgb\"}[5m])))",
+          "legendFormat": "{{method}} max",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
           "expr": "alpasim:rpc_blocking_seconds:p95{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}",
-          "legendFormat": "p95 {{method}}"
+          "legendFormat": "{{method}} pooled event p95",
+          "refId": "E"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    2,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Per-worker five-minute event mean summarized by method as min, equal-worker average, worker p90, and max, plus the solid p95 pooled across all blocking events."
     },
     {
       "type": "timeseries",
@@ -278,7 +481,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum by (method) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\",method=~\"$method\",tag=~\"$tag\"}[1m]))",
+          "expr": "sum by (method) (rate(alpasim_rpc_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\",method=~\"$method\"}[1m]))",
           "legendFormat": "{{method}}"
         }
       ]
@@ -316,8 +519,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "avg_over_time(alpasim:rpc_queue_depth_at_start_latest:max{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[10m])",
-          "legendFormat": "{{service}} max 10m avg",
+          "expr": "avg_over_time(alpasim:rpc_queue_depth_at_start_latest:max{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])",
+          "legendFormat": "{{service}} max 5m avg",
           "refId": "C"
         },
         {
@@ -325,8 +528,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "avg_over_time(alpasim:rpc_queue_depth_at_start_latest:min{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[10m])",
-          "legendFormat": "{{service}} min 10m avg",
+          "expr": "avg_over_time(alpasim:rpc_queue_depth_at_start_latest:min{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])",
+          "legendFormat": "{{service}} min 5m avg",
           "refId": "D"
         }
       ],
@@ -542,7 +745,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* 10m avg$"
+              "options": ".* 5m avg$"
             },
             "properties": [
               {
@@ -599,7 +802,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Rollout duration p95",
+      "title": "Rollout duration",
       "gridPos": {
         "x": 12,
         "y": 9,
@@ -612,14 +815,125 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
+          "expr": "min by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} min",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "avg by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} avg",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "quantile by (run_uuid, run_name) (0.90, sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} p90",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} max",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
           "expr": "alpasim:rollout_duration_seconds:p95{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}",
-          "legendFormat": "p95"
+          "legendFormat": "{{run_name}} pooled event p95",
+          "refId": "E"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    2,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Per-worker five-minute event mean rollout duration summarized as min, equal-worker average, worker p90, and max, plus the solid p95 pooled across all events."
     },
     {
       "type": "timeseries",
-      "title": "Step duration p95",
+      "title": "Step duration",
       "gridPos": {
         "x": 18,
         "y": 9,
@@ -632,10 +946,121 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
+          "expr": "min by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} min",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "avg by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} avg",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "quantile by (run_uuid, run_name) (0.90, sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} p90",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max by (run_uuid, run_name) (sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_step_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])))",
+          "legendFormat": "{{run_name}} max",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
           "expr": "alpasim:step_duration_seconds:p95{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}",
-          "legendFormat": "p95"
+          "legendFormat": "{{run_name}} pooled event p95",
+          "refId": "E"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    2,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    8,
+                    4
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Per-worker five-minute event mean step duration summarized as min, equal-worker average, worker p90, and max, plus the solid p95 pooled across all events."
     },
     {
       "type": "timeseries",
@@ -661,8 +1086,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "avg_over_time(alpasim:process_cpu_utilization_percent:max_by_group:rate30s{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[10m])",
-          "legendFormat": "10m avg {{groupname}}",
+          "expr": "avg_over_time(alpasim:process_cpu_utilization_percent:max_by_group:rate30s{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])",
+          "legendFormat": "5m avg {{groupname}}",
           "refId": "B"
         }
       ],
@@ -877,8 +1302,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "avg_over_time(alpasim:gpu_utilization_percent:avg{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[10m])",
-          "legendFormat": "gpu {{gpu}} % 10m avg",
+          "expr": "avg_over_time(alpasim:gpu_utilization_percent:avg{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\"}[5m])",
+          "legendFormat": "gpu {{gpu}} % 5m avg",
           "refId": "B"
         }
       ],
@@ -1517,7 +1942,7 @@
     },
     {
       "type": "row",
-      "title": "Detailed telemetry",
+      "title": "Renderer scheduling",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1529,10 +1954,133 @@
     },
     {
       "type": "timeseries",
-      "title": "Rollout duration p95 by worker",
+      "title": "Renderer active rollouts",
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "sum by (run_uuid, run_name) (alpasim_renderer_active_rollouts{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"})",
+          "legendFormat": "{{run_name}} active"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Total executing renderer-backed rollouts across selected workers."
+    },
+    {
+      "type": "timeseries",
+      "title": "Rollout starts by dispatch class",
+      "gridPos": {
+        "x": 6,
+        "y": 58,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "sum by (run_uuid, run_name, kind) (rate(alpasim_renderer_rollouts_started_total{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"}[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Five-minute rollout-start rate split by scheduler decision."
+    },
+    {
+      "type": "timeseries",
+      "title": "Scene replication effectiveness",
       "gridPos": {
         "x": 12,
         "y": 58,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "sum by (run_uuid, run_name) (rate(alpasim_renderer_rollouts_started_total{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\",kind=\"cold_replica\"}[5m])) / sum by (run_uuid, run_name) (rate(alpasim_renderer_rollouts_started_total{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\",kind=\"cold_initial\"}[5m]))",
+          "legendFormat": "cold replica / initial"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Cold-replica overhead relative to initial scene loads."
+    },
+    {
+      "type": "timeseries",
+      "title": "Scheduler wait p95",
+      "gridPos": {
+        "x": 18,
+        "y": 58,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (run_uuid, run_name, le, kind) (rate(alpasim_renderer_scheduler_wait_seconds_bucket{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"}[5m])))",
+          "legendFormat": "{{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Five-minute p95 time from scheduler insertion to successful renderer assignment."
+    },
+    {
+      "type": "row",
+      "title": "Detailed telemetry",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 66,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Rollout duration by worker",
+      "gridPos": {
+        "x": 12,
+        "y": 67,
         "w": 12,
         "h": 8
       },
@@ -1542,17 +2090,34 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
+          "expr": "sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_sum{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"}[5m])) / sum by (run_uuid, run_name, worker_id) (rate(alpasim_rollout_duration_seconds_count{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"}[5m]))",
+          "legendFormat": "worker {{worker_id}} mean",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
           "expr": "alpasim:rollout_duration_seconds:p95_by_worker{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",worker_id=~\"$worker_id\"}",
-          "legendFormat": "worker {{worker_id}}"
+          "legendFormat": "worker {{worker_id}} event p95",
+          "refId": "E"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "Five-minute event mean and event p95 for each AlpaSim worker."
     },
     {
       "type": "timeseries",
       "title": "Process top memory",
       "gridPos": {
         "x": 0,
-        "y": 66,
+        "y": 75,
         "w": 12,
         "h": 8
       },
@@ -1573,7 +2138,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 74,
+        "y": 83,
         "w": 24,
         "h": 1
       },
@@ -1584,7 +2149,7 @@
       "title": "Node CPU utilization",
       "gridPos": {
         "x": 0,
-        "y": 75,
+        "y": 84,
         "w": 8,
         "h": 8
       },
@@ -1604,7 +2169,7 @@
       "title": "Host memory available",
       "gridPos": {
         "x": 8,
-        "y": 75,
+        "y": 84,
         "w": 8,
         "h": 8
       },
@@ -1644,7 +2209,7 @@
       "title": "GPU utilization by node",
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 92,
         "w": 8,
         "h": 8
       },
@@ -1664,7 +2229,7 @@
       "title": "GPU memory pressure",
       "gridPos": {
         "x": 8,
-        "y": 83,
+        "y": 92,
         "w": 8,
         "h": 8
       },
@@ -1681,10 +2246,30 @@
     },
     {
       "type": "timeseries",
+      "title": "GPU SM active by node",
+      "gridPos": {
+        "x": 0,
+        "y": 100,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "100 * DCGM_FI_PROF_SM_ACTIVE{run_uuid=~\"$run_uuid\",run_name=~\"$run_name\",node=~\"$node\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{node}} gpu {{gpu}} %"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
       "title": "Process exporter scrape duration",
       "gridPos": {
         "x": 16,
-        "y": 83,
+        "y": 92,
         "w": 8,
         "h": 8
       },
@@ -1704,7 +2289,7 @@
       "title": "GC time spent rate",
       "gridPos": {
         "x": 0,
-        "y": 91,
+        "y": 108,
         "w": 8,
         "h": 8
       },
@@ -1724,7 +2309,7 @@
       "title": "GC worst pause so far",
       "gridPos": {
         "x": 8,
-        "y": 91,
+        "y": 108,
         "w": 8,
         "h": 8
       },
@@ -1744,7 +2329,7 @@
       "title": "GC collection rate",
       "gridPos": {
         "x": 16,
-        "y": 91,
+        "y": 108,
         "w": 8,
         "h": 8
       },

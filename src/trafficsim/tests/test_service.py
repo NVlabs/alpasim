@@ -10,19 +10,26 @@ from concurrent import futures
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+import numpy as np
 import pytest
 import torch
 from alpasim_grpc.v0 import common_pb2, traffic_pb2, traffic_pb2_grpc
 from alpasim_runtime.errors import UnknownSceneError
+from alpasim_trafficsim.grpc.catk_predictor import CatkPredictionUnavailableError
 from alpasim_trafficsim.grpc.config import CatkLoaderConfig
 from alpasim_trafficsim.grpc.servicer import TrafficServiceServicer
-from alpasim_trafficsim.grpc.session.history import merge_trajectory
+from alpasim_trafficsim.grpc.session import history as history_module
+from alpasim_trafficsim.grpc.session.history import (
+    _resample_trajectory_history,
+    merge_trajectory,
+)
 from alpasim_utils.geometry import trajectory_from_grpc
 
 import grpc
 
 DT_US = 100_000
 MIN_HISTORY = 16
+PREDICTION_STEPS = 15
 DEFAULT_SCENE_ID = "clipgt-test-scene"
 
 
@@ -55,29 +62,28 @@ class NoopPredictor:
     def __init__(self, *, predict_static: bool = True) -> None:
         self.predict_static = predict_static
 
-    def run_inference(
-        self, env_data: dict[str, Any], *, predict_steps: int
-    ) -> dict[str, Any] | None:
-        del env_data, predict_steps
-        return None
+    def run_inference(self, env_data: dict[str, Any]) -> dict[str, Any]:
+        del env_data
+        raise CatkPredictionUnavailableError(
+            "No usable map geometry was found within 100 m of the current ego "
+            "position; CATK cannot produce predictions"
+        )
 
 
 class RecordingPredictor:
-    """Records each run_inference (predict_steps, curr_t); empty predictions."""
+    """Records each run_inference (configured steps, curr_t); empty predictions."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[int, int]] = []
         self.predict_static = True
 
-    def run_inference(
-        self, env_data: dict[str, Any], *, predict_steps: int
-    ) -> dict[str, Any] | None:
-        self.calls.append((predict_steps, int(env_data["env"].get("curr_t", 0))))
+    def run_inference(self, env_data: dict[str, Any]) -> dict[str, Any] | None:
+        self.calls.append((PREDICTION_STEPS, int(env_data["env"].get("curr_t", 0))))
         return {
-            "agent_future_xyz": torch.zeros((0, predict_steps, 3)),
-            "agent_future_heading": torch.zeros((0, predict_steps)),
+            "agent_future_xyz": torch.zeros((0, PREDICTION_STEPS, 3)),
+            "agent_future_heading": torch.zeros((0, PREDICTION_STEPS)),
             "agent_future_valid_mask": torch.zeros(
-                (0, predict_steps), dtype=torch.bool
+                (0, PREDICTION_STEPS), dtype=torch.bool
             ),
         }
 
@@ -102,26 +108,26 @@ class RecordingPredictor:
 class LinearPredictor(RecordingPredictor):
     """Predicts agent x == future-timestamp-in-seconds (a unique value per step)."""
 
-    def run_inference(
-        self, env_data: dict[str, Any], *, predict_steps: int
-    ) -> dict[str, Any] | None:
+    def run_inference(self, env_data: dict[str, Any]) -> dict[str, Any] | None:
         curr_t = int(env_data["env"].get("curr_t", 0))
-        self.calls.append((predict_steps, curr_t))
+        self.calls.append((PREDICTION_STEPS, curr_t))
         sample_start_t_us = int(env_data["env"]["sample_start_t_us"])
         current_ts_us = sample_start_t_us + curr_t * DT_US
         future_ts_s = torch.tensor(
             [
                 (current_ts_us + ((offset + 1) * DT_US)) / 1_000_000.0
-                for offset in range(predict_steps)
+                for offset in range(PREDICTION_STEPS)
             ],
             dtype=torch.float32,
         )
-        xyz = torch.zeros((1, predict_steps, 3), dtype=torch.float32)
+        xyz = torch.zeros((1, PREDICTION_STEPS, 3), dtype=torch.float32)
         xyz[0, :, 0] = future_ts_s
         return {
             "agent_future_xyz": xyz,
-            "agent_future_heading": torch.zeros((1, predict_steps)),
-            "agent_future_valid_mask": torch.ones((1, predict_steps), dtype=torch.bool),
+            "agent_future_heading": torch.zeros((1, PREDICTION_STEPS)),
+            "agent_future_valid_mask": torch.ones(
+                (1, PREDICTION_STEPS), dtype=torch.bool
+            ),
         }
 
     @staticmethod
@@ -151,11 +157,9 @@ class BlockingPredictor(RecordingPredictor):
         self.second_started = threading.Event()
         self.release_first = threading.Event()
 
-    def run_inference(
-        self, env_data: dict[str, Any], *, predict_steps: int
-    ) -> dict[str, Any] | None:
+    def run_inference(self, env_data: dict[str, Any]) -> dict[str, Any] | None:
         with self._lock:
-            self.calls.append((predict_steps, int(env_data["env"].get("curr_t", 0))))
+            self.calls.append((PREDICTION_STEPS, int(env_data["env"].get("curr_t", 0))))
             call_count = len(self.calls)
         if call_count == 1:
             self.first_started.set()
@@ -164,10 +168,10 @@ class BlockingPredictor(RecordingPredictor):
         elif call_count == 2:
             self.second_started.set()
         return {
-            "agent_future_xyz": torch.zeros((0, predict_steps, 3)),
-            "agent_future_heading": torch.zeros((0, predict_steps)),
+            "agent_future_xyz": torch.zeros((0, PREDICTION_STEPS, 3)),
+            "agent_future_heading": torch.zeros((0, PREDICTION_STEPS)),
             "agent_future_valid_mask": torch.zeros(
-                (0, predict_steps), dtype=torch.bool
+                (0, PREDICTION_STEPS), dtype=torch.bool
             ),
         }
 
@@ -175,9 +179,8 @@ class BlockingPredictor(RecordingPredictor):
 class ExplodingPredictor(NoopPredictor):
     """Raises during inference to exercise the simulate INTERNAL error path."""
 
-    def run_inference(
-        self, env_data: dict[str, Any], *, predict_steps: int
-    ) -> dict[str, Any] | None:
+    def run_inference(self, env_data: dict[str, Any]) -> dict[str, Any] | None:
+        del env_data
         raise RuntimeError("boom: model inference failed")
 
 
@@ -294,6 +297,58 @@ def test_merge_trajectory_replaces_existing_future_segment() -> None:
     assert merged.positions[:, 0].tolist() == pytest.approx([1.0, 2.0, 25.0, 35.0])
 
 
+def test_vectorized_history_resampling_omits_out_of_range_dynamic_steps() -> None:
+    trajectory = trajectory_from_grpc(
+        common_pb2.Trajectory(
+            poses=[
+                _pose(100_000, x=1.0),
+                _pose(200_000, x=2.0),
+                _pose(300_000, x=3.0),
+            ]
+        )
+    )
+    timestamps_us = np.asarray(
+        [0, 100_000, 150_000, 300_000, 400_000],
+        dtype=np.uint64,
+    )
+
+    step_indices, positions, headings = _resample_trajectory_history(
+        trajectory,
+        timestamps_us,
+        is_static=False,
+    )
+
+    assert step_indices.tolist() == [1, 2, 3]
+    assert positions[:, 0].tolist() == pytest.approx([1.0, 1.5, 3.0])
+    assert headings.tolist() == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_vectorized_history_resampling_preserves_static_fallback() -> None:
+    trajectory = trajectory_from_grpc(
+        common_pb2.Trajectory(
+            poses=[
+                _pose(100_000, x=1.0),
+                _pose(200_000, x=2.0),
+                _pose(300_000, x=3.0),
+            ]
+        )
+    )
+    timestamps_us = np.asarray(
+        [0, 100_000, 150_000, 300_000, 400_000],
+        dtype=np.uint64,
+    )
+
+    step_indices, positions, headings = _resample_trajectory_history(
+        trajectory,
+        timestamps_us,
+        is_static=True,
+    )
+
+    assert step_indices.tolist() == [0, 1, 2, 3, 4]
+    assert positions[:, 0].tolist() == pytest.approx([1.0, 1.0, 1.5, 3.0, 1.0])
+    assert headings.tolist() == pytest.approx([0.0] * 5)
+
+
 def _session_request(
     *,
     logged: list[traffic_pb2.ObjectTrajectory],
@@ -336,6 +391,20 @@ class RunningService:
         return self.servicer._sessions[session_uuid]
 
 
+class DirectContext:
+    """Minimal ServicerContext for direct, socket-free service tests."""
+
+    def __init__(self) -> None:
+        self.code = grpc.StatusCode.OK
+        self.details = ""
+
+    def set_code(self, code: grpc.StatusCode) -> None:
+        self.code = code
+
+    def set_details(self, details: str) -> None:
+        self.details = details
+
+
 def _build_servicer(
     *,
     predictor: Any,
@@ -345,18 +414,62 @@ def _build_servicer(
     """Construct a servicer with injected fakes, bypassing loader/model setup."""
     servicer = TrafficServiceServicer.__new__(TrafficServiceServicer)
     servicer._server = None
-    servicer._lock = threading.Lock()
+    servicer._registry_lock = threading.Lock()
     servicer._sessions = {}
+    servicer._session_locks = {}
     servicer._service_version = "test-traffic-service"
     servicer._time_step_s = DT_US / 1e6
     servicer._dt_us = DT_US
     servicer._minimum_history_length = MIN_HISTORY
-    servicer._minimum_future_steps = 5
+    servicer._prediction_steps = PREDICTION_STEPS
     servicer._loader_cfg = CatkLoaderConfig(usdz_folder="unused")
     servicer._scene_loader = scene_loader or FakeSceneLoader()
     servicer._scene_adapter = FakeSceneAdapter(env_data or _make_env_data())
     servicer._catk_predictor = predictor
     return servicer
+
+
+def _started_session_state() -> Any:
+    servicer = _build_servicer(predictor=RecordingPredictor())
+    context = DirectContext()
+    servicer.start_session(
+        _session_request(logged=[_ego_object(), _moving_object()]),
+        context,
+    )
+    assert context.code == grpc.StatusCode.OK
+    return servicer._sessions["session-1"]
+
+
+def test_resampling_requires_static_object_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _started_session_state()
+    monkeypatch.setattr(history_module, "agent_is_static_by_object_id", lambda _: {})
+
+    with pytest.raises(KeyError) as exc_info:
+        history_module.build_resampled_env_data(
+            state,
+            end_ts_us=1_500_000,
+            history_steps=MIN_HISTORY,
+            dt_us=DT_US,
+        )
+    assert exc_info.value.args == ("moving-1",)
+
+
+def test_resampling_requires_object_index_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _started_session_state()
+    monkeypatch.setattr(history_module, "agent_object_id_to_index", lambda _: {})
+
+    with pytest.raises(KeyError) as exc_info:
+        history_module.build_resampled_env_data(
+            state,
+            end_ts_us=1_500_000,
+            history_steps=MIN_HISTORY,
+            dt_us=DT_US,
+        )
+    assert exc_info.value.args == ("moving-1",)
 
 
 @contextmanager
@@ -411,6 +524,20 @@ def test_start_then_close_session_round_trips(service: RunningService) -> None:
         traffic_pb2.TrafficSessionCloseRequest(session_uuid="session-1")
     )
     assert "session-1" not in service.servicer._sessions
+    assert "session-1" not in service.servicer._session_locks
+
+
+def test_start_session_rejects_duplicate_uuid(service: RunningService) -> None:
+    service.stub.start_session(_session_request(logged=[_ego_object()]))
+    original_state = service.servicer._sessions["session-1"]
+    original_lock = service.servicer._session_locks["session-1"]
+
+    with pytest.raises(grpc.RpcError) as exc:
+        service.stub.start_session(_session_request(logged=[_ego_object()]))
+
+    assert exc.value.code() == grpc.StatusCode.ALREADY_EXISTS
+    assert service.servicer._sessions["session-1"] is original_state
+    assert service.servicer._session_locks["session-1"] is original_lock
 
 
 def test_start_session_rejects_empty_uuid(service: RunningService) -> None:
@@ -515,7 +642,8 @@ def test_simulate_missing_catk_predictions_returns_failed_precondition() -> None
         with pytest.raises(grpc.RpcError) as exc:
             service.stub.simulate(_simulate_request(2_000_000))
         assert exc.value.code() == grpc.StatusCode.FAILED_PRECONDITION
-        assert "CATK did not produce predictions" in exc.value.details()
+        assert "No usable map geometry was found within 100 m" in exc.value.details()
+        assert "CATK cannot produce predictions" in exc.value.details()
 
 
 def test_first_simulate_accepts_initial_history_time(service: RunningService) -> None:
@@ -552,15 +680,12 @@ def test_dynamic_response_includes_available_prediction_horizon() -> None:
 
         assert len(response.object_trajectory_updates) == 1
         trajectory = response.object_trajectory_updates[0].trajectory
-        assert [pose.timestamp_us for pose in trajectory.poses] == [
-            1_600_000,
-            1_700_000,
-            1_800_000,
-            1_900_000,
-            2_000_000,
+        expected_timestamps = [
+            1_600_000 + offset * DT_US for offset in range(PREDICTION_STEPS)
         ]
+        assert [pose.timestamp_us for pose in trajectory.poses] == expected_timestamps
         assert [pose.pose.vec.x for pose in trajectory.poses] == pytest.approx(
-            [1.6, 1.7, 1.8, 1.9, 2.0]
+            [timestamp_us / 1_000_000 for timestamp_us in expected_timestamps]
         )
 
 
@@ -600,7 +725,7 @@ def test_logged_traffic_used_until_handover_then_model_runs() -> None:
         assert pose.pose.vec.x == pytest.approx(1.6)
 
         service.stub.simulate(_simulate_request(2_100_000))
-        assert predictor.calls == [(5, MIN_HISTORY - 1)]
+        assert predictor.calls == [(PREDICTION_STEPS, MIN_HISTORY - 1)]
 
 
 def test_off_grid_handover_uses_exact_anchor_for_catk() -> None:
@@ -614,13 +739,16 @@ def test_off_grid_handover_uses_exact_anchor_for_catk() -> None:
         state = service.session_state()
 
         service.stub.simulate(_simulate_request(2_060_000))
-        assert predictor.calls == [(5, MIN_HISTORY - 1)]
+        assert predictor.calls == [(PREDICTION_STEPS, MIN_HISTORY - 1)]
         assert state.current_ts_us == 2_060_000
         assert state.env_data["env"]["sample_start_t_us"] == 550_000
         assert state.env_data["env"]["curr_t"] == MIN_HISTORY
 
         service.stub.simulate(_simulate_request(2_200_000))
-        assert predictor.calls == [(5, MIN_HISTORY - 1), (5, MIN_HISTORY - 1)]
+        assert predictor.calls == [
+            (PREDICTION_STEPS, MIN_HISTORY - 1),
+            (PREDICTION_STEPS, MIN_HISTORY - 1),
+        ]
         assert state.env_data["env"]["sample_start_t_us"] == 560_000
         assert state.env_data["env"]["curr_t"] == MIN_HISTORY + 1
 
@@ -723,15 +851,29 @@ def test_handover_resamples_logged_history_before_catk() -> None:
         assert state.env_data["agents"]["xyz"][0, 16, 0].item() == pytest.approx(2.1)
 
 
-def test_multi_token_horizon_uses_single_inference_call() -> None:
+def test_request_within_fixed_horizon_uses_configured_prediction_steps() -> None:
     predictor = RecordingPredictor()
     with _serve(predictor) as service:
         service.stub.start_session(_session_request(logged=[_ego_object()]))
         service.stub.simulate(_simulate_request(2_300_000))
 
         assert len(predictor.calls) == 1
-        assert predictor.calls[0] == (8, 15)
+        assert predictor.calls[0] == (PREDICTION_STEPS, 15)
         assert service.session_state().env_data["env"]["curr_t"] == 23
+
+
+def test_request_beyond_fixed_prediction_horizon_is_invalid() -> None:
+    predictor = RecordingPredictor()
+    with _serve(predictor) as service:
+        service.stub.start_session(_session_request(logged=[_ego_object()]))
+
+        with pytest.raises(grpc.RpcError) as exc_info:
+            service.stub.simulate(_simulate_request(3_100_000))
+
+        assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        assert "requires 16 future steps" in exc_info.value.details()
+        assert "configured for 15 prediction steps" in exc_info.value.details()
+        assert predictor.calls == []
 
 
 def test_concurrent_simulate_for_same_session_is_serialized() -> None:
@@ -761,5 +903,50 @@ def test_concurrent_simulate_for_same_session_is_serialized() -> None:
 
         assert not first.is_alive() and not second.is_alive()
         assert errors == []
-        assert predictor.calls == [(5, 15), (5, 15)]
+        assert predictor.calls == [
+            (PREDICTION_STEPS, 15),
+            (PREDICTION_STEPS, 15),
+        ]
         assert service.session_state().current_ts_us == 2_100_000
+
+
+def test_concurrent_simulate_for_different_sessions_reaches_predictor() -> None:
+    predictor = BlockingPredictor()
+    with _serve(predictor, max_workers=4) as service:
+        service.stub.start_session(
+            _session_request(logged=[_ego_object()], session_uuid="session-1")
+        )
+        service.stub.start_session(
+            _session_request(logged=[_ego_object()], session_uuid="session-2")
+        )
+
+        errors: list[BaseException] = []
+
+        def call(session_uuid: str) -> None:
+            try:
+                service.stub.simulate(
+                    _simulate_request(2_000_000, session_uuid=session_uuid)
+                )
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        first = threading.Thread(target=call, args=("session-1",))
+        second = threading.Thread(target=call, args=("session-2",))
+
+        first.start()
+        assert predictor.first_started.wait(timeout=2.0)
+        second.start()
+        assert predictor.second_started.wait(timeout=2.0)
+
+        predictor.release_first.set()
+        first.join(timeout=3.0)
+        second.join(timeout=3.0)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert errors == []
+        assert predictor.calls == [
+            (PREDICTION_STEPS, 15),
+            (PREDICTION_STEPS, 15),
+        ]
+        assert service.session_state("session-1").current_ts_us == 2_000_000
+        assert service.session_state("session-2").current_ts_us == 2_000_000

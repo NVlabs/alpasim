@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import yaml
+from alpasim_utils.ply_io import load_mesh_vf
 from alpasim_utils.scenario import Rig, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.scene_metadata import Metadata
@@ -20,12 +21,14 @@ from alpasim_utils.scene_metadata import Metadata
 logger = logging.getLogger(__name__)
 
 try:
+    from alpasim_utils.ground_snap import snap_vector_map_to_ground
     from trajdata.dataset_specific.mads.mads_utils import populate_vector_map
     from trajdata.dataset_specific.xodr.geo_transform import get_t_rig_enu_from_ecef
     from trajdata.dataset_specific.xodr.vector_map_export import (
         populate_vector_map_from_xodr,
     )
     from trajdata.maps import VectorMap
+    from trajdata.maps.vec_map_elements import MapElementType
 except ImportError:
     logger.warning("Could not import trajdata (missing). Map loading will be disabled.")
     VectorMap = None
@@ -66,6 +69,7 @@ class Artifact(SceneDataSource):
     _traffic_objects: TrafficObjects | None = None
     _smooth_trajectories: bool = True
     _map: VectorMap | None = None
+    _map_source: str | None = None
     _attempted_map_load: bool = False
     _mesh_ply: bytes | None = None
 
@@ -96,6 +100,7 @@ class Artifact(SceneDataSource):
             self._rig = None
             self._traffic_objects = None
             self._map = None
+            self._map_source = None
             self._attempted_map_load = False
             self._mesh_ply = None
 
@@ -183,8 +188,9 @@ class Artifact(SceneDataSource):
         """Load and return the map data from the USDZ file.
 
         Attempts to load map data in the following order:
-        1. clipgt/map_data directories (if available)
-        2. XODR file (fallback)
+        1. map_data or clipgt parquet directories
+        2. fastmap parquet directory
+        3. XODR file
 
         Returns:
             VectorMap instance or None if no map data is available
@@ -210,69 +216,94 @@ class Artifact(SceneDataSource):
                 "Loading USDZ map data into memory. This will take a few seconds..."
             )
 
-            self._map = VectorMap(map_id=f"alpasim_usdz:{self.metadata.scene_id}")
-
-            # Try loading map data
-            map_loaded = False
+            vector_map = None
+            map_directory = None
             with zipfile.ZipFile(self.source, "r") as zip_file:
-                # Try loading from different sources in order of preference
-                if self._load_clipgt_map(zip_file):
-                    map_loaded = True
-                    logger.info("Successfully loaded map from clipgt/map_data")
-                elif self._load_xodr_map(zip_file):
-                    map_loaded = True
-                    logger.info("Successfully loaded map from XODR")
+                for candidate in ("map_data", "clipgt", "fastmap"):
+                    vector_map = self._load_parquet_map(zip_file, candidate)
+                    if vector_map is not None:
+                        map_directory = candidate
+                        logger.info("Successfully loaded map from %s", candidate)
+                        break
+                if vector_map is None:
+                    vector_map = self._load_xodr_map(zip_file)
+                    if vector_map is not None:
+                        map_directory = "xodr"
+                        logger.info("Successfully loaded map from XODR")
 
-            if not map_loaded:
+            if vector_map is None:
                 logger.warning(
-                    f"No map data (clipgt or XODR) found in {self.source}. "
+                    f"No map data (map_data, clipgt, fastmap, or XODR) found in {self.source}. "
                     "Skipping map loading."
                 )
                 self._map = None
+                self._map_source = None
                 # Mark as attempted AFTER setting _map to None (load complete)
                 self._attempted_map_load = True
                 return None
 
+            self._map = vector_map
+            if map_directory == "fastmap":
+                self._snap_map_z()
+
             # Post-process the loaded map (builds KDTree search indices)
             self._finalize_map()
+            self._map_source = map_directory
 
             # Mark as attempted AFTER map is fully loaded and finalized
             self._attempted_map_load = True
             return self._map
 
-    def _load_clipgt_map(self, zip_file: zipfile.ZipFile) -> bool:
-        """Load map from clipgt/map_data directories.
+    @property
+    def map_source(self) -> str | None:
+        """Return the source used by :attr:`map`.
+
+        Values are ``map_data``, ``clipgt``, ``fastmap``, or ``xodr``. The
+        property loads the map if needed and returns ``None`` when no usable
+        map is available.
+        """
+        _ = self.map
+        return self._map_source
+
+    def _load_parquet_map(
+        self, zip_file: zipfile.ZipFile, map_directory: str
+    ) -> VectorMap | None:
+        """Load a complete parquet map directory.
 
         Args:
             zip_file: Open ZipFile instance
+            map_directory: Top-level directory containing map parquet files
 
         Returns:
-            True if map was successfully loaded, False otherwise
+            The loaded map, or None if this directory cannot be loaded
         """
+        prefix = f"{map_directory}/"
+        members = [name for name in zip_file.namelist() if name.startswith(prefix)]
+        if not members:
+            return None
+
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Find and extract map directories
-                map_dir = self._extract_map_directories(zip_file, temp_dir)
-                if map_dir is None:
-                    logger.debug("No map_data or clipgt directories found")
-                    return False
-
-                # Load the map data
-                map_root = os.path.join(temp_dir, map_dir)
-                populate_vector_map(self._map, map_root)
-                return True
+                zip_file.extractall(temp_dir, members)
+                map_root = os.path.join(temp_dir, map_directory)
+                vector_map = VectorMap(map_id=f"alpasim_usdz:{self.metadata.scene_id}")
+                populate_vector_map(vector_map, map_root)
+                if not vector_map.elements.get(MapElementType.ROAD_LANE):
+                    logger.warning("Could not load map from %s: no road lanes", prefix)
+                    return None
+                return vector_map
         except (FileNotFoundError, ValueError, AttributeError) as e:
-            logger.warning(f"Could not load clipgt map: {e}")
-            return False
+            logger.warning("Could not load map from %s: %s", prefix, e)
+            return None
 
-    def _load_xodr_map(self, zip_file: zipfile.ZipFile) -> bool:
+    def _load_xodr_map(self, zip_file: zipfile.ZipFile) -> VectorMap | None:
         """Load map from XODR file.
 
         Args:
             zip_file: Open ZipFile instance
 
         Returns:
-            True if map was successfully loaded, False otherwise
+            The loaded map, or None if the archive has no usable XODR map
         """
         try:
             # Open XODR file
@@ -283,33 +314,14 @@ class Artifact(SceneDataSource):
             t_xodr_enu_to_sim = self._get_xodr_transform(zip_file, xodr_xml)
 
             # Load the XODR map
+            vector_map = VectorMap(map_id=f"alpasim_usdz:{self.metadata.scene_id}")
             populate_vector_map_from_xodr(
-                self._map, xodr_xml, t_xodr_enu_to_sim=t_xodr_enu_to_sim
+                vector_map, xodr_xml, t_xodr_enu_to_sim=t_xodr_enu_to_sim
             )
-            return True
+            return vector_map
         except (KeyError, FileNotFoundError) as e:
             logger.debug(f"Could not load XODR map: {e}")
-            return False
-
-    def _extract_map_directories(
-        self, zip_file: zipfile.ZipFile, temp_dir: str
-    ) -> str | None:
-        """Extract map_data or clipgt directories from the zip file.
-
-        Args:
-            zip_file: Open ZipFile instance
-            temp_dir: Temporary directory to extract files to
-
-        Returns:
-            Name of the extracted directory or None if not found
-        """
-        map_dir = None
-        for file_name in zip_file.namelist():
-            if file_name.startswith(("map_data/", "clipgt/")):
-                zip_file.extract(file_name, temp_dir)
-                if map_dir is None:
-                    map_dir = file_name.split("/")[0]
-        return map_dir
+            return None
 
     def _get_xodr_transform(
         self, zip_file: zipfile.ZipFile, xodr_xml: str
@@ -370,6 +382,15 @@ class Artifact(SceneDataSource):
                 f"Critical: Unable to compute coordinate transformation for trajectory alignment. "
                 f"This will result in misaligned map and trajectory data. Error: {e}"
             ) from e
+
+    def _snap_map_z(self) -> None:
+        """Align FastMap geometry with the artifact's ground mesh."""
+        assert self._map is not None
+        logger.info("Snapping FastMap geometry to the ground mesh...")
+        with zipfile.ZipFile(self.source, "r") as zip_file:
+            mesh_bytes = zip_file.read("mesh_ground.ply")
+        vertices, _ = load_mesh_vf(mesh_bytes)
+        snap_vector_map_to_ground(self._map, vertices)
 
     def _finalize_map(self) -> None:
         """Finalize the loaded map by setting up data structures."""

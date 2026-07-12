@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Any, cast
@@ -44,12 +45,24 @@ def write_yaml(data: dict[str, Any], file_path: str) -> None:
         yaml.dump(data, stream, Dumper=IndentedListDumper, sort_keys=False)
 
 
-def write_json(data: Any, file_path: str | Path) -> None:
-    """Write indented JSON, creating the parent directory first."""
+def write_json(data: Any, file_path: str | Path, *, mode: int | None = None) -> None:
+    """Atomically write indented JSON, creating the parent directory first.
+
+    Writes to a temporary file and renames it into place so concurrent readers
+    (e.g. an external Prometheus watching file-SD target files) never observe
+    partially written JSON.
+    """
     path = Path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as stream:
+            if mode is not None:
+                os.fchmod(stream.fileno(), mode)
+            json.dump(data, stream, indent=2)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def nre_image_to_nre_version(image: str) -> str:

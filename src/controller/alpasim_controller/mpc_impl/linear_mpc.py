@@ -219,7 +219,6 @@ class LinearMPC(MPCController):
         v_cg_x = x_op[self.IVX]
         v_cg_y = x_op[self.IVY]
         yaw_rate = x_op[self.IYAW_RATE]
-        steering = x_op[self.ISTEERING]
 
         # Use kinematic model at low speeds
         use_kinematic = v_cg_x < params.kinematic_threshold_speed
@@ -232,7 +231,7 @@ class LinearMPC(MPCController):
         sin_yaw = math.sin(yaw)
 
         if use_kinematic:
-            # Kinematic model linearization
+            # Kinematic model linearization.
             A[self.IX, self.IYAW] = -v_cg_x * sin_yaw
             A[self.IX, self.IVX] = cos_yaw
 
@@ -242,14 +241,14 @@ class LinearMPC(MPCController):
             A[self.IYAW, self.IYAW_RATE] = 1.0
             A[self.IVX, self.IACCEL] = 1.0
 
+            # Freeze v_cg_x as a scheduling parameter. Adding its product derivatives
+            # without an affine residual would double the operating-point terms.
             GAIN = 10.0
             l_r = params.l_rig_to_cg
             L = params.wheelbase
-            A[self.IVY, self.IVX] = GAIN * steering * l_r / L
             A[self.IVY, self.IVY] = -GAIN
             A[self.IVY, self.ISTEERING] = GAIN * v_cg_x * l_r / L
 
-            A[self.IYAW_RATE, self.IVX] = GAIN * steering / L
             A[self.IYAW_RATE, self.ISTEERING] = GAIN * v_cg_x / L
             A[self.IYAW_RATE, self.IYAW_RATE] = -GAIN
 

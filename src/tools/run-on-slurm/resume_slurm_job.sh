@@ -63,20 +63,7 @@ if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
         exit 1
     fi
 
-    # Find the specific log directory for *this* task ID within the original parent directory.
-    # It looks for a directory whose name matches the pattern <JOB_ID>_<TASK_ID>_<TIMESTAMP>.
-    TARGET_LOG_DIR_BASENAME=$(ls -1 "$ORIGINAL_DIR" | grep -E "^[0-9]+_${SLURM_ARRAY_TASK_ID}_.*$")
-
-    # Check if exactly one directory was found
-    MATCH_COUNT=$(echo "$TARGET_LOG_DIR_BASENAME" | wc -l)
-
-    if [ "$MATCH_COUNT" -ne 1 ]; then
-        echo "ERROR: Expected exactly one log directory for task ${SLURM_ARRAY_TASK_ID} in ${ORIGINAL_DIR}, but found ${MATCH_COUNT}."
-        ls -1 "$ORIGINAL_DIR" | grep -E "^[0-9]+_${SLURM_ARRAY_TASK_ID}_.*$" # Show matches/non-matches
-        exit 1
-    fi
-
-    TARGET_LOG_DIR="${ORIGINAL_DIR}${TARGET_LOG_DIR_BASENAME}"
+    TARGET_LOG_DIR="${ORIGINAL_DIR}task-${SLURM_ARRAY_TASK_ID}"
 
     LOG_ID="${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 

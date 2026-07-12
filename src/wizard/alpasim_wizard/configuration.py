@@ -114,7 +114,11 @@ class ConfigurationManager:
         runtime_config["simulation_config"] = simulation_config
         runtime_config["prometheus"] = {
             "worker_ports": list(telemetry_ports.workers),
-            "url": f"http://{prometheus_host}:{telemetry_ports.prometheus}",
+            "url": (
+                f"http://{prometheus_host}:{telemetry_ports.prometheus}"
+                if cfg.wizard.prometheus.start_prometheus
+                else None
+            ),
         }
 
         # Write flat scene list
@@ -301,7 +305,11 @@ class ConfigurationManager:
             run_metadata.setdefault("run_uuid", str(uuid.uuid4()))
             return run_metadata
 
-        run_uuid = uuid.uuid4()
+        run_uuid = (
+            uuid.UUID(cfg.wizard.prometheus.run_uuid)
+            if cfg.wizard.prometheus.run_uuid
+            else uuid.uuid4()
+        )
         run_name = (
             cfg.wizard.run_name
             or os.environ.get("SLURM_JOB_NAME", None)

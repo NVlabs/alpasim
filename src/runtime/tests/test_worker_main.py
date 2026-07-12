@@ -10,10 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from alpasim_grpc.v0 import runtime_pb2
 from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import ServiceAddress
 from alpasim_runtime.config import RendererConfig, RendererKind, VideoModelConfig
+from alpasim_runtime.errors import InvalidSceneError
 from alpasim_runtime.worker.ipc import (
     SHUTDOWN_SENTINEL,
     AssignedRolloutJob,
@@ -21,6 +23,78 @@ from alpasim_runtime.worker.ipc import (
     ServiceEndpoints,
 )
 from alpasim_runtime.worker.main import run_single_rollout, run_worker_loop
+from prometheus_client import generate_latest
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (
+            InvalidSceneError("bad-scene", "broken map"),
+            runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE,
+        ),
+        (
+            RuntimeError("rollout failed"),
+            runtime_pb2.ROLLOUT_ERROR_CODE_UNSPECIFIED,
+        ),
+    ],
+)
+async def test_run_single_rollout_reports_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected_code: int,
+) -> None:
+    for service in [
+        "DriverService",
+        "PhysicsService",
+        "TrafficService",
+        "ControllerService",
+        "SensorsimService",
+    ]:
+        monkeypatch.setattr(
+            f"alpasim_runtime.worker.main.{service}",
+            lambda *args, **kwargs: SimpleNamespace(),
+        )
+
+    def _raise(**kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.UnboundRollout.create",
+        _raise,
+    )
+
+    result = await run_single_rollout(
+        job=AssignedRolloutJob(
+            request_id="req-1",
+            job_id="job-1",
+            scene_id="bad-scene",
+            rollout_spec_index=0,
+            endpoints=ServiceEndpoints(
+                driver=ServiceAddress("localhost:10001", skip=False),
+                renderer=ServiceAddress("localhost:10002", skip=False),
+                physics=ServiceAddress("localhost:10003", skip=False),
+                trafficsim=ServiceAddress("localhost:10004", skip=False),
+                controller=ServiceAddress("localhost:10005", skip=False),
+            ),
+            dispatch_kind="fifo",
+            scheduler_wait_seconds=0.0,
+        ),
+        user_config=SimpleNamespace(
+            renderer=RendererConfig(kind=RendererKind.sensorsim),
+            simulation_config=MagicMock(),
+        ),
+        data_source=MagicMock(),
+        camera_catalog=MagicMock(),
+        version_ids=MagicMock(),
+        rollouts_dir="/tmp",
+        eval_config=MagicMock(),
+        eval_executor=MagicMock(),
+    )
+
+    assert result.success is False
+    assert result.error_code == expected_code
 
 
 @pytest.mark.asyncio
@@ -78,6 +152,8 @@ async def test_run_worker_loop_uses_parent_version_ids(
         scene_id="scene-1",
         rollout_spec_index=0,
         endpoints=endpoints,
+        dispatch_kind="fifo",
+        scheduler_wait_seconds=0.5,
     )
 
     job_queue: Queue = Queue()
@@ -114,6 +190,68 @@ async def test_run_worker_loop_uses_parent_version_ids(
     assert result.rollout_spec_index == 0
     assert result.success is True
     assert seen_version_ids is parent_version_ids
+
+
+@pytest.mark.asyncio
+async def test_run_worker_loop_clears_active_metric_when_rollout_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _raise(**kwargs) -> JobResult:
+        del kwargs
+        raise RuntimeError("rollout failed before producing a result")
+
+    monkeypatch.setattr("alpasim_runtime.worker.main.run_single_rollout", _raise)
+
+    from alpasim_runtime.telemetry.telemetry_context import TelemetryContext
+
+    telemetry = TelemetryContext(port=9200, worker_id=4)
+    monkeypatch.setattr(
+        "alpasim_runtime.worker.main.try_get_context", lambda: telemetry
+    )
+    job_queue: Queue = Queue()
+    job_queue.put(
+        AssignedRolloutJob(
+            request_id="req-1",
+            job_id="job-1",
+            scene_id="scene-1",
+            rollout_spec_index=0,
+            endpoints=ServiceEndpoints(
+                driver=ServiceAddress("driver", skip=False),
+                renderer=ServiceAddress("renderer", skip=False),
+                physics=ServiceAddress("physics", skip=False),
+                trafficsim=ServiceAddress("trafficsim", skip=False),
+                controller=ServiceAddress("controller", skip=False),
+            ),
+            dispatch_kind="cold_replica",
+            scheduler_wait_seconds=1.25,
+        )
+    )
+
+    with pytest.raises(ExceptionGroup):
+        await run_worker_loop(
+            worker_id=4,
+            job_queue=job_queue,
+            result_queue=Queue(),
+            num_consumers=1,
+            user_config=MagicMock(),
+            scene_loader=MagicMock(),
+            camera_catalog=MagicMock(),
+            version_ids=MagicMock(),
+            rollouts_dir="/tmp",
+            eval_config=MagicMock(),
+            parent_pid=None,
+        )
+
+    metrics = generate_latest(telemetry.registry).decode("utf-8")
+    assert 'alpasim_renderer_active_rollouts{worker_id="4"} 0.0' in metrics
+    assert (
+        'alpasim_renderer_rollouts_started_total{kind="cold_replica",'
+        'worker_id="4"} 1.0'
+    ) in metrics
+    assert (
+        'alpasim_renderer_scheduler_wait_seconds_sum{kind="cold_replica",'
+        'worker_id="4"} 1.25'
+    ) in metrics
 
 
 @pytest.mark.asyncio
@@ -195,6 +333,8 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
             trafficsim=ServiceAddress("localhost:10004", skip=False),
             controller=ServiceAddress("localhost:10005", skip=False),
         ),
+        dispatch_kind="fifo",
+        scheduler_wait_seconds=0.5,
     )
     video_model_config = VideoModelConfig(fps=24)
     user_config = SimpleNamespace(

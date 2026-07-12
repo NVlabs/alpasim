@@ -32,8 +32,13 @@ def _make_config() -> SimpleNamespace:
             smooth_trajectories=True,
             scenes=[SimpleNamespace(scene_id="clipgt-a")],
             endpoints=SimpleNamespace(startup_timeout_s=1),
-            scene_affine_dispatch=False,
-            cache_refresh_interval_s=5.0,
+            scene_affine_dispatch=SimpleNamespace(
+                enabled=False,
+                cache_refresh_interval_s=5.0,
+                max_renderers_per_scene=2,
+                max_scenes_per_renderer=None,
+            ),
+            max_rollout_retries=2,
         ),
         network=SimpleNamespace(),
     )
@@ -155,6 +160,8 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
     class _FakeScheduler:
         def __init__(self, *, runtime, **kwargs) -> None:
             assert runtime is worker_runtime
+            assert kwargs["max_rollout_retries"] == 2
+            assert kwargs["rollouts_dir"] == "/tmp/log/rollouts"
 
         async def shutdown(self, *, reason: str) -> None:
             del reason
@@ -541,9 +548,10 @@ def test_build_simulation_return_mixed_results_with_and_without_eval() -> None:
             job_id="j2",
             rollout_spec_index=0,
             success=False,
-            error="sim crashed",
+            error="invalid scene",
             error_traceback=None,
             rollout_uuid="uuid-2",
+            error_code=runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE,
             eval_result=None,
         ),
     ]
@@ -557,12 +565,14 @@ def test_build_simulation_return_mixed_results_with_and_without_eval() -> None:
     # First rollout: has metrics
     rr0 = ret.rollout_returns[0]
     assert rr0.success is True
+    assert rr0.error_code == runtime_pb2.ROLLOUT_ERROR_CODE_NONE
     assert len(rr0.timestep_metrics) == 2
     assert dict(rr0.aggregated_metrics) == {"collision_any": 1.0, "offroad": 0.5}
 
     # Second rollout: no metrics
     rr1 = ret.rollout_returns[1]
     assert rr1.success is False
-    assert rr1.error == "sim crashed"
+    assert rr1.error == "invalid scene"
+    assert rr1.error_code == runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE
     assert len(rr1.timestep_metrics) == 0
     assert dict(rr1.aggregated_metrics) == {}

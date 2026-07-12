@@ -7,8 +7,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 import torch
-from alpasim_trafficsim.grpc.catk_predictor import CATKTrafficPredictor
+from alpasim_trafficsim.grpc.catk_predictor import (
+    CatkPredictionUnavailableError,
+    CATKTrafficPredictor,
+)
 from alpasim_trafficsim.grpc.config import CatkConfig
 
 
@@ -22,7 +26,6 @@ def _predictor(min_valid_history_steps: int | None) -> CATKTrafficPredictor:
     predictor.history_window_steps = cfg.loader.num_history_steps
     predictor.min_valid_history_steps = cfg.min_valid_history_steps
     predictor.model = None
-    predictor._token_stride = 5
     return predictor
 
 
@@ -127,8 +130,6 @@ def test_threshold_zero_never_freezes_for_sparse_history() -> None:
 
 
 class _EmptyMapModel:
-    model_predict_step_num = 0
-
     def create_model_input(self, *args: Any, **kwargs: Any) -> dict[str, Any] | None:
         del args, kwargs
         return None
@@ -154,11 +155,15 @@ def _env_for_inference() -> dict[str, Any]:
     }
 
 
-def test_empty_filtered_map_returns_none_when_prediction_unavailable() -> None:
+def test_empty_filtered_map_raises_prediction_unavailable() -> None:
     predictor = _predictor(min_valid_history_steps=None)
     predictor.model = _EmptyMapModel()
 
-    assert predictor.run_inference(_env_for_inference(), predict_steps=1) is None
+    with pytest.raises(
+        CatkPredictionUnavailableError,
+        match="No usable map geometry was found within 100 m",
+    ):
+        predictor.run_inference(_env_for_inference())
 
 
 def test_model_input_value_error_still_propagates() -> None:
@@ -173,7 +178,7 @@ def test_model_input_value_error_still_propagates() -> None:
     predictor.model = BrokenModel()
 
     try:
-        predictor.run_inference(_env_for_inference(), predict_steps=1)
+        predictor.run_inference(_env_for_inference())
     except ValueError as exc:
         assert str(exc) == "different CATK input failure"
     else:

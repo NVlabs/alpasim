@@ -32,19 +32,19 @@ groups:
       - record: alpasim:driver_drive_rpc_duration_seconds_bucket:sum
         expr: >-
           sum by (run_uuid, run_name, le)
-          (alpasim_rpc_duration_seconds_bucket{service="driver",method="drive",tag="default"})
+          (alpasim_rpc_duration_seconds_bucket{service="driver",method="drive"})
       - record: alpasim:driver_drive_rpc_duration_seconds_bucket:rate1m
         expr: >-
           sum by (run_uuid, run_name, le)
-          (rate(alpasim_rpc_duration_seconds_bucket{service="driver",method="drive",tag="default"}[1m]))
+          (rate(alpasim_rpc_duration_seconds_bucket{service="driver",method="drive"}[1m]))
       - record: alpasim:nre_render_rpc_duration_seconds_bucket:sum
         expr: >-
           sum by (run_uuid, run_name, le)
-          (alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated",tag="default"})
+          (alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated"})
       - record: alpasim:nre_render_rpc_duration_seconds_bucket:rate1m
         expr: >-
           sum by (run_uuid, run_name, le)
-          (rate(alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated",tag="default"}[1m]))
+          (rate(alpasim_rpc_duration_seconds_bucket{service="sensorsim",method=~"render_rgb|batch_render_rgb|render_aggregated"}[1m]))
       - record: alpasim:rpc_duration_seconds:p95
         expr: >-
           histogram_quantile(0.95,
@@ -91,19 +91,19 @@ groups:
       - record: alpasim:simulation_rollouts_completed:sum
         expr: >-
           sum by (run_uuid, run_name)
-          (alpasim_simulation_rollouts_completed_total)
+          (alpasim_rollouts_total)
       - record: alpasim:simulation_seconds_per_rollout:avg
         expr: >-
           (
           max by (run_uuid, run_name)
           (alpasim_simulation_elapsed_seconds) /
           sum by (run_uuid, run_name)
-          (alpasim_simulation_rollouts_completed_total)
+          (alpasim_rollouts_total)
           )
           and on (run_uuid, run_name)
           (
           sum by (run_uuid, run_name)
-          (alpasim_simulation_rollouts_completed_total) > 0
+          (alpasim_rollouts_total) > 0
           )
       - record: alpasim:simulation_seconds_per_rollout:rate5m
         expr: >-
@@ -111,12 +111,12 @@ groups:
           max by (run_uuid, run_name)
           (increase(alpasim_simulation_elapsed_seconds[5m])) /
           sum by (run_uuid, run_name)
-          (increase(alpasim_simulation_rollouts_completed_total[5m]))
+          (increase(alpasim_rollouts_total[5m]))
           )
           and on (run_uuid, run_name)
           (
           sum by (run_uuid, run_name)
-          (increase(alpasim_simulation_rollouts_completed_total[5m])) > 0
+          (increase(alpasim_rollouts_total[5m])) > 0
           )
       - record: alpasim:process_cpu_utilization_percent:rate30s
         expr: >-

@@ -2,6 +2,76 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## July 2026 public sync updates (12.07.26)
+
+This sync expands the public scene catalog, improves rollout reliability and
+scheduling, and adds new telemetry, evaluation, and Slurm controls.
+
+### Scene catalogs and artifact loading
+
+The public 26.04 catalog is available as the `public_2604` suite, containing
+1,606 scenes after removing known-invalid artifacts. Scene-suite CSV rows now
+pin an exact artifact with `test_suite_id`, `scene_id`, and `uuid`; suite lookup
+no longer selects the newest artifact sharing a scene ID.
+
+Artifacts whose parquet vector map is stored under `fastmap/` are now
+supported. AlpaSim loads it after the preferred `map_data/` and `clipgt/`
+sources, aligns its height to the reconstruction ground mesh, and retains XODR
+as the final fallback.
+
+**Migration**: Add a matching `uuid` column to custom suite CSVs. Every
+`(scene_id, uuid)` pair must exist in the corresponding scene catalog.
+
+### Runtime reliability and scheduling
+
+Failed rollouts are retried up to `runtime.max_rollout_retries` times, with a
+default of two retries. Renderer startup now waits for channel readiness and
+retries known transient NRE initialization failures. Invalid vector maps return
+the structured `ROLLOUT_ERROR_CODE_INVALID_SCENE_MAP` error code.
+
+Scene-affine renderer dispatch now spreads non-affine work across the
+least-loaded renderers and bounds scene replication. New controls include
+`max_renderers_per_scene`, `max_scenes_per_renderer`, and cache refresh timing.
+
+**Migration**: Replace a boolean override such as
+`runtime.scene_affine_dispatch=true` with
+`runtime.scene_affine_dispatch.enabled=true`. Public NRE releases without the
+loaded-scene introspection RPC should leave this disabled.
+
+### Traffic simulation and evaluation
+
+Traffic simulation is explicitly disabled by default through
+`trafficsim=disabled`; select `trafficsim=catk` to enable CATK. CATK now batches
+requests, limits per-request CPU threading, and derives worker counts from the
+selected topology.
+
+Evaluation adds the `open_loop_collision` metric, which checks planned ego
+trajectories against recorded actors over a configurable horizon. Force-GT
+warmup exclusion is now anchored to the actual renderer handover, preventing
+warmup frames from leaking into aggregated metrics. Route generation can be
+disabled with `runtime.simulation_config.route_generator_type=NONE`.
+
+The public Alpamayo 1 driver can derive deterministic per-inference seeds from
+the session seed with `driver.model.force_determinism=true`. The low-speed MPC
+linearization also corrects two erroneous derivative terms.
+
+**Migration**: Custom CATK configs should use
+`catk.loader.prediction_steps` instead of `minimum_future_steps`.
+
+### Telemetry and Slurm execution
+
+Per-process Prometheus exporters can now be scraped by an external Prometheus
+without starting the wizard-managed sidecar. Set
+`wizard.prometheus.start_prometheus=false`; discovery publication and exporter
+lifecycle remain active. Slurm telemetry adds GPU ownership metrics for joining
+AlpaSim processes with DCGM data, and the Grafana dashboard includes the new
+scheduler, GPU, process, and throughput panels.
+
+Slurm deployments can opt into CUDA MPS with `wizard.enable_mps=true` to allow
+co-located GPU services to execute kernels concurrently. This option fails fast
+for non-Slurm run methods. Slurm submission also supports automatic resubmission
+of timed-out jobs.
+
 ## Runtime telemetry with Prometheus and Grafana (30.06.26)
 AlpaSim runs now start Prometheus telemetry by default. The wizard allocates
 metrics ports, starts Prometheus support services, writes scrape configuration,

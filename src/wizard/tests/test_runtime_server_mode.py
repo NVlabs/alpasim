@@ -91,6 +91,8 @@ def _cfg(
             prometheus=SimpleNamespace(
                 scrape_interval="5s",
                 file_sd_dir=None,
+                start_prometheus=True,
+                run_uuid=None,
             ),
             slurm_job_id=0,
             run_name="test-run",
@@ -238,6 +240,7 @@ def test_prometheus_configs_publish_runtime_targets_and_recording_rules(
     assert worker_target["labels"]["run_uuid"] == run_metadata["run_uuid"]
     assert worker_target["labels"]["run_name"] == "test-run"
     assert "worker_id" not in worker_target["labels"]
+    assert "instance" not in worker_target["labels"]
 
     prometheus_config = yaml.safe_load(
         (tmp_path / "prometheus/prometheus.yml").read_text()
@@ -247,10 +250,17 @@ def test_prometheus_configs_publish_runtime_targets_and_recording_rules(
     rules = yaml.safe_load(
         (tmp_path / "prometheus/rules/alpasim-recording-rules.yml").read_text()
     )
-    rule_names = {rule["record"] for rule in rules["groups"][0]["rules"]}
+    rules_by_name = {
+        rule["record"]: rule["expr"] for rule in rules["groups"][0]["rules"]
+    }
+    rule_names = set(rules_by_name)
     assert "alpasim:rpc_queue_depth_at_start_latest:max" in rule_names
     assert "alpasim:rpc_queue_depth_at_start_latest:min" in rule_names
     assert "alpasim:simulation_rollouts_completed:sum" in rule_names
+    throughput_rule = rules_by_name["alpasim:simulation_seconds_per_rollout:avg"]
+    assert "alpasim_simulation_elapsed_seconds" in throughput_rule
+    assert "alpasim_rollouts_total" in throughput_rule
+    assert "alpasim_rollout_duration_seconds" not in throughput_rule
     assert "alpasim:process_cpu_utilization_percent:max_by_group:rate30s" in rule_names
     assert "alpasim:gpu_memory_pressure_percent:avg" in rule_names
 
@@ -275,6 +285,43 @@ def test_run_metadata_is_loaded_for_resume(tmp_path: Path) -> None:
     run_metadata = manager._load_or_create_run_metadata(cfg)
 
     assert run_metadata == existing_metadata
+
+
+def test_parent_run_uuid_and_disabled_prometheus_keep_exporter_discovery(
+    tmp_path: Path,
+) -> None:
+    """An orchestrator can own Prometheus while AlpaSim runs its exporters."""
+    cfg = _cfg(tmp_path)
+    cfg.wizard.prometheus.start_prometheus = False
+    cfg.wizard.prometheus.run_uuid = "4ed94022-fc8d-409b-a0d8-745e6bdb44ab"
+    cfg.wizard.prometheus.file_sd_dir = str(tmp_path / "file-sd")
+    context = _context(cfg, baseport=6100)
+    container_set = build_container_set(context, "uuid")
+    manager = ConfigurationManager(str(tmp_path))
+
+    assert "START_PROMETHEUS=false" in container_set.prometheus.command
+    assert container_set.prometheus.service_instances[0].port == 6103
+    run_metadata = manager._load_or_create_run_metadata(cfg)
+    manager._generate_runtime_config(cfg, [], context)
+    prometheus.generate_prometheus_configs(tmp_path, run_metadata, context)
+    runtime_config = yaml.safe_load(
+        (tmp_path / "generated-user-config-0.yaml").read_text()
+    )
+    targets = json.loads(
+        (tmp_path / "file-sd" / f"{run_metadata['run_uuid']}.json").read_text()
+    )
+
+    assert run_metadata["run_uuid"] == cfg.wizard.prometheus.run_uuid
+    assert runtime_config["prometheus"]["url"] is None
+    assert not (tmp_path / "prometheus/prometheus.yml").exists()
+    assert (tmp_path / "prometheus/process-exporter.yml").exists()
+    assert len(targets) == 4
+    assert {target["labels"]["job"] for target in targets} == {
+        "alpasim-runtime-worker",
+        "alpasim-node",
+        "alpasim-process",
+        "alpasim-dcgm",
+    }
 
 
 def test_file_sd_cleanup_removes_old_unreachable_files(
@@ -320,6 +367,7 @@ def test_central_file_sd_publication_is_removed_on_cleanup(
     )
     central_path = file_sd_dir / f"{run_metadata['run_uuid']}.json"
     assert central_path.exists()
+    assert central_path.stat().st_mode & 0o7777 == 0o666
     central_targets = json.loads(central_path.read_text())
     assert central_targets[0]["targets"] == ["192.0.2.10:6100", "192.0.2.10:6101"]
     assert central_targets[0]["labels"]["node"] != "192.0.2.10"

@@ -1,0 +1,7 @@
+# @package _global_
+# Traffic simulation is opt-in; implementation configs enable their endpoint.
+
+runtime:
+  endpoints:
+    trafficsim:
+      skip: true

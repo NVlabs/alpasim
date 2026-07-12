@@ -1,10 +1,14 @@
 set -euo pipefail
 
-if command -v prometheus >/dev/null 2>&1; then
-  PROMETHEUS_BIN=prometheus
-else
-  echo "prometheus binary not found" >&2
-  exit 1
+START_PROMETHEUS={start_prometheus}
+PROMETHEUS_BIN=
+if [[ "$START_PROMETHEUS" == "true" ]]; then
+  if command -v prometheus >/dev/null 2>&1; then
+    PROMETHEUS_BIN=prometheus
+  else
+    echo "prometheus binary not found" >&2
+    exit 1
+  fi
 fi
 
 if command -v node_exporter >/dev/null 2>&1; then
@@ -33,12 +37,16 @@ start_slurm_process_exporter() {
   PROCESS_PID=$!
 }
 
+# hwmon/nvme sysfs reads issue live NVMe admin commands; a wedged controller
+# blocks them in uninterruptible sleep and kills the whole /metrics endpoint.
 $NODE_EXPORTER_BIN \
   --web.listen-address=0.0.0.0:{prometheus_ports.node_exporter} \
   --path.procfs=/host/proc \
   --path.sysfs=/host/sys \
   --path.rootfs=/rootfs \
-  --no-collector.systemd &
+  --no-collector.systemd \
+  --no-collector.hwmon \
+  --no-collector.nvme &
 NODE_PID=$!
 
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
@@ -56,7 +64,7 @@ else
 fi
 
 if command -v dcgm-exporter >/dev/null 2>&1; then
-  dcgm-exporter -a :{prometheus_ports.dcgm_exporter} &
+  dcgm-exporter -f /mnt/log_dir/prometheus/dcgm-counters.csv -a :{prometheus_ports.dcgm_exporter} &
   DCGM_PID=$!
 else
   echo "dcgm-exporter binary not found; GPU exporter disabled" >&2
@@ -65,8 +73,12 @@ fi
 
 trap 'kill "$NODE_PID" "$PROCESS_PID" "$DCGM_PID" 2>/dev/null || true' TERM INT
 
-exec $PROMETHEUS_BIN \
-  --config.file=/mnt/log_dir/prometheus/prometheus.yml \
-  --storage.tsdb.path=/mnt/log_dir/prometheus/data \
-  --enable-feature=promql-at-modifier \
-  --web.listen-address=0.0.0.0:{prometheus_ports.prometheus}
+if [[ "$START_PROMETHEUS" == "true" ]]; then
+  exec $PROMETHEUS_BIN \
+    --config.file=/mnt/log_dir/prometheus/prometheus.yml \
+    --storage.tsdb.path=/mnt/log_dir/prometheus/data \
+    --enable-feature=promql-at-modifier \
+    --web.listen-address=0.0.0.0:{prometheus_ports.prometheus}
+fi
+
+wait

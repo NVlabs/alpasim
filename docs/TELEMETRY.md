@@ -33,6 +33,10 @@ scrape_configs:
         refresh_interval: 10s
 ```
 
+On Slurm, the process exporter also publishes `alpasim_gpu_workload_info{gpu}` for every
+node-local physical GPU assigned to a discovered AlpaSim process. Cross-system dashboards can join
+this ownership signal to DCGM metrics by run, node, and GPU index.
+
 For normal Docker Compose and Slurm runs, the wizard removes this file when the deployment exits.
 If a run crashes before cleanup, later AlpaSim startups conservatively remove old discovery files
 only when they are at least five hours old and all listed targets are unreachable.

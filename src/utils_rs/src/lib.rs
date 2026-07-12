@@ -10,10 +10,14 @@ use pyo3::prelude::*;
 
 mod array_utils;
 mod dynamic_trajectory;
+mod grpc_boundary;
 mod polyline;
 mod pose;
 mod trajectory;
 
+pub use grpc_boundary::{
+    build_drive_response_bytes, pack_route_array, pack_trajectory_arrays,
+};
 pub use dynamic_trajectory::DynamicTrajectory;
 pub use polyline::Polyline;
 pub use pose::Pose;
@@ -33,5 +37,8 @@ fn utils_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Pose>()?;
     m.add_class::<Trajectory>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    m.add_function(wrap_pyfunction!(build_drive_response_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(pack_trajectory_arrays, m)?)?;
+    m.add_function(wrap_pyfunction!(pack_route_array, m)?)?;
     Ok(())
 }

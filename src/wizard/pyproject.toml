@@ -43,7 +43,7 @@ asyncio_default_fixture_loop_scope = "function"
 include = ["alpasim_wizard*", "hydra_plugins*"]
 
 [tool.setuptools.package-data]
-alpasim_wizard = ["telemetry/resources/*.sh"]
+alpasim_wizard = ["telemetry/resources/*.sh", "telemetry/resources/*.csv"]
 
 [project.scripts]
 alpasim_wizard = "alpasim_wizard.__main__:main"

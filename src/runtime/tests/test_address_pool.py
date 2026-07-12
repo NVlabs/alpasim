@@ -180,13 +180,13 @@ class TestAddressPool:
         assert slot is not None
         assert slot.skip is True
 
-    def test_all_addresses(self):
+    def test_address_order(self):
         pool = AddressPool(["A", "B", "C"], n_concurrent=2, skip=False)
-        assert pool.all_addresses() == frozenset({"A", "B", "C"})
+        assert pool.address_order == ("A", "B", "C")
 
-    def test_all_addresses_skip(self):
+    def test_address_order_skip(self):
         pool = AddressPool(["A"], n_concurrent=2, skip=True)
-        assert pool.all_addresses() == frozenset()
+        assert pool.address_order == ()
 
 
 class TestTryAcquireAll:

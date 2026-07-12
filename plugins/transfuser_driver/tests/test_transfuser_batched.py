@@ -60,6 +60,7 @@ def _make_prediction_input(
         speed=speed,
         acceleration=acceleration,
         ego_pose_history=[],
+        inference_seed=seed,
     )
 
 
@@ -278,6 +279,7 @@ class TestPredictBatch:
             speed=10.0,
             acceleration=0.0,
             ego_pose_history=[],
+            inference_seed=0,
         )
 
         with pytest.raises(ValueError, match=r"expects 1 frame"):

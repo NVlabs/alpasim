@@ -53,6 +53,7 @@ class PredictionInput:
     speed: float  # m/s
     acceleration: float  # m/s²
     ego_pose_history: list[Any]  # list[PoseAtTime]
+    inference_seed: int  # Session seed plus the zero-based inference count
 
 
 @dataclass

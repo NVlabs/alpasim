@@ -53,10 +53,13 @@ def test_csvs(tmp_path: Path) -> tuple[Path, Path]:
 
     # Create suites CSV with test data
     suites_csv.write_text(
-        "test_suite_id,scene_id\n"
-        "dev.alpasim.unit_tests.v0,clipgt-c045249c-2c01-45b0-87f5-6f631f71f1f1\n"
-        "dev.alpasim.unit_tests.v0,clipgt-c370a6ff-e319-4757-8282-09a67fad614e\n"
-        "dev.alpasim.unit_tests.v0,clipgt-c1ba971e-260f-4a7d-90b1-f60a9caf6acb\n"
+        "test_suite_id,scene_id,uuid\n"
+        "dev.alpasim.unit_tests.v0,clipgt-c045249c-2c01-45b0-87f5-6f631f71f1f1,"
+        "stripped-2b8f88d4-8348-4faf-9dd3-78564fddde78\n"
+        "dev.alpasim.unit_tests.v0,clipgt-c370a6ff-e319-4757-8282-09a67fad614e,"
+        "stripped-90db43dd-e5d2-41c4-9a69-400f6c33fb45\n"
+        "dev.alpasim.unit_tests.v0,clipgt-c1ba971e-260f-4a7d-90b1-f60a9caf6acb,"
+        "stripped-c146251f-16d0-43eb-8905-3f0c037028cb\n"
     )
 
     return scenes_csv, suites_csv
@@ -227,25 +230,25 @@ def test_load_and_merge_csvs_duplicate_raises(tmp_path: Path):
 def test_load_and_merge_csvs_composite_key_duplicate_raises(tmp_path: Path):
     """Duplicate composite keys across suite files raise ValueError."""
     csv_a = tmp_path / "a.csv"
-    csv_a.write_text("test_suite_id,scene_id\nsuite-1,clipgt-aaa\n")
+    csv_a.write_text("test_suite_id,scene_id,uuid\nsuite-1,clipgt-aaa,uuid-1\n")
     csv_b = tmp_path / "b.csv"
-    csv_b.write_text("test_suite_id,scene_id\nsuite-1,clipgt-aaa\n")
+    csv_b.write_text("test_suite_id,scene_id,uuid\nsuite-1,clipgt-aaa,uuid-1\n")
     with pytest.raises(ValueError, match="duplicate"):
         _load_and_merge_csvs(
             [str(csv_a), str(csv_b)],
-            dedup_key=["test_suite_id", "scene_id"],
+            dedup_key=["test_suite_id", "uuid"],
         )
 
 
 def test_load_and_merge_csvs_suites_no_overlap(tmp_path: Path):
     """Suite CSVs with different suites merge successfully."""
     csv_a = tmp_path / "a.csv"
-    csv_a.write_text("test_suite_id,scene_id\nsuite-public,clipgt-aaa\n")
+    csv_a.write_text("test_suite_id,scene_id,uuid\nsuite-public,clipgt-aaa,uuid-1\n")
     csv_b = tmp_path / "b.csv"
-    csv_b.write_text("test_suite_id,scene_id\nsuite-internal,clipgt-bbb\n")
+    csv_b.write_text("test_suite_id,scene_id,uuid\nsuite-internal,clipgt-bbb,uuid-2\n")
     merged = _load_and_merge_csvs(
         [str(csv_a), str(csv_b)],
-        dedup_key=["test_suite_id", "scene_id"],
+        dedup_key=["test_suite_id", "uuid"],
     )
     assert merged.height == 2
 
@@ -263,9 +266,9 @@ def test_from_cfg_multiple_csvs(tmp_path: Path):
         "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites_a = tmp_path / "suites_a.csv"
-    suites_a.write_text("test_suite_id,scene_id\nsuite-pub,clipgt-aaa\n")
+    suites_a.write_text("test_suite_id,scene_id,uuid\nsuite-pub,clipgt-aaa,uuid-1\n")
     suites_b = tmp_path / "suites_b.csv"
-    suites_b.write_text("test_suite_id,scene_id\nsuite-int,clipgt-bbb\n")
+    suites_b.write_text("test_suite_id,scene_id,uuid\nsuite-int,clipgt-bbb,uuid-2\n")
     config = ScenesConfig(
         scene_cache=str(tmp_path),
         scenes_csv=[str(scenes_a), str(scenes_b)],
@@ -376,6 +379,7 @@ def test_scan_local_usdz_directory(local_usdz_dir: Path):
 
     # Check suites DataFrame - all scenes should be in the "local" suite
     assert sim_suites.height == 3
+    assert set(sim_suites.columns) == {"test_suite_id", "scene_id", "uuid"}
     suite_ids = set(sim_suites["test_suite_id"].to_list())
     assert suite_ids == {LOCAL_SUITE_ID}
 
@@ -414,7 +418,7 @@ def test_usdz_manager_from_cfg_with_local_usdz_dir(
     scenes_csv.write_text(
         "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
-    suites_csv.write_text("test_suite_id,scene_id\n")
+    suites_csv.write_text("test_suite_id,scene_id,uuid\n")
 
     config = ScenesConfig(
         local_usdz_dir=str(local_usdz_dir),
@@ -445,7 +449,7 @@ def test_usdz_manager_query_by_scene_ids_with_local(
     scenes_csv.write_text(
         "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
-    suites_csv.write_text("test_suite_id,scene_id\n")
+    suites_csv.write_text("test_suite_id,scene_id,uuid\n")
 
     config = ScenesConfig(
         local_usdz_dir=str(local_usdz_dir),
@@ -472,7 +476,7 @@ def test_get_artifact_info_local(local_usdz_dir: Path, tmp_path: Path):
     scenes_csv.write_text(
         "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
     )
-    suites_csv.write_text("test_suite_id,scene_id\n")
+    suites_csv.write_text("test_suite_id,scene_id,uuid\n")
 
     config = ScenesConfig(
         local_usdz_dir=str(local_usdz_dir),
@@ -498,7 +502,7 @@ def test_get_artifact_info_includes_hf_revision(tmp_path: Path):
         "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
         "uuid-hf,clipgt-hf-scene,1.0,sample_set/26.01/file.usdz,2025-01-01 00:00:00,huggingface,26.01\n"
     )
-    suites_csv.write_text("test_suite_id,scene_id\n")
+    suites_csv.write_text("test_suite_id,scene_id,uuid\n")
     config = ScenesConfig(
         scene_cache=str(tmp_path),
         scenes_csv=[str(scenes_csv)],
@@ -520,7 +524,7 @@ def test_query_by_scene_ids_duplicate_nre_versions_warns(tmp_path: Path, caplog)
         "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack,\n"
         "uuid-bbb,clipgt-scene-1,2.0.0-bbbb,path/b,2025-01-02 00:00:00,swiftstack,\n"
     )
-    suites_csv.write_text("test_suite_id,scene_id\n")
+    suites_csv.write_text("test_suite_id,scene_id,uuid\n")
     config = ScenesConfig(
         scene_cache=str(tmp_path),
         scenes_csv=[str(scenes_csv)],
@@ -537,8 +541,8 @@ def test_query_by_scene_ids_duplicate_nre_versions_warns(tmp_path: Path, caplog)
     assert "multiple NRE versions" in caplog.text
 
 
-def test_query_by_suite_id_duplicate_nre_versions_warns(tmp_path: Path, caplog):
-    """Warning when a suite scene has multiple NRE versions; newest is picked."""
+def test_query_by_suite_id_selects_pinned_artifact(tmp_path: Path):
+    """A suite selects its pinned artifact when a scene has several versions."""
     scenes_csv = tmp_path / "sim_scenes.csv"
     suites_csv = tmp_path / "sim_suites.csv"
     scenes_csv.write_text(
@@ -548,7 +552,9 @@ def test_query_by_suite_id_duplicate_nre_versions_warns(tmp_path: Path, caplog):
         "uuid-ccc,clipgt-scene-2,1.0.0-aaaa,path/c,2025-01-01 00:00:00,swiftstack,\n"
     )
     suites_csv.write_text(
-        "test_suite_id,scene_id\nsuite-1,clipgt-scene-1\nsuite-1,clipgt-scene-2\n"
+        "test_suite_id,scene_id,uuid\n"
+        "suite-1,clipgt-scene-1,uuid-aaa\n"
+        "suite-1,clipgt-scene-2,uuid-ccc\n"
     )
     config = ScenesConfig(
         scene_cache=str(tmp_path),
@@ -557,11 +563,31 @@ def test_query_by_suite_id_duplicate_nre_versions_warns(tmp_path: Path, caplog):
     )
     manager = USDZManager.from_cfg(config)
 
-    with caplog.at_level(logging.WARNING, logger="alpasim_wizard"):
-        results = manager.query_by_suite_id(test_suite_id="suite-1")
+    results = manager.query_by_suite_id(test_suite_id="suite-1")
 
     assert len(results) == 2
-    # clipgt-scene-1 should use newest artifact
     scene1 = next(r for r in results if r.scene_id == "clipgt-scene-1")
-    assert scene1.uuid == "uuid-bbb"
-    assert "clipgt-scene-1" in caplog.text
+    assert scene1.uuid == "uuid-aaa"
+
+
+def test_query_by_suite_id_rejects_mismatched_scene_and_uuid(tmp_path: Path):
+    """A suite UUID must belong to the scene ID beside it."""
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    suites_csv = tmp_path / "sim_suites.csv"
+    scenes_csv.write_text(
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-aaa,clipgt-scene-1,1.0.0-aaaa,path/a,2025-01-01 00:00:00,swiftstack,\n"
+        "uuid-bbb,clipgt-scene-2,1.0.0-aaaa,path/b,2025-01-01 00:00:00,swiftstack,\n"
+    )
+    suites_csv.write_text(
+        "test_suite_id,scene_id,uuid\n" "suite-1,clipgt-scene-1,uuid-bbb\n"
+    )
+    config = ScenesConfig(
+        scene_cache=str(tmp_path),
+        scenes_csv=[str(scenes_csv)],
+        suites_csv=[str(suites_csv)],
+    )
+    manager = USDZManager.from_cfg(config)
+
+    with pytest.raises(USDZQueryError, match=r"Missing \(scene_id, uuid\) pairs"):
+        manager.query_by_suite_id(test_suite_id="suite-1")

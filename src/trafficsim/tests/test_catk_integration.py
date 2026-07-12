@@ -23,7 +23,6 @@ Environment variables:
     TRAFFICSIM_TEST_USDZ_DIR — Directory containing ClipGT .usdz files
 """
 
-
 import os
 from pathlib import Path
 
@@ -292,7 +291,7 @@ def test_world_model_passes_static_and_ego_freeze_mask_to_decoder() -> None:
     catk = CATK.__new__(CATK)
     catk.device = "cpu"
     catk.model_input_step_num = 16
-    catk.model_predict_step_num = 5
+    catk._model_predict_step_num = 5
     catk.delta_t = 0.1
     catk.use_downsampled_lines = False
     catk.disable_sub_plyline_type = True
@@ -303,7 +302,24 @@ def test_world_model_passes_static_and_ego_freeze_mask_to_decoder() -> None:
         filter_map_by_ego=False,
         filter_distance_th=0.0,
     )["input_data"]
+    assert input_data["num_obstacles"].dtype == torch.long
+    assert input_data["num_obstacles"].device.type == "cpu"
+    assert input_data["num_obstacles"].tolist() == [4]
+
     catk.inference(input_data)
+
+    malformed_input = dict(input_data)
+    del malformed_input["num_obstacles"]
+    with pytest.raises(KeyError, match="num_obstacles"):
+        catk.inference(malformed_input)
+
+    malformed_input = {**input_data, "num_obstacles": torch.tensor([4.0])}
+    with pytest.raises(ValueError, match="torch.long tensor"):
+        catk.inference(malformed_input)
+
+    malformed_input = {**input_data, "num_obstacles": torch.tensor([3])}
+    with pytest.raises(ValueError, match="total agent count 4"):
+        catk.inference(malformed_input)
 
     agent_encoder = catk.model.encoder.agent_encoder
     assert agent_encoder.captured["freeze_agent_future"] is True
@@ -322,6 +338,7 @@ def test_world_model_passes_static_and_ego_freeze_mask_to_decoder() -> None:
 @_skip_no_torch_cluster
 def test_catk_synthetic():
     """Load CATK model and run inference on synthetic data (no USDZ needed)."""
+    from alpasim_trafficsim.catk.batching import collate_model_inputs
     from alpasim_trafficsim.catk.model_adapter import CATK
 
     env_data = _make_synthetic_env_data()
@@ -332,6 +349,7 @@ def test_catk_synthetic():
         ckpt_path=str(catk_dir / "latest.ckpt"),
         token_pkl_dir=str(MODELS_DIR / "tokens"),
         disable_sub_plyline_type=True,
+        prediction_steps=5,
         device="cuda",
     )
 
@@ -358,6 +376,16 @@ def test_catk_synthetic():
         assert torch.isfinite(
             valid_xyz
         ).all(), "Non-finite positions in valid predictions"
+
+    batched_input, split_sizes = collate_model_inputs([input_data, input_data])
+    batched_actions = model.inference(batched_input)
+    assert batched_input["num_graphs"] == 2
+    assert split_sizes == [num_agents, num_agents]
+    assert batched_actions["agent_future_xyz"].shape == (
+        num_agents * 2,
+        num_steps,
+        3,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +453,7 @@ def test_catk_inference():
         ckpt_path=str(catk_dir / "latest.ckpt"),
         token_pkl_dir=str(MODELS_DIR / "tokens"),
         disable_sub_plyline_type=True,
+        prediction_steps=5,
         device="cuda",
     )
 

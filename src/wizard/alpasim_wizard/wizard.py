@@ -87,6 +87,12 @@ class AlpasimWizard:
         config_manager = ConfigurationManager(self.context.cfg.wizard.log_dir)
         config_manager.generate_all(container_set, self.context)
 
+        if (
+            self.context.cfg.wizard.enable_mps
+            and self.context.cfg.wizard.run_method != RunMethod.SLURM
+        ):
+            raise ValueError("wizard.enable_mps is only supported on SLURM")
+
         # Handle different run methods
         try:
             if self.context.cfg.wizard.run_method == RunMethod.SLURM:

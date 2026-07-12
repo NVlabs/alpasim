@@ -37,10 +37,25 @@ from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.geometry import Pose, Trajectory, pose_to_grpc
 from alpasim_utils.types import ImageWithMetadata
 
+import grpc
+
 logger = logging.getLogger(__name__)
 
 WILDCARD_SCENE_ID = "*"
-SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S = (0.5, 2.0)
+MAX_GRPC_MESSAGE_BYTES = 64 * 1024 * 1024
+SENSORSIM_RETRY_DELAYS_S = (0.5, 2.0)
+# NRE loads scene and renderer state lazily. Artifact-fetch races and a first-render
+# backend wait exceeding NRE's server-side deadline both succeed once initialization
+# finishes, so they are safe to retry.
+SENSORSIM_TRANSIENT_ERROR_DETAILS = (
+    "A load persistent id instruction was encountered",
+    "Stopped waiting for backend",
+)
+# NRE blocks its entire gRPC server (no handshakes, no keepalive acks) for up
+# to ~60s while JIT-compiling render kernels on a fresh process's first render.
+# wait_for_ready=True queues RPCs until the channel connects instead of failing
+# UNAVAILABLE; the deadline bounds the wait for genuinely dead renderers.
+SENSORSIM_RPC_TIMEOUT_S = 300.0
 
 
 class SensorsimService(ServiceBase[SensorsimServiceStub]):
@@ -68,6 +83,37 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
     @property
     def stub_class(self) -> Type[SensorsimServiceStub]:
         return SensorsimServiceStub
+
+    async def _open_connection(self) -> None:
+        """Open a gRPC connection that supports batched multi-camera images."""
+        if self.skip:
+            return
+        self.channel = grpc.aio.insecure_channel(
+            self.address,
+            options=[
+                ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+                ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+            ],
+        )
+        self.stub = self.stub_class(self.channel)
+
+    async def _sensorsim_rpc(
+        self,
+        method_name: str,
+        stub_method: Any,
+        request: Any,
+    ) -> Any:
+        """Call a sensorsim RPC with the service's shared retry and timeout policy."""
+        return await profiled_rpc_call(
+            method_name,
+            "sensorsim",
+            stub_method,
+            request,
+            retry_delays_s=SENSORSIM_RETRY_DELAYS_S,
+            transient_error_details=SENSORSIM_TRANSIENT_ERROR_DETAILS,
+            timeout=SENSORSIM_RPC_TIMEOUT_S,
+            wait_for_ready=True,
+        )
 
     def make_initial_render_event(self, **kwargs: Any) -> Any:
         """Create the initial sensorsim render event for a rollout."""
@@ -137,12 +183,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 )
 
                 logger.info(f"Requesting available cameras for {scene_id=}")
-                response: AvailableCamerasReturn = await profiled_rpc_call(
+                response: AvailableCamerasReturn = await self._sensorsim_rpc(
                     "get_available_cameras",
-                    "sensorsim",
                     self.stub.get_available_cameras,
                     request,
-                    unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
                 )
 
                 await session_info.broadcaster.broadcast(
@@ -178,12 +222,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 LogEntry(available_ego_masks_request=request)
             )
 
-            self._available_ego_masks = await profiled_rpc_call(
+            self._available_ego_masks = await self._sensorsim_rpc(
                 "get_available_ego_masks",
-                "sensorsim",
                 self.stub.get_available_ego_masks,
                 request,
-                unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
             )
 
             await session_info.broadcaster.broadcast(
@@ -418,12 +460,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
 
         await session_info.broadcaster.broadcast(LogEntry(batch_render_request=request))
 
-        response: BatchRGBRenderReturn = await profiled_rpc_call(
+        response: BatchRGBRenderReturn = await self._sensorsim_rpc(
             "batch_render_rgb",
-            "sensorsim",
             self.stub.batch_render_rgb,
             request,
-            unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
         images_with_metadata = self._batch_return_to_images(
@@ -473,12 +513,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             LogEntry(aggregated_render_request=request)
         )
 
-        response: AggregatedRenderReturn = await profiled_rpc_call(
+        response: AggregatedRenderReturn = await self._sensorsim_rpc(
             "render_aggregated",
-            "sensorsim",
             self.stub.render_aggregated,
             request,
-            unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
         images_with_metadata = []
@@ -537,12 +575,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
 
         await session_info.broadcaster.broadcast(LogEntry(render_request=request))
 
-        response: RGBRenderReturn = await profiled_rpc_call(
+        response: RGBRenderReturn = await self._sensorsim_rpc(
             "render_rgb",
-            "sensorsim",
             self.stub.render_rgb,
             request,
-            unavailable_retry_delays_s=SENSORSIM_UNAVAILABLE_RETRY_DELAYS_S,
         )
 
         return ImageWithMetadata(

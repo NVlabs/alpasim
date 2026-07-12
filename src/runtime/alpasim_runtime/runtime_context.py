@@ -13,6 +13,7 @@ from alpasim_runtime.config import (
     BASE_SERVICE_NAMES,
     CORE_SERVICE_NAMES,
     NetworkSimulatorConfig,
+    RenderBundling,
     RendererKind,
     SimulatorConfig,
     UserSimulatorConfig,
@@ -146,6 +147,38 @@ def validate_renderer_config(config: SimulatorConfig) -> None:
         raise ValueError(f"Unknown runtime.renderer.kind: {renderer_kind!r}")
 
 
+def validate_scene_affinity_config(config: SimulatorConfig) -> None:
+    """Validate scene-affine dispatch bounds and renderer compatibility."""
+    affine = config.user.scene_affine_dispatch
+    if affine.enabled and config.user.renderer.kind == RendererKind.video_model:
+        raise ValueError(
+            "runtime.scene_affine_dispatch.enabled=true is not supported with "
+            "runtime.renderer.kind=video_model (no per-scene GPU cache); set "
+            "runtime.scene_affine_dispatch.enabled=false"
+        )
+    render_bundling = config.user.simulation_config.render_bundling
+    if affine.enabled and render_bundling != RenderBundling.BATCH_RENDER_RGB:
+        raise ValueError(
+            "runtime.scene_affine_dispatch.enabled=true requires "
+            "runtime.simulation_config.render_bundling=BATCH_RENDER_RGB "
+            f"(got {render_bundling.name}); scene-affine dispatch assumes the "
+            "NRE batched-render scene cache"
+        )
+    if affine.max_renderers_per_scene <= 0:
+        raise ValueError(
+            "runtime.scene_affine_dispatch.max_renderers_per_scene must be positive"
+        )
+
+    if (
+        affine.max_scenes_per_renderer is not None
+        and affine.max_scenes_per_renderer <= 0
+    ):
+        raise ValueError(
+            "runtime.scene_affine_dispatch.max_scenes_per_renderer must be "
+            "positive or null"
+        )
+
+
 @dataclass(frozen=True)
 class RuntimeContext:
     """Immutable snapshot of all runtime state needed to dispatch simulation jobs.
@@ -171,6 +204,7 @@ def parse_simulator_config(
     network_config = typed_parse_config(network_config_path, NetworkSimulatorConfig)
     config = SimulatorConfig(user=user_config, network=network_config)
     validate_renderer_config(config)
+    validate_scene_affinity_config(config)
     return config
 
 

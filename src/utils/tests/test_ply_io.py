@@ -6,7 +6,7 @@ import struct
 
 import numpy as np
 import pytest
-from alpasim_physics.ply_io import load_mesh_vf, save_mesh_vf
+from alpasim_utils.ply_io import load_mesh_vf, save_mesh_vf
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -321,20 +321,3 @@ class TestErrors:
         )
         with pytest.raises(ValueError, match="Unsupported PLY format"):
             load_mesh_vf(header.encode("ascii"))
-
-
-# ---------------------------------------------------------------------------
-# Tests — loading the existing binary test fixture
-# ---------------------------------------------------------------------------
-
-
-class TestExistingFixture:
-    """Verify we can load the binary LE PLY fixture used by test_backend."""
-
-    def test_load_mesh_ground_ply(self) -> None:
-        data = open("tests/data/mesh_ground.ply", "rb").read()
-        verts, faces = load_mesh_vf(data)
-        assert verts.shape == (1688260, 3)
-        assert faces.shape == (3376506, 3)
-        assert verts.dtype == np.float64
-        assert faces.dtype == np.int32

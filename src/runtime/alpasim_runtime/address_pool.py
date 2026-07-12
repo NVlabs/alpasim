@@ -49,9 +49,7 @@ class AddressPool:
     ):
         self.skip = skip
         self._total_capacity: int = 0
-        self._all_addresses: frozenset[str] = (
-            frozenset(addresses) if not skip else frozenset()
-        )
+        self._address_order: tuple[str, ...] = tuple(addresses) if not skip else ()
         self._slots: deque[ServiceAddress] = deque()
         if not skip:
             for addr in addresses:
@@ -77,6 +75,18 @@ class AddressPool:
         """Return unique addresses that currently have at least one free slot."""
         return {slot.address for slot in self._slots}
 
+    @property
+    def address_order(self) -> tuple[str, ...]:
+        """All configured addresses, in config order for deterministic tie-breaking."""
+        return self._address_order
+
+    def free_slot_counts(self) -> dict[str, int]:
+        """Return the current number of free slots for each configured address."""
+        counts = {address: 0 for address in self._address_order}
+        for slot in self._slots:
+            counts[slot.address] += 1
+        return counts
+
     def try_acquire_for_address(self, address: str) -> ServiceAddress | None:
         """Acquire a free slot for a specific *address*, or ``None`` if unavailable."""
         if self.skip:
@@ -86,10 +96,6 @@ class AddressPool:
                 del self._slots[i]
                 return slot
         return None
-
-    def all_addresses(self) -> frozenset[str]:
-        """All configured addresses, regardless of current slot availability."""
-        return self._all_addresses
 
     @property
     def total_capacity(self) -> int | None:

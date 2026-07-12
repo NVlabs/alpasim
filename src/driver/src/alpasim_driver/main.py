@@ -156,6 +156,7 @@ class Session:
     poses: list[PoseAtTime] = field(default_factory=list)
     dynamic_states: list[tuple[int, DynamicState]] = field(default_factory=list)
     current_command: DriveCommand = DriveCommand.STRAIGHT  # Default to straight
+    inference_count: int = 0
 
     @staticmethod
     def create(
@@ -701,6 +702,8 @@ class EgoDriverService(EgodriverServiceServicer):
         inputs = []
         for job in batch:
             speed, acceleration = self._get_speed_and_acceleration(job.session)
+            inference_seed = job.session.seed + job.session.inference_count
+            job.session.inference_count += 1
             inputs.append(
                 PredictionInput(
                     camera_images=self._prepare_camera_images(job.session),
@@ -708,6 +711,7 @@ class EgoDriverService(EgodriverServiceServicer):
                     speed=speed,
                     acceleration=acceleration,
                     ego_pose_history=job.session.poses,
+                    inference_seed=inference_seed,
                 )
             )
         return self._model.predict_batch(inputs)

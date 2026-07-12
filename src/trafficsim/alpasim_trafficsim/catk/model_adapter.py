@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
+import math
 import os
 from typing import Any, Dict
 
@@ -28,6 +29,35 @@ def _token_path(token_pkl_dir: str, token_file: str) -> str:
     return os.path.abspath(os.path.join(token_pkl_dir, os.path.basename(token_file)))
 
 
+def _validated_num_obstacles(
+    input_data: Dict[str, Any], *, device: str
+) -> torch.Tensor:
+    num_obstacles = input_data["num_obstacles"]
+    num_graphs = int(input_data["num_graphs"])
+    agent_count = int(input_data["agent"]["id"].shape[0])
+    expected_device = torch.device(device)
+    device_matches = isinstance(num_obstacles, torch.Tensor) and (
+        num_obstacles.device.type == expected_device.type
+        and (
+            expected_device.index is None
+            or num_obstacles.device.index == expected_device.index
+        )
+    )
+    if (
+        not isinstance(num_obstacles, torch.Tensor)
+        or num_obstacles.dtype != torch.long
+        or not device_matches
+        or tuple(num_obstacles.shape) != (num_graphs,)
+        or int(num_obstacles.sum().item()) != agent_count
+    ):
+        raise ValueError(
+            "num_obstacles must be a torch.long tensor on "
+            f"{expected_device} with shape ({num_graphs},) and total "
+            f"agent count {agent_count}"
+        )
+    return num_obstacles
+
+
 class _BatchDict(dict):
     def __getattr__(self, name: str) -> Any:
         try:
@@ -43,6 +73,7 @@ class CATK:
         ckpt_path: str,
         token_pkl_dir: str,
         disable_sub_plyline_type: bool,
+        prediction_steps: int,
         device: str,
         use_downsampled_lines: bool = False,
     ):
@@ -51,7 +82,6 @@ class CATK:
         self.device = device
 
         self.model_input_step_num = self.model_config["decoder"]["num_historical_steps"]
-        self.model_predict_step_num = 5
         self.delta_t = self.model_config["token_processor"]["time_step"]
 
         map_token_filename = self.model_config["token_processor"]["map_token_file"]
@@ -66,6 +96,10 @@ class CATK:
 
         self.model = SMART(self.model_config).to(self.device)
         self.model.eval()
+        token_stride = self.model.encoder.agent_encoder.shift
+        self._model_predict_step_num = (
+            math.ceil(prediction_steps / token_stride) * token_stride
+        )
 
         state_dict = torch.load(
             self.ckpt_path, map_location=self.device, weights_only=False
@@ -84,7 +118,9 @@ class CATK:
         ego_xy = env_data["ego"]["xyz"][env_data["env"]["curr_t"]]
         if filter_map_by_ego and filter_distance_th > 0:
             filter_map(
-                env_data=env_data, center_xyz=ego_xy, distance_th=filter_distance_th
+                env_data=env_data,
+                center_xyz=ego_xy,
+                distance_th=filter_distance_th,
             )
 
         input_data = {
@@ -112,15 +148,21 @@ class CATK:
             dt=self.delta_t,
             device=self.device,
         )
+        input_data["num_obstacles"] = torch.tensor(
+            (int(input_data["agent"]["id"].shape[0]),),
+            dtype=torch.long,
+            device=self.device,
+        )
 
         assert curr_t >= 1
         logger.info(
-            f"extract frozen agent data in t: [{curr_t}, {curr_t + 1 + self.model_predict_step_num}]"
+            "extract frozen agent data in t: "
+            f"[{curr_t}, {curr_t + 1 + self._model_predict_step_num}]"
         )
         freeze_agent_data, freeze_agent_mask = build_freeze_agent_data(
             env_data,
             curr_t=curr_t,
-            target_steps=1 + self.model_predict_step_num,
+            target_steps=1 + self._model_predict_step_num,
             dt=self.delta_t,
             device=self.device,
         )
@@ -145,8 +187,12 @@ class CATK:
         logger.info(f"[proxy] triplets #:{triplets.shape[0]}")
         return {"input_data": input_data}
 
-    def inference(self, input_data: Dict[str, Any]):
-        self.model.encoder.agent_encoder.num_future_steps = self.model_predict_step_num
+    def inference(
+        self,
+        input_data: Dict[str, Any],
+    ):
+        num_obstacles = _validated_num_obstacles(input_data, device=self.device)
+        self.model.encoder.agent_encoder.num_future_steps = self._model_predict_step_num
 
         sampling_scheme = self.model.validation_rollout_sampling
         step_current_10hz = self.model.encoder.agent_encoder.num_historical_steps  # 10
@@ -157,11 +203,7 @@ class CATK:
                 {
                     "position": None,
                     "agent": input_data["agent"],
-                    "num_obstacles": torch.tensor(
-                        (input_data["agent"]["id"].shape[0],),
-                        device=self.device,
-                        dtype=torch.long,
-                    ).reshape(1),
+                    "num_obstacles": num_obstacles,
                     "traj_pos": None,
                     "traj_theta": None,
                     "map_save": {
@@ -199,7 +241,10 @@ class CATK:
             )
 
             future_xyz = torch.cat(
-                [output["pred_traj_10hz"], output["pred_z_10hz"].unsqueeze(-1)],
+                [
+                    output["pred_traj_10hz"],
+                    output["pred_z_10hz"].unsqueeze(-1),
+                ],
                 dim=-1,
             )
             future_heading = output["pred_head_10hz"]
@@ -210,11 +255,16 @@ class CATK:
             pos_all = torch.cat([last_hist_pos, future_xyz], dim=1)
             future_velocity = (pos_all[:, 1:] - pos_all[:, :-1]) / dt
 
-            pnum = self.model_predict_step_num
             actions = {
-                "agent_future_xyz": future_xyz[~is_ego, :pnum],
-                "agent_future_heading": future_heading[~is_ego, :pnum],
-                "agent_future_valid_mask": future_valid[~is_ego, :pnum],
-                "agent_future_velocity": future_velocity[~is_ego, :pnum, :2],
+                "agent_future_xyz": future_xyz[~is_ego, : self._model_predict_step_num],
+                "agent_future_heading": future_heading[
+                    ~is_ego, : self._model_predict_step_num
+                ],
+                "agent_future_valid_mask": future_valid[
+                    ~is_ego, : self._model_predict_step_num
+                ],
+                "agent_future_velocity": future_velocity[
+                    ~is_ego, : self._model_predict_step_num, :2
+                ],
             }
         return actions

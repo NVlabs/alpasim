@@ -26,6 +26,7 @@ PROMETHEUS_CONFIG = f"{TELEMETRY_LOG_DIR}/prometheus/prometheus.yml"
 PROMETHEUS_TARGETS = f"{TELEMETRY_LOG_DIR}/prometheus/targets"
 PROMETHEUS_RULES = f"{TELEMETRY_LOG_DIR}/prometheus/rules"
 PROCESS_EXPORTER_CONFIG = f"{TELEMETRY_LOG_DIR}/prometheus/process-exporter.yml"
+DCGM_COUNTERS_CONFIG = f"{TELEMETRY_LOG_DIR}/prometheus/dcgm-counters.csv"
 PROMETHEUS_DATA = f"{TELEMETRY_LOG_DIR}/prometheus/data"
 
 FILE_SD_CLEANUP_MIN_AGE_S = 5 * 60 * 60
@@ -71,14 +72,6 @@ def generate_prometheus_configs(
         file-SD publication is disabled.
     """
     cfg = context.cfg
-    prometheus_config_path = _host_log_path(log_dir, PROMETHEUS_CONFIG)
-    targets_dir = _host_log_path(log_dir, PROMETHEUS_TARGETS)
-    data_dir = _host_log_path(log_dir, PROMETHEUS_DATA)
-    rules_dir = _host_log_path(log_dir, PROMETHEUS_RULES)
-    targets_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    rules_dir.mkdir(parents=True, exist_ok=True)
-
     write_json(
         {
             "process_names": [
@@ -92,63 +85,73 @@ def generate_prometheus_configs(
         },
         _host_log_path(log_dir, PROCESS_EXPORTER_CONFIG),
     )
-
-    local_targets = _build_file_sd_targets(run_metadata, cfg, context, local=True)
-    write_json(local_targets, targets_dir / "alpasim.json")
-
-    central_file_sd_path = None
-    file_sd_root = (
-        Path(cfg.wizard.prometheus.file_sd_dir)
-        if cfg.wizard.prometheus.file_sd_dir
-        else None
-    )
-    if file_sd_root:
-        _cleanup_stale_file_sd(file_sd_root)
-        central_path = file_sd_root / f"{run_metadata['run_uuid']}.json"
-        file_sd_root.mkdir(parents=True, exist_ok=True)
-        write_json(
-            _build_file_sd_targets(run_metadata, cfg, context, local=False),
-            central_path,
-        )
-        central_file_sd_path = central_path
-
-    prometheus_config = {
-        "global": {
-            "scrape_interval": str(cfg.wizard.prometheus.scrape_interval),
-            "evaluation_interval": str(cfg.wizard.prometheus.scrape_interval),
-        },
-        "rule_files": [f"{PROMETHEUS_RULES}/*.yml"],
-        "scrape_configs": [
-            {
-                "job_name": "alpasim",
-                "file_sd_configs": [
-                    {
-                        "files": [f"{PROMETHEUS_TARGETS}/*.json"],
-                        "refresh_interval": "5s",
-                    }
-                ],
-            }
-        ],
-    }
-    recording_rules = resource_files("alpasim_utils.telemetry").joinpath(
-        "metrics_plot_recording_rules.yml"
-    )
-    (rules_dir / "alpasim-recording-rules.yml").write_text(
-        recording_rules.read_text(encoding="utf-8"),
+    dcgm_counters_path = _host_log_path(log_dir, DCGM_COUNTERS_CONFIG)
+    dcgm_counters_path.parent.mkdir(parents=True, exist_ok=True)
+    dcgm_counters_path.write_text(
+        resource_files("alpasim_wizard")
+        .joinpath("telemetry/resources/dcgm-counters.csv")
+        .read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    write_yaml(prometheus_config, str(prometheus_config_path))
+    central_file_sd_path = None
+    if cfg.wizard.prometheus.file_sd_dir:
+        file_sd_root = Path(cfg.wizard.prometheus.file_sd_dir)
+        file_sd_root.mkdir(parents=True, exist_ok=True)
+        if file_sd_root.stat().st_mode & 0o7777 != 0o2777:
+            file_sd_root.chmod(0o2777)
+        _cleanup_stale_file_sd(file_sd_root)
+        central_file_sd_path = file_sd_root / f"{run_metadata['run_uuid']}.json"
+        write_json(
+            _build_file_sd_targets(run_metadata, context, local=False),
+            central_file_sd_path,
+            mode=0o666,
+        )
+
+    if cfg.wizard.prometheus.start_prometheus:
+        _host_log_path(log_dir, PROMETHEUS_DATA).mkdir(parents=True, exist_ok=True)
+        write_json(
+            _build_file_sd_targets(run_metadata, context, local=True),
+            _host_log_path(log_dir, PROMETHEUS_TARGETS) / "alpasim.json",
+        )
+        prometheus_config = {
+            "global": {
+                "scrape_interval": str(cfg.wizard.prometheus.scrape_interval),
+                "evaluation_interval": str(cfg.wizard.prometheus.scrape_interval),
+            },
+            "rule_files": [f"{PROMETHEUS_RULES}/*.yml"],
+            "scrape_configs": [
+                {
+                    "job_name": "alpasim",
+                    "file_sd_configs": [
+                        {
+                            "files": [f"{PROMETHEUS_TARGETS}/*.json"],
+                            "refresh_interval": "5s",
+                        }
+                    ],
+                }
+            ],
+        }
+        recording_rules = resource_files("alpasim_utils.telemetry").joinpath(
+            "metrics_plot_recording_rules.yml"
+        )
+        rules_dir = _host_log_path(log_dir, PROMETHEUS_RULES)
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        (rules_dir / "alpasim-recording-rules.yml").write_text(
+            recording_rules.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        write_yaml(prometheus_config, str(_host_log_path(log_dir, PROMETHEUS_CONFIG)))
     return central_file_sd_path
 
 
 def _build_file_sd_targets(
     run_metadata: dict[str, Any],
-    cfg: Any,
     context: WizardContext,
     *,
     local: bool,
 ) -> list[dict[str, Any]]:
     """Build Prometheus file-SD target groups for local or central scraping."""
+    cfg = context.cfg
     labels = _base_file_sd_labels(run_metadata, cfg)
     if local:
         runtime_host = (
@@ -167,7 +170,11 @@ def _build_file_sd_targets(
     return [
         {
             "targets": [f"{runtime_host}:{port}" for port in telemetry_ports.workers],
-            "labels": {**labels, "job": "alpasim-runtime-worker"},
+            "labels": {
+                **labels,
+                "job": "alpasim-runtime-worker",
+                "component": "runtime",
+            },
         },
         {
             "targets": [f"{exporter_host}:{prometheus_ports['node_exporter']}"],
@@ -194,44 +201,23 @@ def _central_scrape_host() -> str:
 
 
 def _cleanup_stale_file_sd(file_sd_dir: Path) -> None:
-    """Delete stale central file-SD files whose targets are unreachable.
-
-    Central file-SD entries are meant to exist only while a run is active. This
-    cleanup prevents old runs from staying discoverable if the wizard process
-    exited before `cleanup_central_file_sd` could remove its own entry.
-
-    Args:
-        file_sd_dir: Root directory containing Prometheus file-SD JSON files.
-    """
+    """Delete stale central file-SD files whose targets are unreachable."""
     now = time.time()
     for path in file_sd_dir.glob("*.json"):
         try:
             if now - path.stat().st_mtime < FILE_SD_CLEANUP_MIN_AGE_S:
                 continue
 
-            with open(path, encoding="utf-8") as f:
-                groups = json.load(f)
-            if not isinstance(groups, list):
-                raise TypeError("expected a list of file-SD target groups")
-            targets: list[str] = []
-            for group in groups:
-                if not isinstance(group, dict):
-                    raise TypeError("expected each file-SD target group to be a dict")
-                group_targets = group.get("targets")
-                if not isinstance(group_targets, list):
-                    raise TypeError(
-                        "expected file-SD target group targets to be a list"
-                    )
-                if not all(isinstance(target, str) for target in group_targets):
-                    raise TypeError("expected all file-SD targets to be strings")
-                targets.extend(group_targets)
+            with open(path, encoding="utf-8") as stream:
+                groups = json.load(stream)
+            targets = [target for group in groups for target in group["targets"]]
 
             with ThreadPoolExecutor(
                 max_workers=FILE_SD_CLEANUP_MAX_WORKERS
             ) as executor:
                 if any(executor.map(_target_reachable, targets)):
                     continue
-        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (OSError, AttributeError, KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping invalid file-SD file %s: %s", path, exc)
             continue
 

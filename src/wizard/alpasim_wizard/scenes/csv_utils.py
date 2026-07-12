@@ -39,7 +39,7 @@ SCENES_COLUMNS = [
     "artifact_repository",
     "hf_revision",
 ]
-SUITES_COLUMNS = ["test_suite_id", "scene_id"]
+SUITES_COLUMNS = ["test_suite_id", "scene_id", "uuid"]
 
 # Validation patterns
 # Matches ISO-format timestamps: "YYYY-MM-DD HH:MM:SS" (e.g., "2024-12-05 14:30:00")
@@ -113,7 +113,7 @@ def merge_suites_csv(
     dry_run: bool = False,
 ) -> tuple[int, int]:
     """
-    Merge new suite rows into existing CSV, deduplicating by (test_suite_id, scene_id).
+    Merge new suite rows into existing CSV, deduplicating by (test_suite_id, uuid).
 
     Args:
         csv_path: Path to the suites CSV file.
@@ -135,15 +135,15 @@ def merge_suites_csv(
         existing_pairs = set(
             zip(
                 existing["test_suite_id"].to_list(),
-                existing["scene_id"].to_list(),
+                existing["uuid"].to_list(),
             )
         )
     else:
         existing_pairs = set()
 
     new_only = new_rows.filter(
-        pl.struct(["test_suite_id", "scene_id"]).map_elements(
-            lambda x: (x["test_suite_id"], x["scene_id"]) not in existing_pairs,
+        pl.struct(["test_suite_id", "uuid"]).map_elements(
+            lambda x: (x["test_suite_id"], x["uuid"]) not in existing_pairs,
             return_dtype=pl.Boolean,
         )
     )
@@ -181,12 +181,12 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
         - No empty/null values in required fields (uuid, scene_id, nre_version_string, path)
 
     Suites CSV (if provided):
-        - Required columns present (test_suite_id, scene_id)
-        - No duplicate (test_suite_id, scene_id) pairs
+        - Required columns present (test_suite_id, scene_id, uuid)
+        - No duplicate (test_suite_id, uuid) pairs
         - No empty/null values in any column
 
     Cross-file (if suites_csv provided):
-        - All scene_ids referenced in suites exist in scenes
+        - All (scene_id, uuid) pairs referenced in suites exist in scenes
 
     Raises:
         CSVValidationError: If any validation check fails.
@@ -315,18 +315,18 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
             errors.append(f"Suites CSV missing columns: {missing_cols}")
 
         if suites_df.height > 0 and not missing_cols:
-            # Check for duplicate (test_suite_id, scene_id) pairs
+            # Check for duplicate (test_suite_id, uuid) pairs
             dup_pairs = suites_df.filter(
-                pl.struct(["test_suite_id", "scene_id"]).is_duplicated()
+                pl.struct(["test_suite_id", "uuid"]).is_duplicated()
             )
             if dup_pairs.height > 0:
                 dup_list = list(
                     zip(
                         dup_pairs["test_suite_id"].to_list()[:3],
-                        dup_pairs["scene_id"].to_list()[:3],
+                        dup_pairs["uuid"].to_list()[:3],
                     )
                 )
-                errors.append(f"Duplicate (test_suite_id, scene_id) pairs: {dup_list}")
+                errors.append(f"Duplicate (test_suite_id, uuid) pairs: {dup_list}")
 
             # Check for empty values
             for col in SUITES_COLUMNS:
@@ -341,16 +341,27 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
 
         # --- Cross-file validation ---
 
-        if suites_df.height > 0 and scenes_df.height > 0:
-            # Check that all scene_ids in suites exist in scenes
-            suite_scene_ids = set(suites_df["scene_id"].to_list())
-            scenes_scene_ids = set(scenes_df["scene_id"].to_list())
-            missing_in_scenes = suite_scene_ids - scenes_scene_ids
-            if missing_in_scenes:
-                missing_list = list(missing_in_scenes)[:5]
+        if (
+            suites_df.height > 0
+            and {"scene_id", "uuid"}.issubset(suites_df.columns)
+            and {"scene_id", "uuid"}.issubset(scenes_df.columns)
+        ):
+            missing_in_scenes = (
+                suites_df.select(["scene_id", "uuid"])
+                .unique()
+                .join(
+                    scenes_df.select(["scene_id", "uuid"]).unique(),
+                    on=["scene_id", "uuid"],
+                    how="anti",
+                )
+                .sort(["scene_id", "uuid"])
+            )
+            if missing_in_scenes.height > 0:
+                missing_list = missing_in_scenes.head(5).rows()
                 errors.append(
-                    f"Suites reference scene_ids not in scenes CSV: {missing_list}"
-                    f"{'...' if len(missing_in_scenes) > 5 else ''}"
+                    "Suites reference (scene_id, uuid) pairs not in scenes CSV: "
+                    f"{missing_list}"
+                    f"{'...' if missing_in_scenes.height > 5 else ''}"
                 )
 
     # Raise if any errors

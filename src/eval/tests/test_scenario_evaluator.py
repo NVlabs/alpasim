@@ -94,6 +94,24 @@ def test_gt_dist_traveled_is_full_recording_distance(
     assert result.aggregated_metrics["gt_dist_traveled_m"] == pytest.approx(9.0)
 
 
+def test_first_driven_timestamp_uses_render_anchor(
+    minimal_eval_input: ScenarioEvalInput,
+    default_eval_config: EvalConfig,
+) -> None:
+    """Handover is anchored on render_start + force_gt, independent of the gap."""
+    minimal_eval_input.force_gt_duration_us = 200_000
+    minimal_eval_input.session_metadata.render_start_timestamp_us = 250_000
+
+    simulation_result = SimulationResult.from_scenario_input(
+        minimal_eval_input, default_eval_config
+    )
+
+    assert simulation_result.first_driven_timestamp_us == (
+        minimal_eval_input.session_metadata.render_start_timestamp_us
+        + minimal_eval_input.force_gt_duration_us
+    )
+
+
 class SimpleScenarioEvaluatorClass:
     """Test the ScenarioEvaluator class.
 
@@ -179,24 +197,6 @@ class SimpleScenarioEvaluatorClass:
 
         # With only EGO and no other actors, there should be no collisions
         assert result.aggregated_metrics.get("collision_any", 0.0) == 0.0
-
-    def test_first_driven_timestamp_uses_force_gt_duration(
-        self,
-        minimal_eval_input: ScenarioEvalInput,
-        default_eval_config: EvalConfig,
-    ) -> None:
-        """Force-GT filtering starts one control step after the force-GT window."""
-        minimal_eval_input.force_gt_duration_us = 200_000
-
-        simulation_result = SimulationResult.from_scenario_input(
-            minimal_eval_input, default_eval_config
-        )
-
-        assert simulation_result.first_driven_timestamp_us == (
-            minimal_eval_input.session_metadata.start_timestamp_us
-            + minimal_eval_input.force_gt_duration_us
-            + minimal_eval_input.session_metadata.control_timestep_us
-        )
 
 
 class TestScenarioEvalResult:

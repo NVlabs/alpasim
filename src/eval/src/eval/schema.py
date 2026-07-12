@@ -139,10 +139,18 @@ class ImageScorerConfig:
 
 
 @dataclass
+class OpenLoopCollisionScorerConfig:
+    # Horizon in seconds: how far into each planned trajectory to check for
+    # collisions against surrounding agents' recorded trajectories.
+    horizon_s: float = MISSING
+
+
+@dataclass
 class ScorersConfig:
     min_ade: MinADEScorerConfig = MISSING
     plan_deviation: PlanDeviationScorerConfig = MISSING
     image: ImageScorerConfig = MISSING
+    open_loop_collision: OpenLoopCollisionScorerConfig = MISSING
 
 
 @dataclass

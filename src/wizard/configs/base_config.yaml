@@ -7,7 +7,7 @@ defaults:
   - driver: null # Must be overridden (e.g., driver=vavam, driver=alpamayo1)
   - driver_source: null # Optional: external_static or external_dynamic. Omit for managed drivers.
   - topology: null # Must be overridden (e.g., topology=1gpu)
-  - trafficsim: null # Optional override
+  - trafficsim: disabled # Disabled unless an implementation is selected (e.g., trafficsim=catk)
   - controller: default # Defaults to linear MPC; override with controller=nonlinear etc.
   - renderer: null # Optional override
   - optional scenes_catalog: internal # auto-override when internal plugin installed
@@ -33,6 +33,14 @@ defines:
 
   renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
   nre_max_workers: 4
+  # Maximum backends a single scene ID may occupy inside one NRE server
+  # (concurrent rollouts of the same scene each check out a backend; one render
+  # request covers all cameras). Requests beyond the cap queue on the NRE side
+  # instead of spawning more backends. Must be <= nre_cache_size; size the cache
+  # as nre_cache_size >= min(n_concurrent_rollouts, max_scenes_per_renderer)
+  # * nre_max_backends_per_scene. Only consumed by renderer images whose command
+  # passes --max-backends-per-scene (e.g. renderer=internal_nre).
+  nre_max_backends_per_scene: 1
   helper: scripts
   vscode: sources/remote-vscode-server
   physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
@@ -97,6 +105,10 @@ wizard:
   log_level: INFO
   prometheus:
     scrape_interval: 5s
+    # Exporters always run; disable this when an external Prometheus scrapes them.
+    start_prometheus: true
+    # Optional parent identity supplied by an orchestrator such as AlpaGym.
+    run_uuid: null
     # Central Prometheus file-SD publication directory. Deploy configs resolve
     # `defines.filesystem`; override this to publish elsewhere.
     file_sd_dir: "${defines.filesystem}/prometheus/file-sd"
@@ -246,6 +258,9 @@ services:
 runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
 
+  # Number of times to retry a rollout after a failed attempt.
+  max_rollout_retries: 2
+
   # Scene provider configuration for a single backend family.
   scene_provider:
     kind: usdz
@@ -313,7 +328,7 @@ runtime:
 
     physics_update_mode: "EGO_ONLY"
 
-    route_generator_type: "MAP" # "MAP" or "RECORDED"
+    route_generator_type: "MAP" # "NONE", "MAP", or "RECORDED"
     route_start_offset_m: 0.0 # Along-route distance ahead of ego where submitted routes start
 
     vehicle: null # use values from the .usdz file (original dimensions)
@@ -369,6 +384,8 @@ eval:
       min_timesteps: 5
     image:
       camera_logical_id: camera_front_wide_120fov
+    open_loop_collision:
+      horizon_s: 3.0
 
   aggregation_modifiers:
     max_dist_to_gt_trajectory: 4.0

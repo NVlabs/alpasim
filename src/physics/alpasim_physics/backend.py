@@ -8,8 +8,8 @@ import numpy as np
 import scipy.spatial.transform as scipy_trans
 import warp as wp
 from alpasim_grpc.v0.physics_pb2 import PhysicsGroundIntersectionReturn
-from alpasim_physics.ply_io import load_mesh_vf
 from alpasim_physics.utils import batch_so3_trans_2_se3, so3_trans_2_se3
+from alpasim_utils.ply_io import load_mesh_vf
 
 try:
     import polyscope as ps

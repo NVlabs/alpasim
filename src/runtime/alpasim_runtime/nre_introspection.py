@@ -61,8 +61,8 @@ async def get_loaded_scenes(
             raise IntrospectionNotSupportedError(
                 f"NRE server at {address} does not support GetLoadedScenes "
                 f"(UNIMPLEMENTED). Scene-affine dispatch requires an NRE image "
-                f"with this RPC. Either upgrade the NRE image or disable "
-                f"scene_affine_dispatch."
+                f"with this RPC. Either upgrade the NRE image or set "
+                f"scene_affine_dispatch.enabled=false."
             ) from e
         logger.warning("get_loaded_scenes failed on %s: %s", address, e.details())
         return None

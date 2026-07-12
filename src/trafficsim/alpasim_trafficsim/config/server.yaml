@@ -5,7 +5,7 @@ hydra:
 server:
   host: 0.0.0.0
   port: 6200
-  max_workers: 1
+  max_workers: 8
   log_file: null
 
 
@@ -18,7 +18,7 @@ catk:
     usdz_folder: ???  # set via CLI --usdz-folder or wizard volume mount
     # Service timing controls.
     num_history_steps: 16
-    minimum_future_steps: 5
+    prediction_steps: 5
     time_step: 0.1
 
     # TarCache-style map preprocessing.

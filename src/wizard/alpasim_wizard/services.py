@@ -27,6 +27,10 @@ def resolve_prometheus_command(context: WizardContext) -> str:
     )
     for name, port in context.telemetry_ports.prometheus_service_ports().items():
         command = command.replace(f"{{prometheus_ports.{name}}}", str(port))
+    command = command.replace(
+        "{start_prometheus}",
+        str(context.cfg.wizard.prometheus.start_prometheus).lower(),
+    )
     return command
 
 
@@ -445,14 +449,10 @@ def build_container_set(
                     build_service_containers(name, config, cfg.runtime)
                 )
 
-    prometheus_container = _build_prometheus_container(
-        cfg,
-        context,
-        use_address_string,
-    )
+    prometheus_container = _build_prometheus_container(cfg, context, use_address_string)
 
     logger.info("Built %d simulation containers", len(sim_containers))
-    logger.info("Built Prometheus container %s", prometheus_container.uuid)
+    logger.info("Built telemetry container %s", prometheus_container.uuid)
 
     return ContainerSet(
         sim=sim_containers,
@@ -469,7 +469,9 @@ def _build_prometheus_container(
     name = "prometheus"
     config = cfg.services.prometheus
     prometheus_ports = context.telemetry_ports.prometheus_service_ports()
-    readiness_port = prometheus_ports["prometheus"]
+    readiness_port = prometheus_ports[
+        "prometheus" if cfg.wizard.prometheus.start_prometheus else "node_exporter"
+    ]
     uuid = f"{name}-0"
     address = ContainerDefinition._build_address(
         readiness_port,

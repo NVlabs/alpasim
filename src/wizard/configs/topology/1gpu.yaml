@@ -4,6 +4,10 @@
 defines:
   nre_cache_size: 5 # renderer.n_concurrent_rollouts + 1
 
+trafficsim:
+  server:
+    max_workers: 4
+
 services:
   renderer:
     replicas_per_container: 1
@@ -44,4 +48,3 @@ runtime:
       n_concurrent_rollouts: 4
     trafficsim:
       n_concurrent_rollouts: 4
-      skip: true

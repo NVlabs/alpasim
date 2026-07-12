@@ -20,6 +20,7 @@ from alpasim_runtime.config import (
     SimulationConfig,
     VehicleConfig,
 )
+from alpasim_runtime.errors import InvalidSceneError
 from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.sensorsim_service import ImageFormat
 from alpasim_utils.geometry import Pose, Trajectory
@@ -266,13 +267,24 @@ class UnboundRollout:
         elif data_source.rig.vehicle_config is not None:
             vehicle = data_source.rig.vehicle_config
         else:
-            raise ValueError("No vehicle config provided/found.")
+            raise InvalidSceneError(
+                scene_id, "no vehicle config in simulation config or rig"
+            )
 
         ego_aabb = AABB(
             x=vehicle.aabb_x_m,
             y=vehicle.aabb_y_m,
             z=vehicle.aabb_z_m,
         )
+
+        try:
+            vector_map = data_source.map
+        except (OSError, MemoryError):
+            raise
+        except Exception as exc:
+            raise InvalidSceneError(
+                scene_id, f"failed to load vector map: {exc}"
+            ) from exc
 
         return UnboundRollout(
             rollout_uuid=session_uuid or str(uuid.uuid1()),
@@ -313,7 +325,7 @@ class UnboundRollout:
             route_start_offset_m=simulation_config.route_start_offset_m,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
             vehicle_config=vehicle,
-            vector_map=data_source.map,
+            vector_map=vector_map,
             hidden_traffic_objs=hidden_traffic_objs,
             render_bundling=simulation_config.render_bundling,
         )
@@ -325,6 +337,7 @@ class UnboundRollout:
             batch_size=1,  # Always 1 since we only have one rollout
             n_sim_steps=self.n_sim_steps,
             start_timestamp_us=self.egomotion_context_start_us,
+            render_start_timestamp_us=self.render_start_timestamp_us,
             control_timestep_us=self.control_timestep_us,
             nre_runid=self.nre_runid,
             nre_version=self.nre_version,

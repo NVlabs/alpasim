@@ -33,16 +33,17 @@ CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
 @dataclass
-class ProcessSample:
+class GroupUsage:
     cpu_seconds: float = 0.0
     resident_bytes: int = 0
 
 
 @dataclass(frozen=True)
-class ProcessMetric:
+class ProcessSample:
     pid: str
     group: str
     port: str
+    gpu_indices: tuple[int, ...]
     cpu_seconds: float
     resident_bytes: int
 
@@ -90,6 +91,14 @@ def _group_for_cmdline(cmdline: str) -> str | None:
 def _port_for_cmdline(cmdline: str) -> str:
     match = re.search(r"(?:^|\s)(?:--?)?port(?:=|\s+)(\d+)(?:\s|$)", cmdline)
     return match.group(1) if match else ""
+
+
+def _gpu_indices_for_environ(environ: Sequence[str]) -> tuple[int, ...]:
+    for entry in environ:
+        key, separator, value = entry.partition("=")
+        if separator and key == "CUDA_VISIBLE_DEVICES":
+            return tuple(int(device) for device in value.split(",") if device)
+    return ()
 
 
 def _run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -185,16 +194,7 @@ def discover_pids(
     return pids | discover_procfs_pids(procfs, job_id)
 
 
-def collect(procfs: Path, pids: Iterable[str]) -> dict[str, ProcessSample]:
-    samples: dict[str, ProcessSample] = {}
-    for process in collect_processes(procfs, pids):
-        sample = samples.setdefault(process.group, ProcessSample())
-        sample.cpu_seconds += process.cpu_seconds
-        sample.resident_bytes += process.resident_bytes
-    return samples
-
-
-def collect_processes(procfs: Path, pids: Iterable[str]) -> list[ProcessMetric]:
+def collect_processes(procfs: Path, pids: Iterable[str]) -> list[ProcessSample]:
     samples = []
     for pid in pids:
         pid_dir = procfs / pid
@@ -204,10 +204,11 @@ def collect_processes(procfs: Path, pids: Iterable[str]) -> list[ProcessMetric]:
             if group is None:
                 continue
             samples.append(
-                ProcessMetric(
+                ProcessSample(
                     pid=pid,
                     group=group,
                     port=_port_for_cmdline(cmdline),
+                    gpu_indices=_gpu_indices_for_environ(_read_environ(pid_dir)),
                     cpu_seconds=_read_cpu_seconds(pid_dir),
                     resident_bytes=_read_resident_bytes(pid_dir),
                 )
@@ -222,19 +223,24 @@ def _label_value(value: str) -> str:
 
 
 def render_metrics(
-    samples: dict[str, ProcessSample],
+    process_samples: Sequence[ProcessSample],
     duration: float,
-    process_samples: Sequence[ProcessMetric] = (),
 ) -> bytes:
+    usage_by_group: dict[str, GroupUsage] = {}
+    for process in process_samples:
+        usage = usage_by_group.setdefault(process.group, GroupUsage())
+        usage.cpu_seconds += process.cpu_seconds
+        usage.resident_bytes += process.resident_bytes
+
     lines = [
         "# HELP namedprocess_namegroup_cpu_seconds_total Cpu usage in seconds",
         "# TYPE namedprocess_namegroup_cpu_seconds_total counter",
     ]
-    for group, sample in samples.items():
+    for group, usage in usage_by_group.items():
         label = _label_value(group)
         lines.append(
             f'namedprocess_namegroup_cpu_seconds_total{{groupname="{label}"}} '
-            f"{sample.cpu_seconds}"
+            f"{usage.cpu_seconds}"
         )
     lines.extend(
         [
@@ -242,16 +248,15 @@ def render_metrics(
             "# TYPE namedprocess_namegroup_memory_bytes gauge",
         ]
     )
-    for group, sample in samples.items():
+    for group, usage in usage_by_group.items():
         label = _label_value(group)
         lines.append(
             f'namedprocess_namegroup_memory_bytes{{groupname="{label}",'
-            f'memtype="resident"}} {sample.resident_bytes}'
+            f'memtype="resident"}} {usage.resident_bytes}'
         )
     lines.extend(
         [
-            "# HELP alpasim_process_cpu_seconds_total "
-            "Cpu usage in seconds by process",
+            "# HELP alpasim_process_cpu_seconds_total Cpu usage in seconds by process",
             "# TYPE alpasim_process_cpu_seconds_total counter",
         ]
     )
@@ -263,6 +268,16 @@ def render_metrics(
             f'alpasim_process_cpu_seconds_total{{groupname="{group}",'
             f'pid="{pid}",port="{port}"}} {process.cpu_seconds}'
         )
+    lines.extend(
+        [
+            "# HELP alpasim_gpu_workload_info Physical GPUs owned by AlpaSim processes",
+            "# TYPE alpasim_gpu_workload_info gauge",
+        ]
+    )
+    for gpu_index in sorted(
+        {gpu_index for process in process_samples for gpu_index in process.gpu_indices}
+    ):
+        lines.append(f'alpasim_gpu_workload_info{{gpu="{gpu_index}"}} 1')
     lines.extend(
         [
             "# HELP alpasim_slurm_process_exporter_scrape_duration_seconds "
@@ -288,17 +303,8 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             started = time.monotonic()
             pids = discover_pids(server.job_id, server.procfs, server.cgroupfs)
             process_samples = collect_processes(server.procfs, pids)
-            samples: dict[str, ProcessSample] = {}
-            for process in process_samples:
-                sample = samples.setdefault(process.group, ProcessSample())
-                sample.cpu_seconds += process.cpu_seconds
-                sample.resident_bytes += process.resident_bytes
             duration = time.monotonic() - started
-            MetricsHandler.cache_body = render_metrics(
-                samples,
-                duration,
-                process_samples,
-            )
+            MetricsHandler.cache_body = render_metrics(process_samples, duration)
             MetricsHandler.cache_until = now + server.cache_seconds
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
@@ -317,13 +323,6 @@ class MetricsServer(http.server.HTTPServer):
     cache_seconds: float
 
 
-def _job_id_from_env() -> str:
-    job_id = os.environ.get("SLURM_JOB_ID")
-    if not job_id:
-        raise RuntimeError("SLURM_JOB_ID is required")
-    return job_id
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", default=None)
@@ -334,7 +333,7 @@ def main() -> None:
     args = parser.parse_args()
 
     server = MetricsServer(("0.0.0.0", args.port), MetricsHandler)
-    server.job_id = args.job_id or _job_id_from_env()
+    server.job_id = args.job_id or os.environ["SLURM_JOB_ID"]
     server.procfs = args.procfs
     server.cgroupfs = args.cgroupfs
     server.cache_seconds = args.cache_seconds

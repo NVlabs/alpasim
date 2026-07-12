@@ -21,6 +21,8 @@
 #SBATCH --exclusive
 #SBATCH --job-name alpasim
 #SBATCH --output=./runs/slurm_output/%j.log
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@300
 
 # Detect if running on slurm node
 if [ -z "$SLURM_JOB_ID" ]; then
@@ -70,6 +72,13 @@ SCRIPT_PATH=$(scontrol show job "${UNIQUE_JOB_ID}" | awk -F= '/Command=/{print $
 
 SCRIPT_DIR=$(readlink -f "$(dirname $SCRIPT_PATH)")
 REPO_ROOT_DIR=$(readlink -f "${SCRIPT_DIR}/../../..")
+RESTART_COUNT=${SLURM_RESTART_COUNT:-0}
+max_requeues=${ALPASIM_MAX_REQUEUES-20}
+if [[ ! ${max_requeues} =~ ^[0-9]+$ ]]; then
+    echo "ALPASIM_MAX_REQUEUES must be a non-negative integer, got: ${max_requeues}" >&2
+    exit 1
+fi
+max_requeues=$((10#${max_requeues}))
 
 # If LOGDIR is not specified, we generate a logdir in the folder where this script lives. If
 # a relative LOGDIR is specified, we assume the user wants to set the LOGDIR relative to where
@@ -77,16 +86,20 @@ REPO_ROOT_DIR=$(readlink -f "${SCRIPT_DIR}/../../..")
 if [[ -z "$LOGDIR" ]]; then
     if [ -z "${SLURM_ARRAY_JOB_ID}" ]; then
         # Non array job
-        LOGDIR=$SCRIPT_DIR/runs/${SLURM_JOB_ID}_${SLURM_JOB_NAME}_$(date +%Y_%m_%d__%H_%M_%S)
+        LOGDIR=$SCRIPT_DIR/runs/${SLURM_JOB_ID}_${SLURM_JOB_NAME}
         ARRAY_JOB_DIR=$LOGDIR
     else
-        # Array job, we use a hierarchical logdir to group all array jobs
+        # Array tasks keep a stable directory across Slurm requeues.
         ARRAY_JOB_DIR=$SCRIPT_DIR/runs/${SLURM_ARRAY_JOB_ID}_${SLURM_JOB_NAME}
-        LOGDIR=$ARRAY_JOB_DIR/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}_$(date +%Y_%m_%d__%H_%M_%S)
+        LOGDIR=$ARRAY_JOB_DIR/task-${SLURM_ARRAY_TASK_ID}
     fi
 else
     if [[ "$LOGDIR" != /* ]]; then
         LOGDIR=$(readlink -f "$SLURM_SUBMIT_DIR/$LOGDIR")
+    fi
+    ARRAY_JOB_DIR=$LOGDIR
+    if [[ -n "${SLURM_ARRAY_JOB_ID}" ]]; then
+        LOGDIR=$ARRAY_JOB_DIR/task-${SLURM_ARRAY_TASK_ID}
     fi
 fi
 
@@ -94,8 +107,8 @@ fi
 mkdir -p ${LOGDIR}/txt-logs
 
 # Want the Slurm logs in LOGDIR, but don't know LOGDIR until after job started.
-# Copy any early output to our new log file.
-cat ./runs/slurm_output/${SLURM_JOB_ID}.log > ${LOGDIR}/txt-logs/slurm.log 2>/dev/null
+# Copy any early output to our cumulative log file.
+cat "${SCRIPT_DIR}/runs/slurm_output/${SLURM_JOB_ID}.log" > "${LOGDIR}/txt-logs/slurm.log" 2>/dev/null
 
 # Redirect all future output to both terminal and the log file
 exec > >(tee -a "${LOGDIR}/txt-logs/slurm.log") 2>&1
@@ -109,12 +122,12 @@ if [[ -z "${ORIG_ACCOUNT}" ]]; then
 fi
 
 if [ ! -f "${ARRAY_JOB_DIR}/resume.sh" ] && [[ -z "${SLURM_ARRAY_TASK_ID}" || "${SLURM_ARRAY_TASK_ID}" == "${SLURM_ARRAY_TASK_MIN}" ]]; then
-    cat > ${ARRAY_JOB_DIR}/resume.sh <<RESUME_EOF
+    cat > "${ARRAY_JOB_DIR}/resume.sh" <<RESUME_EOF
 #!/bin/bash
 # Resume script — re-submits with the same SLURM options and Hydra overrides
 ${ORIG_SUBMIT_CMD} "\$@"
 RESUME_EOF
-    chmod +x ${ARRAY_JOB_DIR}/resume.sh
+    chmod +x "${ARRAY_JOB_DIR}/resume.sh"
 fi
 
 # Create reeval.sh script
@@ -127,6 +140,36 @@ REEVAL_EOF
     chmod +x ${ARRAY_JOB_DIR}/reeval.sh
 fi
 
+JOB_REFERENCE=${SLURM_JOB_ID}
+if [[ -n "${SLURM_ARRAY_JOB_ID}" ]]; then
+    JOB_REFERENCE=${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
+fi
+WIZARD_PID=
+
+request_requeue() {
+    trap - USR1
+    if (( RESTART_COUNT >= max_requeues )); then
+        echo "Reached automatic requeue limit (${max_requeues})"
+        [[ -n "${WIZARD_PID}" ]] && kill -TERM "${WIZARD_PID}" 2>/dev/null || true
+        exit 124
+    fi
+
+    echo "Requeueing ${JOB_REFERENCE} with ${RESTART_COUNT} previous restart(s)"
+    if ! scontrol requeue "${JOB_REFERENCE}"; then
+        echo "Slurm rejected automatic requeue of ${JOB_REFERENCE}"
+        [[ -n "${WIZARD_PID}" ]] && kill -TERM "${WIZARD_PID}" 2>/dev/null || true
+        exit 124
+    fi
+    exit 0
+}
+
+trap request_requeue USR1
+
+RESUME_ARGS=()
+if (( RESTART_COUNT > 0 )); then
+    RESUME_ARGS+=(runtime.enable_autoresume=true)
+fi
+
 uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
     alpasim_wizard \
     wizard.log_dir=$LOGDIR \
@@ -134,4 +177,11 @@ uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
     wizard.latest_symlink=true \
     wizard.submitter="$SUBMITTER" \
     wizard.description="$DESCRIPTION" \
-    "${HYDRA_ARGS[@]}"
+    "${HYDRA_ARGS[@]}" \
+    "${RESUME_ARGS[@]}" &
+WIZARD_PID=$!
+wait "${WIZARD_PID}"
+WIZARD_STATUS=$?
+WIZARD_PID=
+trap - USR1
+exit "${WIZARD_STATUS}"

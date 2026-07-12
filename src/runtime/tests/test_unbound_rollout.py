@@ -6,6 +6,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
     PhysicsUpdateMode,
@@ -13,6 +14,7 @@ from alpasim_runtime.config import (
     SimulationConfig,
     VehicleConfig,
 )
+from alpasim_runtime.errors import InvalidSceneError
 from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_utils.geometry import Pose, Trajectory
@@ -119,7 +121,9 @@ def test_create_uses_rig_start_for_context_and_closed_loop_after_force_gt(
     assert rollout.first_policy_timestamp_us == 150_000
     assert rollout.closed_loop_start_us == 250_000
     assert rollout.end_timestamp_us == 350_000
-    assert rollout.get_log_metadata().start_timestamp_us == 0
+    log_metadata = rollout.get_log_metadata()
+    assert log_metadata.start_timestamp_us == 0
+    assert log_metadata.render_start_timestamp_us == 150_000
     assert rollout.force_gt_period == range(150_000, 250_001)
     assert rollout.first_camera_frame_ranges_us["camera_front"] == range(
         170_000, 200_000
@@ -239,3 +243,37 @@ def test_create_keeps_synthetic_first_exposure_inside_rollout_window(
     assert rollout.first_camera_frame_ranges_us["camera_left"] == range(50_000, 150_000)
     assert rollout.egomotion_context_start_us == 0
     assert rollout.traffic_objs["actor"].trajectory.time_range_us.start == 0
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "expected_type"),
+    [
+        pytest.param(ValueError, InvalidSceneError, id="invalid-scene"),
+        pytest.param(OSError, OSError, id="transient-io"),
+        pytest.param(MemoryError, MemoryError, id="transient-memory"),
+    ],
+)
+def test_create_classifies_vector_map_failures(
+    tmp_path,
+    exception_type: type[Exception],
+    expected_type: type[Exception],
+) -> None:
+    artifact = _artifact()
+
+    class BrokenMapDataSource:
+        def __getattr__(self, name: str):
+            return getattr(artifact, name)
+
+        @property
+        def map(self):
+            raise exception_type("map-loading failure")
+
+    with pytest.raises(expected_type):
+        UnboundRollout.create(
+            simulation_config=_simulation_config(),
+            scene_id="bad-scene",
+            version_ids=RolloutMetadata.VersionIds(),
+            data_source=BrokenMapDataSource(),
+            rollouts_dir=str(tmp_path),
+            renderer_service=_sensorsim_renderer(),
+        )

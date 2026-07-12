@@ -29,11 +29,15 @@ message RolloutMetadata {
         string scene_id = 2;
         uint32 batch_size = 3 [deprecated = true]; // always 1
         uint32 n_sim_steps = 4;
+        // Egomotion-context origin (rig trajectory start), not the render anchor.
         fixed64 start_timestamp_us = 5;
         fixed64 control_timestep_us = 6;
         string nre_runid = 7;
         string nre_version= 8;
         string nre_uuid = 9;
+        // Render anchor (first camera frame shutter close) / start of force-GT.
+        // The policy handover is render_start_timestamp_us + force_gt_duration.
+        fixed64 render_start_timestamp_us = 10;
     }
 
     message ActorDefinitions {

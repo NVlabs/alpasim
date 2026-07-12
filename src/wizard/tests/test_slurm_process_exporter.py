@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from alpasim_wizard.telemetry.slurm_process_exporter import (
-    collect,
     collect_processes,
     discover_pids,
     render_metrics,
@@ -133,20 +132,16 @@ def test_render_metrics_omits_unobserved_groups(tmp_path: Path) -> None:
         tmp_path,
         "101",
         cmdline=(
-            "uv run physics_server --port=6116 "
-            "--artifact-glob=/mnt/nre-data/**/*.usdz"
+            "uv run physics_server --port=6116 --artifact-glob=/mnt/nre-data/**/*.usdz"
         ),
         utime=100,
         stime=50,
         resident_pages=10,
+        environ=["CUDA_VISIBLE_DEVICES=3"],
     )
 
     process_samples = collect_processes(tmp_path, {"101"})
-    payload = render_metrics(
-        collect(tmp_path, {"101"}),
-        duration=0.125,
-        process_samples=process_samples,
-    ).decode("utf-8")
+    payload = render_metrics(process_samples, duration=0.125).decode("utf-8")
 
     assert 'namedprocess_namegroup_cpu_seconds_total{groupname="physics"}' in payload
     assert (
@@ -162,4 +157,5 @@ def test_render_metrics_omits_unobserved_groups(tmp_path: Path) -> None:
         'namedprocess_namegroup_memory_bytes{groupname="driver",memtype="resident"}'
         not in payload
     )
+    assert 'alpasim_gpu_workload_info{gpu="3"} 1' in payload
     assert "alpasim_slurm_process_exporter_scrape_duration_seconds 0.125" in payload

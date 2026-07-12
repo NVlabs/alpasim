@@ -26,6 +26,7 @@ class ModelConfig:
     device: str = MISSING  # Device to run inference on (cuda/cpu)
     tokenizer_path: str | None = None  # Only required for VAM
     use_classifier_free_guidance_nav: bool = False  # A1.5 only
+    force_determinism: bool = False  # Alpamayo 1 only
 
 
 @dataclass

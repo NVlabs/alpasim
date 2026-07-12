@@ -26,7 +26,7 @@ def _default_map_element_names() -> list[str]:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 6200
-    max_workers: int = 1
+    max_workers: int = 8
     log_file: str | None = None
 
 
@@ -34,7 +34,7 @@ class ServerConfig:
 class CatkLoaderConfig:
     usdz_folder: str = MISSING
     num_history_steps: int = 16
-    minimum_future_steps: int = 5
+    prediction_steps: int = 5
     time_step: float = 0.1
 
     map_element_names: list[str] | None = field(

@@ -2,9 +2,11 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import math
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from alpasim_runtime.config import RouteGeneratorType
 from alpasim_runtime.route_generator import (
     RouteGenerator,
     RouteGeneratorMap,
@@ -38,6 +40,16 @@ def rig_waypoints_in_local():
 def test_route_generator_invalid_waypoints():
     with pytest.raises(ValueError):
         RouteGeneratorRecorded(np.zeros((1, 3)))
+
+
+def test_route_generator_none_skips_waypoint_validation():
+    route_generator = RouteGenerator.create(
+        np.zeros((1, 3)),
+        vector_map=MagicMock(),
+        route_generator_type=RouteGeneratorType.NONE,
+    )
+
+    assert route_generator is None
 
 
 def test_route_generator_invalid_route_start_offset(rig_waypoints_in_local):

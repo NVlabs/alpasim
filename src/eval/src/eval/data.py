@@ -1980,18 +1980,15 @@ class SimulationResult:
     def first_driven_timestamp_us(self) -> int | None:
         """Earliest timestamp at which the ego is under policy control.
 
-        Computed as ``start_timestamp_us + force_gt_duration_us +
-        control_timestep_us`` — i.e. one control step past the last force-gt
-        step.  Returns ``None`` when ``force_gt_duration_us`` was not
-        propagated (e.g. ground-truth baseline runs), in which case the
-        aggregation pipeline will not filter any timesteps.
+        This is the policy handover ``render_start_timestamp_us +
+        force_gt_duration_us`` (``= closed_loop_start``).  Returns ``None`` when
+        ``force_gt_duration_us`` was not propagated (e.g. ground-truth baseline
+        runs), leaving the aggregation pipeline to filter no timesteps.
         """
         if self.force_gt_duration_us is None:
             return None
         return (
-            self.session_metadata.start_timestamp_us
-            + self.force_gt_duration_us
-            + self.session_metadata.control_timestep_us
+            self.session_metadata.render_start_timestamp_us + self.force_gt_duration_us
         )
 
     @property

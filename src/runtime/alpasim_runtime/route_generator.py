@@ -41,7 +41,7 @@ class RouteGenerator(ABC):
         vector_map: VectorMap,
         route_generator_type: RouteGeneratorType,
         route_start_offset_m: float = 0.0,
-    ) -> "RouteGenerator":
+    ) -> "RouteGenerator | None":
         """
         Factory method to create a RouteGenerator
         Args:
@@ -50,9 +50,11 @@ class RouteGenerator(ABC):
           route_generator_type: the type of route generator to create
           route_start_offset_m: approximate distance ahead of the ego projection where routes start
         Returns:
-          A route generator of the specified type
+          A route generator of the specified type, or None if route generation is disabled
         """
-        if route_generator_type == RouteGeneratorType.RECORDED:
+        if route_generator_type == RouteGeneratorType.NONE:
+            return None
+        elif route_generator_type == RouteGeneratorType.RECORDED:
             return RouteGeneratorRecorded(
                 recorded_waypoints_in_local,
                 route_start_offset_m=route_start_offset_m,

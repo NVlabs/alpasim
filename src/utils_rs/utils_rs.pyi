@@ -5,11 +5,44 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from numpy.typing import NDArray
 
 def version() -> str:
     """Returns the version of this Rust extension."""
+    ...
+
+def build_drive_response_bytes(
+    time_now_us: int,
+    xyz: NDArray[np.float32],
+    quat_wxyz: NDArray[np.float32],
+    dt_us: NDArray[np.int64],
+) -> bytes:
+    """
+    Build serialized egodriver DriveResponse bytes from trajectory arrays.
+
+    :param time_now_us: Base simulator timestamp in microseconds.
+    :param xyz: Array of shape (N, 3) with position rows.
+    :param quat_wxyz: Array of shape (N, 4) with proto-order quaternions.
+    :param dt_us: Array of shape (N,) with timestamp offsets in microseconds.
+    """
+    ...
+
+def pack_trajectory_arrays(
+    trajectory: Any,
+) -> tuple[NDArray[np.int64], NDArray[np.float32], NDArray[np.float32]]:
+    """
+    Pack a proto-like trajectory into timestamp, xyz, and quat_wxyz arrays.
+
+    Returned rows are sorted by timestamp, and quaternions are in proto order
+    [w, x, y, z].
+    """
+    ...
+
+def pack_route_array(route: Any) -> tuple[int, NDArray[np.float32]]:
+    """Pack a proto-like route into its timestamp and waypoint xyz array."""
     ...
 
 class Pose:
