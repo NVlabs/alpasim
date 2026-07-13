@@ -78,9 +78,14 @@ def _build_token_to_asset_folder(configs_dir: Path) -> dict:
             cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
             if not isinstance(cfg, dict):
                 continue
-            road_block_name = cfg.get("road_block_name", "")
+            central_log = cfg.get("central_log", "")
             central_tokens = cfg.get("central_tokens", [])
-            if not road_block_name or not central_tokens:
+            if not central_tokens:
+                continue
+            road_block_name = cfg.get("road_block_name", "")
+            if not road_block_name and central_log:
+                road_block_name = f"{central_log}-{central_tokens[0]}"
+            if not road_block_name:
                 continue
             for token in central_tokens:
                 mapping[str(token)] = road_block_name
