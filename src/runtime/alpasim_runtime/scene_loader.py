@@ -120,24 +120,23 @@ def _resolve_nuplan_extra_params(dataset_name: str, extra_params: dict) -> dict:
     for yaml_file in yaml_files:
         try:
             cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
-            central_log = (
-                cfg.get("central_log", "")
-                if isinstance(cfg, dict)
-                else getattr(cfg, "central_log", "")
-            )
-            central_tokens = (
-                cfg.get("central_tokens", [])
-                if isinstance(cfg, dict)
-                else getattr(cfg, "central_tokens", [])
-            )
+            central_log = cfg.get("central_log", "")
+            central_tokens = cfg.get("central_tokens", [])
             if not central_log or not central_tokens:
                 logger.warning(
                     "%s missing central_log or central_tokens, skipping", yaml_file.name
                 )
                 continue
+            road_block_name = (
+                cfg.get("road_block_name", "") or f"{central_log}-{central_tokens[0]}"
+            )
             for token in central_tokens:
                 configs_by_log[central_log].append(
-                    {"central_token": token, "logfile": central_log}
+                    {
+                        "central_token": token,
+                        "logfile": central_log,
+                        "asset_folder": road_block_name,
+                    }
                 )
         except Exception as exc:
             logger.warning("Failed to load %s: %s", yaml_file.name, exc)

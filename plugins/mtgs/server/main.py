@@ -13,7 +13,7 @@ import argparse
 import logging
 from concurrent import futures
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from alpasim_grpc.v0.sensorsim_pb2_grpc import add_SensorsimServiceServicer_to_server
 from alpasim_mtgs.server.servicer import MTGSSensorsimService
@@ -42,7 +42,60 @@ logger = logging.getLogger(__name__)
 DATASET_NAME_MAPPING = {
     "nuplan_test": "navtest",
     "nuplan_mini": "navtest",
+    "nuplan_private": "private",
 }
+
+
+def _build_token_to_asset_folder(configs_dir: Path) -> dict:
+    """Read MTGS config YAMLs to build a central_token → road_block_name mapping.
+
+    Each YAML lists all central_tokens sharing one rendered asset folder
+    (road_block_name = central_log + '-' + central_tokens[0]).  This mapping
+    lets the MTGS server resolve any token to its shared asset folder at
+    runtime, regardless of the trajdata cache state.
+    """
+    import yaml
+
+    class _SafeLoader(yaml.SafeLoader):
+        pass
+
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/object",
+        lambda loader, tag, node: loader.construct_mapping(node, deep=True),
+    )
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/tuple",
+        lambda loader, tag, node: loader.construct_sequence(node, deep=True),
+    )
+
+    mapping: dict = {}
+    if not configs_dir.exists():
+        logger.warning("MTGS configs dir not found: %s", configs_dir)
+        return mapping
+
+    for yaml_file in configs_dir.glob("*.yaml"):
+        try:
+            cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
+            if not isinstance(cfg, dict):
+                continue
+            central_log = cfg.get("central_log", "")
+            central_tokens = cfg.get("central_tokens", [])
+            if not central_tokens:
+                continue
+            road_block_name = cfg.get("road_block_name", "")
+            if not road_block_name and central_log:
+                road_block_name = f"{central_log}-{central_tokens[0]}"
+            if not road_block_name:
+                continue
+            for token in central_tokens:
+                mapping[str(token)] = road_block_name
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s", yaml_file.name, exc)
+
+    logger.info(
+        "Built asset-folder mapping for %d tokens from %s", len(mapping), configs_dir
+    )
+    return mapping
 
 
 def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
@@ -98,6 +151,17 @@ def create_get_scene_function(
     mtgs_asset_base_path = str(Path(asset_base_path_config) / mapped_name / "assets")
     logger.info(f"MTGS asset path: {mtgs_asset_base_path}")
 
+    configs_dir = Path(asset_base_path_config) / mapped_name / "configs"
+    token_to_asset_folder = _build_token_to_asset_folder(configs_dir)
+
+    def _asset_folder_resolver(scene) -> str:
+        token = scene.name.rsplit("-", 1)[-1]
+        return token_to_asset_folder.get(str(token), scene.name)
+
+    asset_folder_resolver: Optional[Callable] = (
+        _asset_folder_resolver if token_to_asset_folder else None
+    )
+
     params = trajdata_provider_config_to_params(trajdata_config)
     logger.info("Creating UnifiedDataset from config")
     dataset = UnifiedDataset(**params)
@@ -127,6 +191,7 @@ def create_get_scene_function(
             vector_map_params=dataset.vector_map_params,
             smooth_trajectories=user_config.smooth_trajectories,
             asset_base_path=mtgs_asset_base_path,
+            asset_folder_resolver=asset_folder_resolver,
         )
 
         scene_cache[scene_id] = data_source
