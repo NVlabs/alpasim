@@ -33,7 +33,7 @@ from typing import Callable, ClassVar, Optional
 import csaps
 import numpy as np
 from alpasim_utils.artifact import Metadata
-from alpasim_utils.geometry import Pose, Trajectory
+from alpasim_utils.geometry import Trajectory
 from alpasim_utils.scenario import (
     AABB,
     CameraId,
@@ -51,6 +51,15 @@ from trajdata.data_structures.scene_metadata import Scene
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
+
+
+def _localize_positions(
+    positions_world: np.ndarray, position_origin_world: np.ndarray
+) -> np.ndarray:
+    """Translate world positions in float64 before storing local float32 values."""
+    positions_world_f64 = np.asarray(positions_world, dtype=np.float64)
+    position_origin_world_f64 = np.asarray(position_origin_world, dtype=np.float64)
+    return (positions_world_f64 - position_origin_world_f64).astype(np.float32)
 
 
 @dataclass
@@ -157,10 +166,11 @@ class TrajdataDataSource(SceneDataSource):
     def _extract_agent_trajectory(
         self,
         agent: AgentMetadata,
-    ) -> tuple[Optional[Trajectory], Optional[VehicleConfig]]:
-        """Extract the complete world-frame trajectory for an agent."""
+        position_origin_world: np.ndarray | None = None,
+    ) -> tuple[Optional[Trajectory], Optional[VehicleConfig], Optional[np.ndarray]]:
+        """Extract an agent trajectory relative to a shared world-space origin."""
         if self.scene is None:
-            return None, None
+            return None, None, None
 
         scene_cache = self.scene_cache
         dt = self.scene.dt
@@ -173,11 +183,13 @@ class TrajdataDataSource(SceneDataSource):
                 history_sec=(None, None),
             )
             if len(states) == 0:
-                return None, None
+                return None, None, None
 
-            positions_agent_world = np.asarray(
-                states.position3d,
-                dtype=np.float32,
+            positions_agent_world = np.asarray(states.position3d, dtype=np.float64)
+            if position_origin_world is None:
+                position_origin_world = positions_agent_world[0].copy()
+            positions_agent_local = _localize_positions(
+                positions_agent_world, position_origin_world
             )
             headings = np.asarray(states.heading, dtype=np.float64).reshape(-1, 1)
             quaternions_agent_world = R.from_euler("z", headings).as_quat()
@@ -188,7 +200,7 @@ class TrajdataDataSource(SceneDataSource):
 
             trajectory = Trajectory(
                 timestamps=timestamps_us,
-                positions=positions_agent_world,
+                positions=positions_agent_local,
                 quaternions=quaternions_agent_world.astype(np.float32),
             )
 
@@ -201,11 +213,11 @@ class TrajdataDataSource(SceneDataSource):
                 aabb_z_offset_m=-agent.extent.height / 2,
             )
 
-            return trajectory, vehicle_config
+            return trajectory, vehicle_config, position_origin_world
 
         except Exception as e:
             logger.error(f"Failed to extract trajectory for agent {agent.name}: {e}")
-            return None, None
+            return None, None, None
 
     @property
     def rig(self) -> Rig:
@@ -230,9 +242,11 @@ class TrajdataDataSource(SceneDataSource):
             raise ValueError("No ego agent found in scene")
 
         # Extract ego trajectory
-        ego_trajectory, ego_vehicle_config = self._extract_agent_trajectory(ego_agent)
+        ego_trajectory, ego_vehicle_config, position_origin_world = (
+            self._extract_agent_trajectory(ego_agent)
+        )
 
-        if ego_trajectory is None:
+        if ego_trajectory is None or position_origin_world is None:
             logger.error(
                 f"Failed to extract ego trajectory for agent {ego_agent.name}. "
                 f"Check if scene_cache is properly initialized and agent data is available."
@@ -240,24 +254,16 @@ class TrajdataDataSource(SceneDataSource):
             raise ValueError("Cannot extract ego trajectory")
 
         # Calculate world_to_nre transformation matrix (use first trajectory point as origin)
-        world_to_nre = np.eye(4)
-        if len(ego_trajectory) > 0:
-            position_ego_first_world = ego_trajectory.positions[0]
-            world_to_nre[:3, 3] = -position_ego_first_world
-            logger.info(
-                f"Setting world_to_nre origin at first pose: {position_ego_first_world}, "
-                f"translation: {world_to_nre[:3, 3]}"
-            )
+        world_to_nre = np.eye(4, dtype=np.float64)
+        world_to_nre[:3, 3] = -position_origin_world
+        logger.info(
+            f"Setting world_to_nre origin at first pose: {position_origin_world}, "
+            f"translation: {world_to_nre[:3, 3]}"
+        )
 
-        # Convert ego trajectory to local coordinates (NRE).
-        # Use Pose.from_se3 so any rotation later added to world_to_nre flows
-        # through automatically; current callers populate translation only, but
-        # the SE3 path keeps quaternions correctly composed in both cases.
+        # Positions were translated in float64 before Trajectory construction so
+        # UTM-scale coordinates do not lose their sub-meter deltas in float32.
         if len(ego_trajectory) > 0:
-            # Pose.from_se3 expects a float32 4x4 SE3 matrix.
-            ego_trajectory = ego_trajectory.transform(
-                Pose.from_se3(world_to_nre.astype(np.float32, copy=False))
-            )
             local_positions = ego_trajectory.positions
 
             # Validate transform
@@ -450,12 +456,9 @@ class TrajdataDataSource(SceneDataSource):
         if ego_agent is None and len(all_agents) > 0:
             ego_agent = all_agents[0]
 
-        # world_to_nre is a per-scene constant; build the Pose once.
-        # Pose.from_se3 expects a float32 4x4 SE3 matrix.
+        # Reuse the ego's float64 world origin for every traffic-object trajectory.
         self._ensure_rig_loaded()
-        world_to_nre_pose = Pose.from_se3(
-            self._rig.world_to_nre.astype(np.float32, copy=False)
-        )
+        position_origin_world = -self._rig.world_to_nre[:3, 3]
 
         traffic_dict = {}
         for agent in all_agents:
@@ -464,14 +467,13 @@ class TrajdataDataSource(SceneDataSource):
                 continue
 
             # Extract trajectory
-            trajectory, _ = self._extract_agent_trajectory(agent)
+            trajectory, _, _ = self._extract_agent_trajectory(
+                agent, position_origin_world=position_origin_world
+            )
 
             # Filter out empty trajectories or trajectories with only 1 data point
             if trajectory is None or len(trajectory) < 2:
                 continue
-
-            # Convert trajectory to local coordinates (NRE).
-            trajectory = trajectory.transform(world_to_nre_pose)
 
             # Smooth if needed
             if self.smooth_trajectories:

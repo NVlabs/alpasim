@@ -96,6 +96,22 @@ def test_mtgs_engine_importable():
         pytest.skip(f"Server dependencies not installed: {e}")
 
 
+def test_mtgs_asset_manager_allows_missing_road_height_map(tmp_path, monkeypatch):
+    import torch
+    from alpasim_mtgs.server.engine.mtgs import MTGSAssetManager
+
+    asset_id = "legacy-asset"
+    background_dir = tmp_path / asset_id / "background"
+    background_dir.mkdir(parents=True)
+    (background_dir / f"{asset_id}.ckpt").touch()
+    monkeypatch.setattr(torch, "load", lambda *args, **kwargs: {})
+
+    manager = MTGSAssetManager(tmp_path, torch.device("cpu"))
+    manager.reset(asset_id)
+
+    assert manager.road_height_map is None
+
+
 def _mtgs_user_config(
     *,
     extra_params: dict | None = None,
@@ -176,7 +192,13 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
 
     def fake_trajdata_data_source(**kwargs):
         captured["data_source_kwargs"] = kwargs
-        return SimpleNamespace(asset_path="/tmp/mtgs-assets/navtest/assets/scene-a")
+        resolver = kwargs.get("asset_folder_resolver")
+        asset_folder = (
+            resolver(kwargs["scene"]) if resolver is not None else kwargs["scene"].name
+        )
+        return SimpleNamespace(
+            asset_path=f"/tmp/mtgs-assets/navtest/assets/{asset_folder}"
+        )
 
     monkeypatch.setattr(mtgs_main, "TRAJDATA_AVAILABLE", True)
     monkeypatch.setattr(mtgs_main, "UnifiedDataset", FakeUnifiedDataset)
@@ -184,7 +206,10 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
 
     get_scene, get_available_scene_ids = mtgs_main.create_get_scene_function(
         _mtgs_user_config(
-            extra_params={"asset_base_path": "/tmp/mtgs-assets"},
+            extra_params={
+                "asset_base_path": "/tmp/mtgs-assets",
+                "asset_folder_map": {"scene-a": "asset-b"},
+            },
             vector_map_params={"incl_road_lanes": True, "incl_road_edges": True},
         )
     )
@@ -192,10 +217,13 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     assert get_available_scene_ids() == ["scene-a"]
     data_source = get_scene("scene-a")
 
-    assert data_source.asset_path == "/tmp/mtgs-assets/navtest/assets/scene-a"
+    assert data_source.asset_path == "/tmp/mtgs-assets/navtest/assets/asset-b"
     assert captured["dataset_params"]["desired_data"] == ["nuplan_test"]
     assert captured["dataset_params"]["dataset_kwargs"] == {
-        "nuplan_test": {"asset_base_path": "/tmp/mtgs-assets"}
+        "nuplan_test": {
+            "asset_base_path": "/tmp/mtgs-assets",
+            "asset_folder_map": {"scene-a": "asset-b"},
+        }
     }
     assert captured["cache_scene"].name == "scene-a"
 
@@ -208,3 +236,69 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
         "incl_road_edges": True,
     }
     assert kwargs["asset_base_path"] == "/tmp/mtgs-assets/navtest/assets"
+    assert kwargs["asset_folder_resolver"](kwargs["scene"]) == "asset-b"
+
+    get_unmapped_scene, _ = mtgs_main.create_get_scene_function(
+        _mtgs_user_config(extra_params={"asset_base_path": "/tmp/mtgs-assets"})
+    )
+    assert (
+        get_unmapped_scene("scene-a").asset_path
+        == "/tmp/mtgs-assets/navtest/assets/scene-a"
+    )
+
+
+def test_mtgs_scene_loader_cache_is_bounded(monkeypatch):
+    from alpasim_mtgs.server import main as mtgs_main
+
+    created_scene_ids = []
+
+    class FakeScene:
+        env_name = "nuplan_test"
+
+        def __init__(self, name):
+            self.name = name
+
+    class FakeUnifiedDataset:
+        def __init__(self, **params):
+            self.vector_map_params = params.get("vector_map_params", {})
+            self._scenes = [FakeScene(f"scene-{idx}") for idx in range(3)]
+
+        @property
+        def scene_name_to_index(self):
+            return {scene.name: idx for idx, scene in enumerate(self._scenes)}
+
+        @property
+        def map_api(self):
+            return None
+
+        def get_scene_cache(self, scene):
+            return object()
+
+        def num_scenes(self):
+            return len(self._scenes)
+
+        def get_scene(self, idx):
+            return self._scenes[idx]
+
+    def fake_trajdata_data_source(**kwargs):
+        scene_id = kwargs["scene"].name
+        created_scene_ids.append(scene_id)
+        return SimpleNamespace(asset_path=f"/tmp/mtgs-assets/navtest/assets/{scene_id}")
+
+    monkeypatch.setattr(mtgs_main, "TRAJDATA_AVAILABLE", True)
+    monkeypatch.setattr(mtgs_main, "UnifiedDataset", FakeUnifiedDataset)
+    monkeypatch.setattr(mtgs_main, "TrajdataDataSource", fake_trajdata_data_source)
+
+    get_scene, _ = mtgs_main.create_get_scene_function(
+        _mtgs_user_config(extra_params={"asset_base_path": "/tmp/mtgs-assets"}),
+        cache_size=2,
+    )
+
+    first_scene = get_scene("scene-0")
+    assert get_scene("scene-0") is first_scene
+    get_scene("scene-1")
+    get_scene("scene-2")
+
+    assert get_scene.cache_info().currsize == 2
+    assert get_scene("scene-0") is not first_scene
+    assert created_scene_ids == ["scene-0", "scene-1", "scene-2", "scene-0"]

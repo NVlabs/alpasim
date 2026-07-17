@@ -559,7 +559,6 @@ class MTGS(BaseRenderer):
 
 
 class MTGSAssetManager:
-
     def __init__(self, asset_folder_path: Path, device: torch.device):
         self.asset_folder_path = asset_folder_path
         self.current_asset_id = None
@@ -594,10 +593,23 @@ class MTGSAssetManager:
         )
 
         road_height_map_path = self.asset_dir / "road_height_map"
-        self.road_height_map = dict(
-            map=np.load(road_height_map_path / "road_height_map.npy"),
-            sim2=Sim2.from_json(road_height_map_path / "sim2.json"),
-        )
+        road_height_map_file = road_height_map_path / "road_height_map.npy"
+        road_height_sim2_file = road_height_map_path / "sim2.json"
+        if road_height_map_file.exists() and road_height_sim2_file.exists():
+            self.road_height_map = dict(
+                map=np.load(road_height_map_file),
+                sim2=Sim2.from_json(road_height_sim2_file),
+            )
+        else:
+            # Older MTGS challenge bundles contain only the background checkpoint
+            # and video metadata. The current renderer does not consume
+            # ``road_height_map`` after loading, so preserve compatibility with
+            # those bundles while keeping the richer artifact format supported.
+            self.road_height_map = None
+            logger.warning(
+                "Asset %s has no road_height_map; continuing without it",
+                self.current_asset_id,
+            )
 
         video_scene_dict_path = self.asset_dir / "video_scene_dict.pkl"
         self.video_scene_dict = None

@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import functools
 import logging
 from concurrent import futures
 from pathlib import Path
@@ -45,6 +46,29 @@ DATASET_NAME_MAPPING = {
 }
 
 
+def _asset_folder_map_from_extra_params(extra_params) -> dict[str, str]:
+    """Return a validated scene-to-MTGS-asset mapping from dataset config."""
+    raw_mapping = extra_params.get("asset_folder_map")
+    if raw_mapping is None:
+        return {}
+    if not hasattr(raw_mapping, "items"):
+        raise ValueError(
+            "scene_provider.trajdata.dataset.extra_params.asset_folder_map "
+            "must be a mapping of scene IDs to asset folder IDs."
+        )
+
+    mapping: dict[str, str] = {}
+    for scene_id, asset_folder in raw_mapping.items():
+        if not isinstance(scene_id, str) or not scene_id:
+            raise ValueError("asset_folder_map scene IDs must be non-empty strings.")
+        if not isinstance(asset_folder, str) or not asset_folder:
+            raise ValueError(
+                f"asset_folder_map[{scene_id!r}] must be a non-empty string."
+            )
+        mapping[scene_id] = asset_folder
+    return mapping
+
+
 def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="MTGS Sensorsim Service Server",
@@ -59,7 +83,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
         "--cache-size",
         type=int,
         default=2,
-        help="LRU cache size for renderer instances",
+        help="LRU cache size for renderer instances and scene data sources",
     )
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     parser.add_argument(
@@ -73,6 +97,7 @@ def parse_args(arg_list: list[str] | None = None) -> argparse.Namespace:
 
 def create_get_scene_function(
     user_config: UserSimulatorConfig,
+    cache_size: int = 2,
 ) -> tuple[Callable, Callable]:
     if not TRAJDATA_AVAILABLE:
         raise ImportError("trajdata is required for MTGS sensorsim server.")
@@ -97,6 +122,12 @@ def create_get_scene_function(
     mapped_name = DATASET_NAME_MAPPING.get(dataset_config.name, dataset_config.name)
     mtgs_asset_base_path = str(Path(asset_base_path_config) / mapped_name / "assets")
     logger.info(f"MTGS asset path: {mtgs_asset_base_path}")
+    asset_folder_map = _asset_folder_map_from_extra_params(extra_params)
+    if asset_folder_map:
+        logger.info(
+            "Loaded %d explicit scene-to-asset-folder mappings",
+            len(asset_folder_map),
+        )
 
     params = trajdata_provider_config_to_params(trajdata_config)
     logger.info("Creating UnifiedDataset from config")
@@ -106,12 +137,8 @@ def create_get_scene_function(
     scene_id_to_idx = scene_name_to_index_from_dataset(dataset)
     logger.info(f"Built scene_id mapping for {len(scene_id_to_idx)} scenes")
 
-    scene_cache = {}
-
+    @functools.lru_cache(maxsize=cache_size)
     def get_scene(scene_id: str) -> TrajdataDataSource:
-        if scene_id in scene_cache:
-            return scene_cache[scene_id]
-
         scene_idx = scene_id_to_idx.get(scene_id)
         if scene_idx is None:
             raise KeyError(f"Scene {scene_id} not found in dataset")
@@ -127,9 +154,17 @@ def create_get_scene_function(
             vector_map_params=dataset.vector_map_params,
             smooth_trajectories=user_config.smooth_trajectories,
             asset_base_path=mtgs_asset_base_path,
+            asset_folder_resolver=(
+                (
+                    lambda resolved_scene: asset_folder_map.get(
+                        resolved_scene.name, resolved_scene.name
+                    )
+                )
+                if asset_folder_map
+                else None
+            ),
         )
 
-        scene_cache[scene_id] = data_source
         logger.info(f"Loaded scene {scene_id}, asset_path={data_source.asset_path}")
         return data_source
 
@@ -167,7 +202,9 @@ def main(arg_list: list[str] | None = None) -> None:
         return
 
     try:
-        get_scene, get_available_scene_ids = create_get_scene_function(user_config)
+        get_scene, get_available_scene_ids = create_get_scene_function(
+            user_config, cache_size=args.cache_size
+        )
     except Exception as e:
         logger.error(f"Failed to create get_scene function: {e}")
         return

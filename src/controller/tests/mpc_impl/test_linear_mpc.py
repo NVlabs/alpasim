@@ -78,6 +78,32 @@ class TestLinearMPCComputeControl:
         # Should command negative steering to correct positive y error
         assert output.control[0] < 0
 
+    def test_control_is_continuous_at_kinematic_model_threshold(self):
+        """Crossing the speed threshold must not double the steering contribution."""
+        controller = LinearMPC()
+        trajectory = _create_turning_trajectory()
+        state = np.array([0.0, 0.0, 0.0, 4.99, 0.666, 0.437, 0.251, 1.313])
+
+        below = controller.compute_control(
+            ControllerInput(
+                state=state,
+                reference_trajectory=trajectory,
+                timestamp_us=0,
+            )
+        )
+        state[3] = controller._vehicle_params.kinematic_threshold_speed
+        at_threshold = controller.compute_control(
+            ControllerInput(
+                state=state,
+                reference_trajectory=trajectory,
+                timestamp_us=0,
+            )
+        )
+
+        assert below.status in ("solved", "solved_inaccurate")
+        assert at_threshold.status in ("solved", "solved_inaccurate")
+        assert abs(below.control[0] - at_threshold.control[0]) < 0.01
+
 
 class TestLinearMPCLinearization:
     """Tests for LinearMPC dynamics linearization."""
@@ -107,6 +133,28 @@ class TestLinearMPCLinearization:
         # Should still produce valid matrices
         assert not np.isnan(A_d).any()
         assert not np.isnan(B_d).any()
+
+    def test_kinematic_model_preserves_steady_turning_manifold(self):
+        """Steady low-speed lateral velocity and yaw rate should be preserved."""
+        controller = LinearMPC()
+        params = controller._vehicle_params
+        velocity = params.kinematic_threshold_speed - 0.01
+        steering = 0.25
+
+        state = np.zeros(controller.NX)
+        state[controller.IVX] = velocity
+        state[controller.IVY] = (
+            velocity * steering * params.l_rig_to_cg / params.wheelbase
+        )
+        state[controller.IYAW_RATE] = velocity * steering / params.wheelbase
+        state[controller.ISTEERING] = steering
+        command = np.array([steering, 0.0])
+
+        A_d, B_d = controller._linearize_dynamics(state)
+        next_state = A_d @ state + B_d @ command
+
+        indices = [controller.IVY, controller.IYAW_RATE]
+        np.testing.assert_allclose(next_state[indices], state[indices], atol=1e-12)
 
     def test_linearize_dynamics_dynamic_model(self):
         """At higher speeds, should use dynamic model."""
@@ -142,4 +190,19 @@ def _create_simple_trajectory(
     quaternions = np.stack(quat_list, axis=0).astype(np.float32)
 
     timestamps = np.array([i * dt_us for i in range(num_points)], dtype=np.uint64)
+    return Trajectory(timestamps, positions, quaternions)
+
+
+def _create_turning_trajectory() -> Trajectory:
+    """Create a gently curving trajectory that exercises lateral control."""
+    timestamps = np.arange(0, 2_100_000, 100_000, dtype=np.uint64)
+    x = timestamps.astype(np.float64) * 5.0 / 1e6
+    positions = np.stack(
+        [x, 0.08 * x**2, np.zeros_like(x)],
+        axis=1,
+    ).astype(np.float32)
+    quaternions = np.tile(
+        np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+        (len(timestamps), 1),
+    )
     return Trajectory(timestamps, positions, quaternions)

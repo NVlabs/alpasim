@@ -28,6 +28,9 @@ scenes:
   limit_to_first_n: 0
 
 runtime:
+  # The shared NuPlan defaults are intentionally conservative; restore the
+  # production topology's worker count for concurrent competition rollouts.
+  nr_workers: 4
   endpoints:
     renderer:
       n_concurrent_rollouts: 8
