@@ -31,8 +31,7 @@ defines:
   sensordata: "${defines.filesystem}/nre-artifacts"
   trafficsim_map_cache: "${defines.filesystem}/trafficsim/unified_data_cache"
 
-  renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
-  sensorsim_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_run"
+  renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
   nre_max_workers: 4
   helper: scripts
   vscode: sources/remote-vscode-server
@@ -119,7 +118,7 @@ scenes:
 services:
   # \/ renderer defaults to NRE. It can be overridden with another renderer implementation.
   renderer:
-    image: nvcr.io/nvidia/nre/nre-ga:26.02
+    image: nvcr.io/nvidia/nre/nre-ga:26.04
     external_image: true
     # \/ volumes lets us mount host (ORD/local) containers to the running container
     volumes:
@@ -139,6 +138,7 @@ services:
       - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
       - "--egocar-hood-dir=/mnt/ego-hoods"
       - "--no-enable-nrend"
+      - "--enable-harmonizer"
       - "--download-cache-dir /tmp/nre-cache-dir" # unused
       - "--cache-size=${defines.nre_cache_size}" # as a rule of thumb n_concurrent_rollouts + 1 allows to avoid premature evictions
       - "--max-workers=${defines.nre_max_workers}"

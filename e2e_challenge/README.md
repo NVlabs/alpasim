@@ -7,6 +7,7 @@ and wait for approval.
 1. Build a Docker image that serves the AlpaSim driver gRPC API. Start with the [starter kit](starter_kit/README.md) for a minimal example or the [VAVAM sample submission](sample_submission_vavam/README.md) for a richer model-backed example, then customize and test locally.
 1. Push the image to your team's ECR repository and use the challenge CLI to submit the image URI for evaluation.
 1. Wait for evaluation and check status or leaderboard results.
+1. For questions or concerns, please submit [github issues](https://github.com/NVlabs/alpasim/issues)
 
 ## Competition Resources
 

@@ -105,12 +105,20 @@ runtime:
   simulation_config:
     n_sim_steps: 200
     n_rollouts: 1
+    # MTGS renders all same-timestamp cameras in one pass. Keep this in the
+    # shared NuPlan config so local validation and competition use the same path.
+    render_bundling: RENDER_AGGREGATED
     control_timestep_us: 500_000
     force_gt_duration_us: 500_000
     planner_delay_us: 0
     min_traffic_duration_us: 0
     physics_update_mode: NONE
-    route_generator_type: RECORDED
+    # Request up to 80 m of route lookahead by extending the recorded trajectory
+    # along connected map lanes. All public and private NuPlan challenge presets
+    # inherit this shared setting.
+    route_generator_type: MAP
+    # Submit only the portion of the route approximately 40-80 m ahead of ego.
+    route_start_offset_m: 40.0
     assert_zero_decision_delay: false
     send_recording_ground_truth: false
     cameras:
