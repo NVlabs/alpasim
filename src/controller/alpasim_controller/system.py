@@ -80,6 +80,15 @@ class System:
         self._solve_time_ms: float = 0.0
         self._last_mpc_time_us: int | None = None
 
+    def close(self) -> None:
+        """Close the CSV log file handle.
+
+        Callers must close before removing ``log_file`` on Windows, where open
+        files cannot be deleted.
+        """
+        if not self._log_file_handle.closed:
+            self._log_file_handle.close()
+
     def _dynamic_state_to_cg_velocity(
         self, dynamic_state: common_pb2.DynamicState
     ) -> np.ndarray:
