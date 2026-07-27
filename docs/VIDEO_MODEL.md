@@ -118,7 +118,14 @@ uv run --project src/wizard alpasim_wizard \
 The preset uses `services.renderer.image=flashdreams-alpasim:local`,
 `external_image=true`, and `pull_policy=never`, so Docker Compose uses the local image tag instead of trying to pull from a registry. The wizard starts a `renderer-0` container and connects Alpasim services to it.
 
-The managed container mounts persistent host caches for Hugging Face, Torch, and FlashDreams. Override these host paths if needed:
+The managed container mounts persistent host caches for Hugging Face, Torch, and FlashDreams.
+
+Ensure the cache folders exist on host:
+```bash
+mkdir -p ~/.cache/huggingface ~/.cache/torch ~/.cache/flashdreams
+```
+
+Alternatively, override these host paths if needed:
 
 ```bash
 defines.hf_cache=/path/to/hf-cache \
