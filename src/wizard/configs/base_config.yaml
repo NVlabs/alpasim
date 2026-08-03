@@ -8,7 +8,7 @@ defaults:
   - driver_source: null # Optional: external_static or external_dynamic. Omit for managed drivers.
   - topology: null # Must be overridden (e.g., topology=1gpu)
   - trafficsim: null # Optional override
-  - controller: default # Defaults to linear MPC; override with controller=nonlinear etc.
+  - controller: nonlinear # Defaults to OSS nonlinear MPC; override with controller=default etc.
   - renderer: null # Optional override
   - optional scenes_catalog: internal # auto-override when internal plugin installed
   - optional image_defaults: internal # auto-override when internal plugin installed

@@ -2,6 +2,13 @@
 
 ## Dev
 
+The development preset keeps the local one-GPU topology, while matching the
+PAI evaluation sensor contract: four cameras (`camera_front_wide_120fov`,
+`camera_front_tele_30fov`, `camera_cross_left_120fov`, and
+`camera_cross_right_120fov`) at 10 Hz and 1080 px vertical resolution. The
+renderer preserves the native aspect ratio, so the configured 1900 x 1080
+request is delivered as 1916 x 1080.
+
 Run trusted AlpaSim against an already-running contestant driver:
 
 ```bash

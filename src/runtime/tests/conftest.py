@@ -15,6 +15,7 @@ from alpasim_grpc.v0.common_pb2 import DynamicState, Vec3
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.config import PhysicsUpdateMode, RenderBundling
 from alpasim_runtime.delay_buffer import DelayBuffer
+from alpasim_runtime.events.force_gt_utils import force_gt_dynamic_trajectory
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_runtime.services.controller_service import (
     ControllerService,
@@ -244,6 +245,7 @@ def rollout_state(
             ego_traj_estimate, zero_dynamics
         ),
         traffic_objs=mock_traffic_objs,
+        force_gt_dynamics=force_gt_dynamic_trajectory(mock_unbound.gt_ego_trajectory),
     )
     state.step_context = StepContext()
     return state

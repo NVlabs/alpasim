@@ -29,6 +29,10 @@ from alpasim_runtime.events.base import (
     SimulationEndEvent,
 )
 from alpasim_runtime.events.controller import ControllerEvent
+from alpasim_runtime.events.force_gt_utils import (
+    FORCE_GT_REFERENCE_HORIZON_US,
+    force_gt_dynamic_trajectory,
+)
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import PolicyEvent
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
@@ -250,13 +254,18 @@ class EventBasedRollout:
         return corrected_aabb.transform(aabb_to_ds, is_relative=True)
 
     async def _build_force_gt_physics_blend_trajectory(self) -> geometry.Trajectory:
-        """Build force-GT fallback that eases from recorded GT to physics."""
+        """Build force-GT fallback and the post-handover controller lookahead."""
         unbound = self.unbound
         gt_hold_end_us = force_gt_physics_blend_hold_end_us(unbound)
         configured_blend_end_us = (
             unbound.render_start_timestamp_us + unbound.force_gt_duration_us
         )
         blend_end_us = min(configured_blend_end_us, unbound.end_timestamp_us)
+        reference_end_us = min(
+            blend_end_us + FORCE_GT_REFERENCE_HORIZON_US,
+            unbound.end_timestamp_us,
+            unbound.gt_ego_trajectory.time_range_us.stop - 1,
+        )
 
         if blend_end_us <= gt_hold_end_us:
             return unbound.gt_ego_trajectory.clip(
@@ -267,19 +276,20 @@ class EventBasedRollout:
         dt_us = unbound.control_timestep_us
         clipped_gt_timestamps = unbound.gt_ego_trajectory.clip(
             unbound.egomotion_context_start_us,
-            blend_end_us + 1,
+            reference_end_us + 1,
         ).timestamps_us
         timestamps = list(
-            range(unbound.first_policy_timestamp_us, blend_end_us + 1, dt_us)
+            range(unbound.first_policy_timestamp_us, reference_end_us + 1, dt_us)
         )
-        if not timestamps or timestamps[-1] != blend_end_us:
-            timestamps.append(blend_end_us)
+        if not timestamps or timestamps[-1] != reference_end_us:
+            timestamps.append(reference_end_us)
         timestamps = sorted(
             set(
                 [
                     unbound.egomotion_context_start_us,
                     gt_hold_end_us,
                     blend_end_us,
+                    reference_end_us,
                     *clipped_gt_timestamps.tolist(),
                     *timestamps,
                 ]
@@ -320,12 +330,16 @@ class EventBasedRollout:
 
     def _create_rollout_state(self) -> RolloutState:
         """Create the RolloutState from the current rollout."""
+        force_gt_trajectory = self.force_gt_ego_trajectory
+        if force_gt_trajectory is None:
+            force_gt_trajectory = self.unbound.gt_ego_trajectory
         return RolloutState(
             unbound=self.unbound,
             ego_trajectory=self.ego_trajectory,
             ego_trajectory_estimate=self.ego_trajectory_estimate,
             traffic_objs=self.traffic_objs,
             force_gt_ego_trajectory=self.force_gt_ego_trajectory,
+            force_gt_dynamics=force_gt_dynamic_trajectory(force_gt_trajectory),
             step_context=StepContext(),
             last_egopose_update_us=None,
         )

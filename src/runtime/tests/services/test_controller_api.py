@@ -47,10 +47,12 @@ def default_args():
         "pose_local_to_rig": _pose_at(1.0),
         "rig_linear_velocity_in_rig": np.array([1.0, 0.0, 0.0]),
         "rig_angular_velocity_in_rig": np.array([0.0, 0.0, 0.0]),
+        "rig_linear_acceleration_in_rig": np.array([2.0, 0.0, 0.0]),
         "rig_reference_trajectory_in_rig": trajectory,
         "future_us": future_us,
         "fallback_trajectory_local_to_rig": fallback_trajectory_local_to_rig,
         "force_gt": False,
+        "coerce_dynamic_state": False,
     }
     return args
 
@@ -59,6 +61,7 @@ def test_create_run_controller_and_vehicle_request(default_args):
     # Remove fields not needed for request creation
     args_for_request = default_args.copy()
     del args_for_request["fallback_trajectory_local_to_rig"]
+    del args_for_request["force_gt"]
 
     request = ControllerService.create_run_controller_and_vehicle_request(
         **args_for_request
@@ -66,6 +69,7 @@ def test_create_run_controller_and_vehicle_request(default_args):
     # spot check
     assert request.session_uuid == default_args["session_uuid"]
     assert request.state.timestamp_us == default_args["now_us"]
+    assert request.state.state.linear_acceleration.x == 2.0
 
 
 async def test_skip_controller_instance_run_controller_and_vehicle(default_args):

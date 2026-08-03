@@ -137,7 +137,7 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
 
 
 @pytest.mark.asyncio
-async def test_force_gt_physics_blend_holds_first_frame_then_blends(
+async def test_force_gt_physics_blend_extends_through_controller_lookahead(
     simple_trajectory: Trajectory,
 ) -> None:
     rollout = cast(Any, object.__new__(EventBasedRollout))
@@ -147,7 +147,7 @@ async def test_force_gt_physics_blend_holds_first_frame_then_blends(
         render_start_timestamp_us=100_000,
         first_policy_timestamp_us=100_000,
         closed_loop_start_us=300_000,
-        end_timestamp_us=300_000,
+        end_timestamp_us=1_000_000,
         force_gt_duration_us=200_000,
         control_timestep_us=100_000,
         first_camera_frame_ranges_us={
@@ -170,8 +170,20 @@ async def test_force_gt_physics_blend_holds_first_frame_then_blends(
 
     blended = await rollout._build_force_gt_physics_blend_trajectory()
 
-    assert blended.timestamps_us.tolist() == [0, 100_000, 200_000, 300_000]
-    assert blended.positions[:, 2].tolist() == [0.0, 0.0, 5.0, 10.0]
+    assert blended.timestamps_us.tolist() == list(range(0, 1_100_000, 100_000))
+    assert blended.positions[:, 2].tolist() == [
+        0.0,
+        0.0,
+        5.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+        10.0,
+    ]
 
 
 @pytest.mark.asyncio

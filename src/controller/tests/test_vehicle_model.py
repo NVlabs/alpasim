@@ -134,14 +134,32 @@ class TestVehicleModelMethods:
         # Velocity should be preserved
         assert model.state[3] != 0.0
 
-    def test_set_velocity(self):
-        """set_velocity updates vx and vy."""
-        model = VehicleModel(np.array([0.0, 0.0]), 0.0)
+    def test_coerce_dynamic_state(self):
+        """Coercion replaces the full dynamic state with GT-derived values."""
+        model = VehicleModel(np.array([10.0, 0.0]), 0.5)
+        for _ in range(5):
+            model.advance(np.array([0.2, -8.0]), 0.1)
 
-        model.set_velocity(15.0, 0.5)
+        x_before = model.state[0]
+        y_before = model.state[1]
+        yaw_before = model.state[2]
 
-        assert model.state[3] == 15.0
-        assert model.state[4] == 0.5
+        model.coerce_dynamic_state(
+            v_cg_x=12.0,
+            v_cg_y=0.4,
+            yaw_rate=0.6,
+            longitudinal_acceleration=2.0,
+        )
+
+        expected_steering = math.atan(0.6 / 12.0 * model.parameters.wheelbase)
+        assert model.state[3] == 12.0
+        assert model.state[4] == 0.4
+        assert model.state[5] == 0.6
+        assert model.state[6] == pytest.approx(expected_steering)
+        assert model.state[7] == 2.0
+        assert model.state[0] == x_before
+        assert model.state[1] == y_before
+        assert model.state[2] == yaw_before
 
 
 class TestVehicleModelAdvance:

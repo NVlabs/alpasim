@@ -154,7 +154,12 @@ class System:
         # Reinitialize the state
         if request.coerce_dynamic_state:
             velocity_cg = self._dynamic_state_to_cg_velocity(request.state.state)
-            self._vehicle_model.set_velocity(velocity_cg[0], velocity_cg[1])
+            self._vehicle_model.coerce_dynamic_state(
+                v_cg_x=velocity_cg[0],
+                v_cg_y=velocity_cg[1],
+                yaw_rate=request.state.state.angular_velocity.z,
+                longitudinal_acceleration=request.state.state.linear_acceleration.x,
+            )
 
         # Determine intermediate reporting timestamps
         if request.pose_reporting_interval_us > 0:

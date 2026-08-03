@@ -115,6 +115,7 @@ class RolloutState:
     ego_trajectory_estimate: geometry.DynamicTrajectory
     traffic_objs: TrafficObjects
     force_gt_ego_trajectory: geometry.Trajectory | None = None
+    force_gt_dynamics: geometry.DynamicTrajectory | None = None
 
     @property
     def force_gt_trajectory(self) -> geometry.Trajectory:
