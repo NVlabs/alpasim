@@ -78,6 +78,27 @@ class TestLinearMPCComputeControl:
         # Should command negative steering to correct positive y error
         assert output.control[0] < 0
 
+    def test_compute_control_above_speed_constraint(self):
+        """A high initial speed should brake while retaining lateral control."""
+        controller = LinearMPC()
+        velocity = 36.1
+        trajectory = _create_simple_trajectory(velocity=velocity)
+        state = np.zeros(8)
+        state[controller.IY] = 1.0
+        state[controller.IVX] = velocity
+
+        output = controller.compute_control(
+            ControllerInput(
+                state=state,
+                reference_trajectory=trajectory,
+                timestamp_us=0,
+            )
+        )
+
+        assert output.status in ("solved", "solved_inaccurate")
+        assert output.control[0] < 0
+        assert output.control[1] < 0
+
     def test_control_is_continuous_at_kinematic_model_threshold(self):
         """Crossing the speed threshold must not double the steering contribution."""
         controller = LinearMPC()

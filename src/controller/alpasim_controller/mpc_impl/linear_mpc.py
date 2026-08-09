@@ -53,6 +53,7 @@ class LinearMPC(MPCController):
     OSQP_EPS_REL = 1e-4
     OSQP_MAX_ITER = 500
     QP_REGULARIZATION = 1e-6
+    OVERSPEED_RECOVERY_ACCEL = -1.0
 
     def __init__(
         self,
@@ -417,7 +418,20 @@ class LinearMPC(MPCController):
 
         x_pred_from_x0 = x_pred_free[constrained_rows]
         l_state = np.tile(self._x_min_constrained, N) - x_pred_from_x0
-        u_state = np.tile(self._x_max_constrained, N) - x_pred_from_x0
+        x_max = np.tile(self._x_max_constrained, N)
+        vx_constraint_index = self._constrained_state_indices.index(self.IVX)
+        vx_rows = np.arange(
+            vx_constraint_index,
+            len(x_max),
+            len(self._constrained_state_indices),
+        )
+        if x0[self.IVX] > self._x_max_constrained[vx_constraint_index]:
+            recovery_controls = np.zeros(N * nu)
+            recovery_controls[1::nu] = self.OVERSPEED_RECOVERY_ACCEL
+            recovery_states = x_pred_free + S_u @ recovery_controls
+            recovery_vx = recovery_states[constrained_rows][vx_rows]
+            x_max[vx_rows] = np.maximum(x_max[vx_rows], recovery_vx)
+        u_state = x_max - x_pred_from_x0
 
         l_ineq = np.concatenate([l_input, l_state])
         u_ineq = np.concatenate([u_input, u_state])
