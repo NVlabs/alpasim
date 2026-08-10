@@ -4,6 +4,7 @@
 """Unit tests for LinearMPC controller."""
 
 import numpy as np
+import pytest
 from alpasim_controller.mpc_controller import ControllerInput, MPCGains
 from alpasim_controller.mpc_impl import LinearMPC
 from alpasim_controller.vehicle_model import VehicleModel
@@ -57,15 +58,16 @@ class TestLinearMPCComputeControl:
         assert output.solve_time_ms > 0
         assert output.status in ("solved", "solved_inaccurate")
 
-    def test_compute_control_with_lateral_error(self):
+    @pytest.mark.parametrize("velocity", [10.0, 40.0])
+    def test_compute_control_with_lateral_error(self, velocity):
         """Controller should command steering to correct lateral error."""
         controller = LinearMPC()
-        trajectory = _create_simple_trajectory(velocity=10.0)
+        trajectory = _create_simple_trajectory(velocity=velocity)
 
         # State with lateral offset
         state = np.zeros(8)
         state[1] = 1.0  # y = 1m offset
-        state[3] = 10.0  # vx
+        state[3] = velocity  # vx
 
         input = ControllerInput(
             state=state,

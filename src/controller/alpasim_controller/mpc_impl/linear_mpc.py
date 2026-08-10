@@ -116,7 +116,7 @@ class LinearMPC(MPCController):
         self._x_max_constrained = np.array(
             [
                 math.pi / 2,  # yaw (rad)
-                35.0,  # vx (m/s) - ~125 km/h
+                40.0,  # vx (m/s) - ~145 km/h
                 math.pi / 4,  # steering (rad)
                 6.0,  # accel (m/s²) - acceleration limit
             ]
