@@ -117,15 +117,29 @@ class VehicleModel:
         """Reset position states to origin (x, y, yaw) = 0."""
         self._state[:3] = 0.0
 
-    def set_velocity(self, v_cg_x: float, v_cg_y: float) -> None:
-        """Set CG velocity in the rig/body frame.
+    def coerce_dynamic_state(
+        self,
+        v_cg_x: float,
+        v_cg_y: float,
+        yaw_rate: float,
+        longitudinal_acceleration: float,
+    ) -> None:
+        """Replace dynamic state with values estimated from ground truth.
 
         Args:
             v_cg_x: Longitudinal velocity of the CG [m/s]
             v_cg_y: Lateral velocity of the CG [m/s]
+            yaw_rate: Angular velocity in the body frame [rad/s]
+            longitudinal_acceleration: Longitudinal acceleration [m/s²]
         """
         self._state[3] = v_cg_x
         self._state[4] = v_cg_y
+        self._state[5] = yaw_rate
+        if v_cg_x > 0.25:
+            self._state[6] = math.atan(yaw_rate / v_cg_x * self._parameters.wheelbase)
+        else:
+            self._state[6] = 0.0
+        self._state[7] = longitudinal_acceleration
 
     def advance(self, u: np.ndarray, dt: float) -> Pose:
         """Advance the vehicle model by dt seconds.

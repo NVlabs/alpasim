@@ -162,6 +162,11 @@ def build_simulation_request(
             if scene.n_rollouts is not None
             else user_config.simulation_config.n_rollouts
         )
+        start_time_offset_us = (
+            scene.start_time_offset_us
+            if scene.start_time_offset_us is not None
+            else user_config.simulation_config.start_time_offset_us
+        )
 
         # Handle autoresume: skip already-completed rollouts
         if user_config.enable_autoresume:
@@ -183,6 +188,7 @@ def build_simulation_request(
             runtime_pb2.RolloutSpec(
                 scenario_id=scene.scene_id,
                 nr_rollouts=n_rollouts_to_dispatch,
+                start_time_offset_us=start_time_offset_us,
             )
         )
         total_rollouts += n_rollouts_to_dispatch

@@ -11,6 +11,7 @@ from threading import RLock
 from typing import Callable, List, TypeVar
 
 import numpy as np
+import torch
 
 F = TypeVar("F", bound=Callable)
 
@@ -20,7 +21,7 @@ class FrameEntry:
     """Represents a single camera frame."""
 
     timestamp_us: int
-    image: np.ndarray
+    image: np.ndarray | torch.Tensor
 
 
 def synchronized(method: F) -> F:
@@ -54,7 +55,7 @@ class FrameCache:
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     @synchronized
-    def add_image(self, timestamp_us: int, image: np.ndarray) -> None:
+    def add_image(self, timestamp_us: int, image: np.ndarray | torch.Tensor) -> None:
         """Insert an image while keeping entries ordered by timestamp."""
         inserted = False
         # Iterate from newest to oldest since most inserts append.

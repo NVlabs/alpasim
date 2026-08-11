@@ -58,9 +58,10 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
+        rig_linear_acceleration_in_rig: np.ndarray,
         rig_reference_trajectory_in_rig: Trajectory,
         future_us: int,
-        force_gt: bool,
+        coerce_dynamic_state: bool,
         pose_reporting_interval_us: int = 0,
     ) -> RunControllerAndVehicleModelRequest:
         """
@@ -85,6 +86,13 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                 z=rig_angular_velocity_in_rig[2],
             )
         )
+        request.state.state.linear_acceleration.CopyFrom(
+            Vec3(
+                x=rig_linear_acceleration_in_rig[0],
+                y=rig_linear_acceleration_in_rig[1],
+                z=rig_linear_acceleration_in_rig[2],
+            )
+        )
 
         request.planned_trajectory_in_rig.CopyFrom(
             trajectory_to_grpc(rig_reference_trajectory_in_rig)
@@ -92,7 +100,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
 
         request.future_time_us = future_us
 
-        request.coerce_dynamic_state = force_gt
+        request.coerce_dynamic_state = coerce_dynamic_state
         request.pose_reporting_interval_us = pose_reporting_interval_us
         return request
 
@@ -188,9 +196,11 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         pose_local_to_rig: Pose,
         rig_linear_velocity_in_rig: np.ndarray,
         rig_angular_velocity_in_rig: np.ndarray,
+        rig_linear_acceleration_in_rig: np.ndarray,
         rig_reference_trajectory_in_rig: Trajectory,
         future_us: int,
         force_gt: bool,
+        coerce_dynamic_state: bool,
         fallback_trajectory_local_to_rig: Trajectory,
         pose_reporting_interval_us: int = 0,
     ) -> list[PropagatedPosesAtTime]:
@@ -201,9 +211,12 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             pose_local_to_rig: Current ego pose in local frame.
             rig_linear_velocity_in_rig: Linear velocity vector in rig frame.
             rig_angular_velocity_in_rig: Angular velocity vector in rig frame.
+            rig_linear_acceleration_in_rig: Linear acceleration vector in rig frame.
             rig_reference_trajectory_in_rig: Planned reference trajectory in rig frame.
             future_us: Target timestamp to propagate to.
-            force_gt: If True, coerce the vehicle model to use ground-truth state.
+            force_gt: If True, replace propagated poses with the ground-truth fallback.
+            coerce_dynamic_state: If True, initialize controller dynamics from the
+                supplied state before propagation.
             fallback_trajectory_local_to_rig: Trajectory used in skip mode or
                 force_gt mode; interpolated at future_us to produce the fallback pose.
             pose_reporting_interval_us: Interval for intermediate state reporting.
@@ -244,9 +257,10 @@ class ControllerService(ServiceBase[VDCServiceStub]):
             pose_local_to_rig=pose_local_to_rig,
             rig_linear_velocity_in_rig=rig_linear_velocity_in_rig,
             rig_angular_velocity_in_rig=rig_angular_velocity_in_rig,
+            rig_linear_acceleration_in_rig=rig_linear_acceleration_in_rig,
             rig_reference_trajectory_in_rig=rig_reference_trajectory_in_rig,
             future_us=future_us,
-            force_gt=force_gt,
+            coerce_dynamic_state=coerce_dynamic_state,
             pose_reporting_interval_us=pose_reporting_interval_us,
         )
 

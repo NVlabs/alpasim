@@ -4,8 +4,10 @@ Alpasim depends on access to the following:
 
 - Hugging Face access
   - Used for downloading simulation artifacts
-  - Data is
-    [here](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release)
+  - For new runs, use the recommended
+    [26.01 release](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release).
+    See [Test Suites & Scenes](../data/scenes/README.md) for release selection,
+    legacy datasets, and exact run commands.
   - See info on data
     [here](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/blob/main/README.md#dataset-format)
     for more information on the contents of artifacts used to define scenes

@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.111.0"
+version = "0.134.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -36,6 +36,9 @@ all = [
   "alpasim_wizard",
   "alpasim-trafficsim",
 ]
+
+# -- Model extras --
+recipes = ["alpasim_driver[recipes]"]
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
@@ -88,6 +91,9 @@ override-dependencies = [
   # hyperqueue is a vam dependency for HPC job scheduling, only available on Linux x86_64.
   # Not needed for local driver runs.
   "hyperqueue; python_version < '0'",
+  # Recipes SFT depends on GUI OpenCV, while the driver provides the headless package.
+  # Installing both makes exact member syncs remove their shared cv2 files.
+  "opencv-python; python_version < '0'",
   # vam pins torchmetrics==1.4.3, alpamayo-r1 pins torchmetrics==1.8.2.
   # Override to the newer version; vam works fine with 1.8.2.
   "torchmetrics>=1.8.2",

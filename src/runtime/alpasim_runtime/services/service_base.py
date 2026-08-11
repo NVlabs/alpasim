@@ -65,10 +65,18 @@ class ServiceBase(ABC, Generic[StubType]):
         """Return a human-readable name for this service instance."""
         return f"{self.__class__.__name__}(address={self.address})"
 
+    @property
+    def channel_options(self) -> list[tuple[str, int]]:
+        """Return service-specific gRPC channel options."""
+        return []
+
     async def _open_connection(self) -> None:
         """Open gRPC connection."""
         if not self.skip:
-            self.channel = grpc.aio.insecure_channel(self.address)
+            self.channel = grpc.aio.insecure_channel(
+                self.address,
+                options=self.channel_options,
+            )
             self.stub = self.stub_class(self.channel)
 
     async def _close_connection(self) -> None:

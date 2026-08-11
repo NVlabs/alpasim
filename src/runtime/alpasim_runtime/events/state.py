@@ -16,6 +16,7 @@ from typing import Any, Coroutine
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.delay_buffer import DelayBuffer
+from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
 from alpasim_runtime.services.physics_service import PhysicsService
@@ -115,6 +116,15 @@ class RolloutState:
     ego_trajectory_estimate: geometry.DynamicTrajectory
     traffic_objs: TrafficObjects
     force_gt_ego_trajectory: geometry.Trajectory | None = None
+    force_gt_dynamics: geometry.DynamicTrajectory | None = None
+
+    # Globally shared, on-disk cache of frames rendered during the force-GT
+    # period. ``None`` disables caching (the default). ``force_gt_scene_uuid``
+    # and ``force_gt_render_signature`` are the per-rollout cache directory
+    # levels; both are set together when caching is active, or both ``None``.
+    force_gt_frame_cache: ForceGtFrameCache | None = None
+    force_gt_scene_uuid: str | None = None
+    force_gt_render_signature: str | None = None
 
     @property
     def force_gt_trajectory(self) -> geometry.Trajectory:

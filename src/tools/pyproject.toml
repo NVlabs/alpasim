@@ -18,7 +18,6 @@ dependencies = [
     "alpasim_grpc",
     "alpasim_utils[geometry]",
     "alpasim_eval",
-    "opencv-python-headless",
     "polars",
     "tqdm",
     "rich",

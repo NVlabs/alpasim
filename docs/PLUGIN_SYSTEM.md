@@ -16,7 +16,7 @@ At runtime, the `PluginRegistry` (in `src/plugins/`) scans all installed package
 ```python
 from alpasim_plugins import models
 
-models.get_names()                  # → ['alpamayo1', 'alpamayo1_5', 'manual', 'transfuser', 'vam']
+models.get_names()                  # → ['alpamayo1_5_recipes_sft', 'transfuser', 'vam', ...]
 models.get("transfuser")            # → <class TransfuserModel>
 ```
 

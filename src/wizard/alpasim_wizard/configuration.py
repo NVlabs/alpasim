@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
+import json
 import logging
 import os
 import socket
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, cast
 
@@ -107,8 +110,7 @@ class ConfigurationManager:
         telemetry_ports = context.telemetry_ports
         prometheus_host = (
             "localhost"
-            if cfg.wizard.debug_flags.use_localhost
-            or cfg.wizard.run_method.name == "SLURM"
+            if cfg.wizard.debug_flags.use_localhost or cfg.wizard.run_method.is_slurm
             else "prometheus-0"
         )
         runtime_config["simulation_config"] = simulation_config
@@ -121,6 +123,19 @@ class ConfigurationManager:
             ),
         }
 
+        # The runtime cannot observe the renderer's launch flags (e.g. NRE
+        # fixer/editing flags) over gRPC, so fingerprint the renderer service
+        # spec and fold it into the force-GT frame cache key. Only needed when
+        # caching is enabled; skipped if the user set the key explicitly
+        # (non-null survives _remove_none_values above).
+        cache_config = simulation_config.get("force_gt_frame_cache")
+        if (
+            isinstance(cache_config, dict)
+            and cache_config.get("enabled")
+            and "extra_key" not in cache_config
+        ):
+            cache_config["extra_key"] = self._renderer_cache_fingerprint(cfg)
+
         # Write flat scene list
         runtime_config["scenes"] = [{"scene_id": s.scene_id} for s in artifact_list]
 
@@ -132,6 +147,47 @@ class ConfigurationManager:
 
         logger.debug(f"Generated runtime config: {filename}")
         return filename
+
+    @staticmethod
+    def _renderer_cache_fingerprint(cfg: Any) -> str:
+        """Fingerprint the renderer launch spec for force-GT cache keying.
+
+        Hashes the content-affecting parts of ``services.renderer`` (image,
+        command, environments). Volumes/ports are excluded so per-run mounts and
+        addresses do not spuriously bust the shared cache. Works with OmegaConf
+        nodes, dataclasses, mappings, and namespaces.
+
+        Raises ``ValueError`` when no local renderer service spec is available
+        (e.g. the renderer runs via ``external_services``): its launch flags are
+        unknown, so force-GT frame caching cannot be keyed safely.
+        """
+        services = getattr(cfg, "services", None)
+        renderer = getattr(services, "renderer", None) if services is not None else None
+        if renderer is None and isinstance(services, Mapping):
+            renderer = services.get("renderer")
+        if renderer is None:
+            raise ValueError(
+                "force_gt_frame_cache.enabled requires a local renderer "
+                "service to fingerprint its launch spec, but none is configured "
+                "(e.g. the renderer runs via external_services). Disable caching "
+                "or set force_gt_frame_cache.extra_key manually."
+            )
+
+        def _field(name: str) -> Any:
+            if isinstance(renderer, Mapping):
+                value = renderer.get(name)
+            else:
+                value = getattr(renderer, name, None)
+            if OmegaConf.is_config(value):
+                value = OmegaConf.to_container(value, resolve=True)
+            return value
+
+        relevant = {
+            field: _field(field) for field in ("image", "command", "environments")
+        }
+        canonical = json.dumps(relevant, sort_keys=True, default=str)
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+        return f"renderer-{digest}"
 
     def _generate_network_config(
         self,

@@ -822,7 +822,7 @@ class ManualModel(BaseTrajectoryModel):
             # Return zero trajectory to stop the vehicle
             trajectory_xy = np.zeros((self._num_waypoints, 2))
             headings = np.zeros(self._num_waypoints)
-            return ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)
+            return ModelPrediction.from_planar(trajectory_xy, headings)
 
         # Use target speed from keyboard, with minimum for trajectory generation
         # If speed is very low, use a small value to generate valid trajectory
@@ -844,4 +844,4 @@ class ManualModel(BaseTrajectoryModel):
             prediction_input.command.name,
         )
 
-        return ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)
+        return ModelPrediction.from_planar(trajectory_xy, headings)

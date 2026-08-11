@@ -14,6 +14,7 @@ from time import monotonic
 from typing import Protocol
 from uuid import uuid4
 
+from alpasim_grpc.v0 import runtime_pb2
 from alpasim_runtime.address_pool import (
     AddressPool,
     ServiceAddress,
@@ -221,8 +222,10 @@ class SceneAffineDispatch:
     ``try_reserve`` picks the next dispatch in two priority tiers:
 
     1. ``cached_affine``: a renderer whose confirmed cache holds a pending
-       scene, so the rollout skips the cold load.  Among matches, the address
-       with the most free slots wins, spreading work across replicas.
+       scene and has active-scene headroom, so the rollout skips the cold load.
+       A scene already active on the renderer can reuse its existing headroom.
+       Among matches, the address with the most free slots wins, spreading work
+       across replicas.
     2. cold load: walk pending scenes in arrival order and cold-load the
        first one with fewer than ``max_renderers_per_scene`` locations onto
        a renderer where it is absent.  The dispatch kind records whether the
@@ -232,11 +235,10 @@ class SceneAffineDispatch:
        later scene waits at most ``max_renderers_per_scene`` cold loads per
        scene queued ahead of it.
 
-    Cold loads land on the least-loaded eligible renderer: fewest active
-    scenes (loading or with in-flight rollouts) first, most free slots as
-    tie-break.  Renderers with ``max_scenes_per_renderer`` active scenes
-    are ineligible for cold dispatch, which keeps each renderer's working
-    set within its NRE backend cache.
+    All dispatches respect ``max_scenes_per_renderer`` when activating a scene.
+    Cold loads land on the least-loaded eligible renderer: fewest active scenes
+    (loading or with in-flight rollouts) first, most free slots as tie-break.
+    This keeps each renderer's working set within its NRE backend cache.
     """
 
     def __init__(
@@ -312,13 +314,26 @@ class SceneAffineDispatch:
             or scene_id in self._loading_addr_scenes.get(address, set())
         }
 
+    def _active_scenes(self, address: str) -> set[str]:
+        """Distinct scenes loading or executing on one renderer address."""
+        return set(self._inflight_addr_scenes.get(address, {})) | (
+            self._loading_addr_scenes.get(address, set())
+        )
+
+    def _can_activate_scene(self, address: str, scene_id: str) -> bool:
+        """Whether dispatching *scene_id* preserves the active-scene limit."""
+        if self._max_scenes_per_renderer is None:
+            return True
+        active_scenes = self._active_scenes(address)
+        return (
+            scene_id in active_scenes
+            or len(active_scenes) < self._max_scenes_per_renderer
+        )
+
     def _active_scene_counts(self) -> dict[str, int]:
         """Distinct scenes loading or executing per renderer address."""
         return {
-            address: len(
-                set(self._inflight_addr_scenes.get(address, {}))
-                | self._loading_addr_scenes.get(address, set())
-            )
+            address: len(self._active_scenes(address))
             for address in self._renderer_pool.address_order
         }
 
@@ -385,7 +400,7 @@ class SceneAffineDispatch:
         """Pair a pending scene with an address that already holds it.
 
         Candidates are addresses that have a free slot and hold at least one
-        scene with pending jobs.  Among those, the address with the most free
+        activatable pending scene.  Among those, the address with the most free
         slots wins (spreading affine work across replicas); its scene is the
         earliest-queued pending scene it holds.
 
@@ -397,21 +412,25 @@ class SceneAffineDispatch:
 
         Returns:
             The chosen ``(address, scene_id)`` pair, or ``None`` if no
-            address with a free slot holds a pending scene.
+            address with a free slot holds an activatable pending scene.
         """
-        matching_addresses = [
-            address
+        matching_scenes = {
+            address: {
+                scene
+                for scene in address_scenes.get(address, {})
+                if scene in self._pending_by_scene
+                and self._can_activate_scene(address, scene)
+            }
             for address in self._renderer_pool.address_order
             if free_slot_counts[address] > 0
-            and any(
-                scene in self._pending_by_scene
-                for scene in address_scenes.get(address, {})
-            )
-        ]
-        if not matching_addresses:
+        }
+        matching_scenes = {
+            address: scenes for address, scenes in matching_scenes.items() if scenes
+        }
+        if not matching_scenes:
             return None
-        address = max(matching_addresses, key=free_slot_counts.__getitem__)
-        scenes = address_scenes.get(address, {})
+        address = max(matching_scenes, key=free_slot_counts.__getitem__)
+        scenes = matching_scenes[address]
         scene = next(scene for scene in self._pending_by_scene if scene in scenes)
         return address, scene
 
@@ -451,17 +470,23 @@ class SceneAffineDispatch:
             job: Pending job to reserve a slot for.
             dispatch_kind: Recorded on the reservation, e.g. ``cold_initial``
                 or ``cold_replica``.
-            cold_candidates: Cold-load-eligible addresses from
+            cold_candidates: Addresses with free slots from
                 ``try_reserve``, ranked best-first.
             excluded_addresses: Addresses to skip, typically ones that already
                 hold or are loading the job's scene.
 
         Returns:
             The reservation with an acquired slot, or ``None`` if every
-            candidate is excluded.
+            candidate is excluded or cannot activate the job's scene.
         """
         address = next(
-            (a for a in cold_candidates if a not in excluded_addresses), None
+            (
+                candidate
+                for candidate in cold_candidates
+                if candidate not in excluded_addresses
+                and self._can_activate_scene(candidate, job.scene_id)
+            ),
+            None,
         )
         if address is None:
             return None
@@ -485,20 +510,16 @@ class SceneAffineDispatch:
         if reservation is not None:
             return reservation
 
-        # Cold-load candidates: a free slot and active-scene headroom.  Ranked
-        # once for all cold-load attempts — fewest active scenes first (keeping
-        # each renderer's NRE cache working set small); most free slots and
-        # configured order break ties.
+        # Cold-load candidates: addresses with a free slot, ranked once for all
+        # cold-load attempts.  Scene-specific active-scene headroom is checked
+        # by _reserve_non_affine so an already-active scene can reuse its
+        # existing headroom.
         active_scene_counts = self._active_scene_counts()
         cold_candidates = sorted(
             (
                 address
                 for address in self._renderer_pool.address_order
                 if free_slot_counts[address] > 0
-                and (
-                    self._max_scenes_per_renderer is None
-                    or active_scene_counts[address] < self._max_scenes_per_renderer
-                )
             ),
             key=lambda addr: (active_scene_counts[addr], -free_slot_counts[addr]),
         )
@@ -791,6 +812,7 @@ class DaemonScheduler:
                 dispatch_kind=reservation.dispatch_kind,
                 scheduler_wait_seconds=max(0.0, monotonic() - job.enqueued_at),
                 session_uuid=job.session_uuid,
+                start_time_offset_us=job.start_time_offset_us,
             )
             self._runtime.submit_assigned_job(assigned)
             self._in_flight[assigned.job_id] = _InFlightEntry(
@@ -816,7 +838,14 @@ class DaemonScheduler:
 
         release_all(entry.pools, entry.acquired)
 
-        if not result.success and pending_job.retry_attempt < self._max_rollout_retries:
+        # INVALID_SCENE failures are deterministic: a retry reloads the same
+        # scene and fails identically, so don't waste attempts on them.
+        retryable = result.error_code != runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE
+        if (
+            not result.success
+            and retryable
+            and pending_job.retry_attempt < self._max_rollout_retries
+        ):
             retry_job = replace(
                 pending_job,
                 job_id=uuid4().hex,

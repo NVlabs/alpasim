@@ -20,38 +20,45 @@ else
   exit 1
 fi
 
-if command -v process-exporter >/dev/null 2>&1; then
-  PROCESS_EXPORTER_BIN=process-exporter
-elif command -v prometheus-process-exporter >/dev/null 2>&1; then
-  PROCESS_EXPORTER_BIN=prometheus-process-exporter
-else
-  PROCESS_EXPORTER_BIN=
-fi
-
 start_slurm_process_exporter() {
   uv run --no-sync --project /repo/src/wizard \
     python -m alpasim_wizard.telemetry.slurm_process_exporter \
+    --job-id="${SLURM_JOB_ID}" \
     --port="{prometheus_ports.process_exporter}" \
     --procfs=/host/proc \
     --cgroupfs=/host/sys/fs/cgroup &
   PROCESS_PID=$!
+  PIDS+=("$PROCESS_PID")
 }
 
 # hwmon/nvme sysfs reads issue live NVMe admin commands; a wedged controller
 # blocks them in uninterruptible sleep and kills the whole /metrics endpoint.
+# OS identity and filesystem-capacity metrics require mounting the host root,
+# but AlpaSim telemetry does not consume them.
 $NODE_EXPORTER_BIN \
   --web.listen-address=0.0.0.0:{prometheus_ports.node_exporter} \
   --path.procfs=/host/proc \
   --path.sysfs=/host/sys \
-  --path.rootfs=/rootfs \
   --no-collector.systemd \
   --no-collector.hwmon \
-  --no-collector.nvme &
+  --no-collector.nvme \
+  --no-collector.os \
+  --no-collector.filesystem &
 NODE_PID=$!
+PIDS=("$NODE_PID")
 
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ "${ALPASIM_PROCESS_EXPORTER_MODE:-container}" == "host" ]]; then
+  :
+elif [[ -n "${SLURM_JOB_ID:-}" ]]; then
   start_slurm_process_exporter
 else
+  if command -v process-exporter >/dev/null 2>&1; then
+    PROCESS_EXPORTER_BIN=process-exporter
+  elif command -v prometheus-process-exporter >/dev/null 2>&1; then
+    PROCESS_EXPORTER_BIN=prometheus-process-exporter
+  else
+    PROCESS_EXPORTER_BIN=
+  fi
   if [[ -z "${PROCESS_EXPORTER_BIN}" ]]; then
     echo "process-exporter binary not found" >&2
     exit 1
@@ -61,17 +68,18 @@ else
     --procfs=/host/proc \
     --config.path=/mnt/log_dir/prometheus/process-exporter.yml &
   PROCESS_PID=$!
+  PIDS+=("$PROCESS_PID")
 fi
 
 if command -v dcgm-exporter >/dev/null 2>&1; then
   dcgm-exporter -f /mnt/log_dir/prometheus/dcgm-counters.csv -a :{prometheus_ports.dcgm_exporter} &
   DCGM_PID=$!
+  PIDS+=("$DCGM_PID")
 else
   echo "dcgm-exporter binary not found; GPU exporter disabled" >&2
-  DCGM_PID=
 fi
 
-trap 'kill "$NODE_PID" "$PROCESS_PID" "$DCGM_PID" 2>/dev/null || true' TERM INT
+trap 'kill "${PIDS[@]}" 2>/dev/null || true' TERM INT
 
 if [[ "$START_PROMETHEUS" == "true" ]]; then
   exec $PROMETHEUS_BIN \

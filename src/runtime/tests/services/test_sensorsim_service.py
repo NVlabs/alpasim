@@ -9,10 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from alpasim_grpc.v0.sensorsim_pb2 import BatchRGBRenderReturnItem, RGBRenderReturn
-from alpasim_runtime.services.sensorsim_service import (
-    MAX_GRPC_MESSAGE_BYTES,
-    SensorsimService,
-)
+from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.types import Clock, RuntimeCamera
 
 
@@ -47,7 +44,7 @@ async def test_sensorsim_service_uses_large_grpc_message_limits(monkeypatch):
             captured["channel"] = channel
 
     monkeypatch.setattr(
-        "alpasim_runtime.services.sensorsim_service.grpc.aio.insecure_channel",
+        "alpasim_runtime.services.service_base.grpc.aio.insecure_channel",
         fake_insecure_channel,
     )
     monkeypatch.setattr(
@@ -60,10 +57,16 @@ async def test_sensorsim_service_uses_large_grpc_message_limits(monkeypatch):
 
     assert captured["address"] == "localhost:50051"
     assert captured["channel"] is fake_channel
-    assert captured["options"] == [
-        ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
-        ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
-    ]
+    options = dict(captured["options"])
+    assert options.keys() == {
+        "grpc.max_receive_message_length",
+        "grpc.max_send_message_length",
+    }
+    assert options["grpc.max_receive_message_length"] > 4 * 1024 * 1024
+    assert (
+        options["grpc.max_send_message_length"]
+        == options["grpc.max_receive_message_length"]
+    )
 
 
 def test_batch_return_maps_images_by_camera_name():

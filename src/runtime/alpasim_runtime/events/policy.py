@@ -90,13 +90,24 @@ class PolicyEvent(RecurringEvent):
         dynamics_arr = state.ego_trajectory_estimate.interpolate_dynamics(ts_arr)
         dynamic_states_in_rig = geometry.array_to_dynamic_states(dynamics_arr)
 
-        if (self.route_generator is not None or self.send_recording_ground_truth) and (
-            state.ego_trajectory.timestamps_us[-1] != step_start_us
-        ):
-            raise ValueError(
-                f"Timestamp mismatch: {state.ego_trajectory.timestamps_us[-1]} "
-                f"!= {step_start_us}"
-            )
+        # Route and ground truth are both expressed in the rig frame at
+        # step_start_us, so the poses they use have to be the ones for this step.
+        # The route needs both trajectories: the true one to place the ego on the
+        # map, the estimate for the frame it is sent in.
+        if self.route_generator is not None or self.send_recording_ground_truth:
+            latest_us = int(state.ego_trajectory.timestamps_us[-1])
+            if latest_us != step_start_us:
+                raise ValueError(
+                    f"Timestamp mismatch: ego_trajectory at {latest_us} "
+                    f"!= {step_start_us}"
+                )
+        if self.route_generator is not None:
+            latest_us = int(state.ego_trajectory_estimate.timestamps_us[-1])
+            if latest_us != step_start_us:
+                raise ValueError(
+                    f"Timestamp mismatch: ego_trajectory_estimate at {latest_us} "
+                    f"!= {step_start_us}"
+                )
 
         ctx = state.step_context
         ctx.track_task(
@@ -104,9 +115,18 @@ class PolicyEvent(RecurringEvent):
         )
 
         if self.route_generator is not None:
+            # Generating the route projects the ego onto the map, which only the
+            # true pose locates correctly.  The waypoints then travel to the
+            # driver in the rig frame the driver reconstructs from the egomotion
+            # estimate it was sent, so hand them over in that frame rather than
+            # the true one, which would offset them by the egomotion error.
             pose_local_to_rig = state.ego_trajectory.last_pose
+            pose_local_to_rig_estimated = state.ego_trajectory_estimate.last_pose
             route = self.route_generator.generate_route(
                 step_start_us, pose_local_to_rig
+            )
+            route = route.transform(pose_local_to_rig).transform(
+                pose_local_to_rig_estimated.inverse()
             )
             route = RouteGenerator.prepare_for_policy(route)
             ctx.track_task(svc.driver.submit_route(step_start_us, route))

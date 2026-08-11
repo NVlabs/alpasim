@@ -117,7 +117,7 @@ def compute_num_consumers_per_worker(
 
 
 def validate_renderer_config(config: SimulatorConfig) -> None:
-    """Ensure renderer-specific options match the selected renderer."""
+    """Ensure renderer options and force-GT cache flags are consistent."""
     try:
         renderer = config.user.renderer
         renderer_kind = renderer.kind
@@ -145,6 +145,44 @@ def validate_renderer_config(config: SimulatorConfig) -> None:
         )
     if not isinstance(renderer_kind, RendererKind):
         raise ValueError(f"Unknown runtime.renderer.kind: {renderer_kind!r}")
+
+    force_gt_frame_cache = config.user.simulation_config.force_gt_frame_cache
+    if force_gt_frame_cache.enabled and renderer_kind != RendererKind.sensorsim:
+        raise ValueError(
+            "force_gt_frame_cache.enabled is only supported by the sensorsim "
+            "renderer; the video model renders chunks statefully and cannot replay "
+            "cached force-GT frames."
+        )
+
+    # NOTE: trafficsim does not need to be skipped for caching. During force-GT,
+    # PhysicsEvent ignores the trafficsim response entirely and derives traffic
+    # poses directly from the logged trajectories in ``state.unbound.traffic_objs``
+    # (see events/physics.py, the ``if force_gt:`` branch). Independently, the
+    # traffic service is handed ``handover_time_us`` (set past the last force-GT
+    # frame, see TrafficService in services/traffic_service.py) so it stays on the
+    # logged, deterministic traffic state throughout that window. Frames rendered
+    # during force-GT therefore do not depend on the trafficsim backend or its
+    # configuration, and remain safe to cache and replay across rollouts.
+
+    if (
+        force_gt_frame_cache.enabled
+        and not config.user.simulation_config.skip_driver_during_force_gt
+    ):
+        raise ValueError(
+            "force_gt_frame_cache.enabled requires "
+            "skip_driver_during_force_gt=true. Bundled rendering returns a "
+            "renderer payload passed to driver.drive(renderer_data=...) that the "
+            "frame cache does not store, so cache hits cannot reproduce it. "
+            "Skipping the driver query during force-GT avoids feeding the driver "
+            "a different payload than a non-cached run."
+        )
+
+    if force_gt_frame_cache.enabled and not force_gt_frame_cache.cache_dir:
+        raise ValueError(
+            "force_gt_frame_cache.enabled requires "
+            "simulation_config.force_gt_frame_cache.cache_dir to be set; point it "
+            "at shared writable storage (e.g. the Lustre artifact mount)."
+        )
 
 
 def validate_scene_affinity_config(config: SimulatorConfig) -> None:

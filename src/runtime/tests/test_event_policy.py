@@ -426,6 +426,109 @@ class TestPolicyEvent:
         mock_driver.drive.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_run_raises_when_the_estimate_has_no_pose_for_this_step(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+    ):
+        """The route is built from the estimate, so a stale estimate is fatal."""
+        rollout_state.ego_trajectory_estimate = (
+            DynamicTrajectory.from_trajectory_and_dynamics(
+                rollout_state.ego_trajectory.trajectory().clip(0, 100_001),
+                np.zeros((2, 12), dtype=np.float64),
+            )
+        )
+
+        event = PolicyEvent(
+            timestamp_us=200_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=["cam_front"],
+            route_generator=cast(
+                Any,
+                SimpleNamespace(
+                    generate_route=lambda *_args, **_kwargs: Polyline(
+                        points=np.zeros((3, 3), dtype=np.float32)
+                    )
+                ),
+            ),
+            send_recording_ground_truth=False,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"Timestamp mismatch: ego_trajectory_estimate at \d+ != 200000",
+        ):
+            await event.run(rollout_state, EventQueue())
+
+        mock_driver.submit_route.assert_not_awaited()
+        mock_driver.drive.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_is_placed_on_the_map_but_sent_in_the_estimated_frame(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+    ):
+        """Egomotion noise splits the two frames the route submission needs.
+
+        Generating the route places the ego on the map, which only the true pose
+        does correctly, while the driver reads the waypoints in the rig frame it
+        reconstructs from the estimate it was sent.
+        """
+        mock_driver.drive.return_value = (
+            simple_trajectory.clip(200_000, 300_001),
+            False,
+        )
+        # The fixture drives along x with no rotation, so the true pose for this
+        # step is at x = 0.2 m and the estimate is 1 m ahead and 3 m to the left.
+        true_position = np.array([0.2, 0.0, 0.0], dtype=np.float32)
+        estimated_position = np.array([1.2, 3.0, 0.0], dtype=np.float32)
+        estimated_pose = Pose(
+            estimated_position,
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+        )
+        rollout_state.ego_trajectory_estimate = (
+            DynamicTrajectory.from_trajectory_and_dynamics(
+                Trajectory.from_poses(
+                    np.array([0, 200_000], dtype=np.uint64),
+                    [rollout_state.ego_trajectory.first_pose, estimated_pose],
+                ),
+                np.zeros((2, 12), dtype=np.float64),
+            )
+        )
+        route_in_true_rig = np.array(
+            [[10.0, 0.0, 0.0], [14.0, 0.0, 0.0], [18.0, 0.0, 0.0]], dtype=np.float32
+        )
+        poses_used = []
+
+        def _generate_route(_timestamp_us: int, pose_local_to_rig: Pose) -> Polyline:
+            poses_used.append(pose_local_to_rig)
+            return Polyline(points=route_in_true_rig.copy())
+
+        event = PolicyEvent(
+            timestamp_us=200_000,
+            policy_timestep_us=100_000,
+            services=service_bundle,
+            camera_ids=["cam_front"],
+            route_generator=cast(Any, SimpleNamespace(generate_route=_generate_route)),
+            send_recording_ground_truth=False,
+        )
+
+        await event.run(rollout_state, EventQueue())
+
+        np.testing.assert_allclose(poses_used[0].vec3, true_position)
+        submitted = mock_driver.submit_route.call_args.args[1]
+        np.testing.assert_allclose(
+            submitted.waypoints[: len(route_in_true_rig)],
+            route_in_true_rig + (true_position - estimated_position),
+            atol=1e-5,
+        )
+
+    @pytest.mark.asyncio
     async def test_run_raises_when_ground_truth_timestamp_mismatches_ego_state(
         self,
         rollout_state: RolloutState,

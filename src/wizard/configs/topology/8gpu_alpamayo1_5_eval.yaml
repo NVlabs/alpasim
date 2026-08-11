@@ -1,0 +1,38 @@
+# @package _global_
+# Eight-GPU Alpamayo 1.5 evaluation topology. The 10B model supports two
+# driver replicas on each of GPUs 0-6; renderer and physics share GPU 7.
+
+defines:
+  nre_cache_size: 20
+  physics_cache_size: 16
+
+services:
+  renderer:
+    replicas_per_container: 1
+    gpus: [7]
+
+  driver:
+    replicas_per_container: 2
+    gpus: [0, 1, 2, 3, 4, 5, 6]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [7]
+
+  controller:
+    replicas_per_container: 14
+    gpus: null
+
+runtime:
+  nr_workers: 4
+  endpoints:
+    # Two driver replicas on each of the seven GPUs give 14 rollout slots.
+    renderer:
+      n_concurrent_rollouts: 14
+    driver:
+      n_concurrent_rollouts: 1
+    physics:
+      n_concurrent_rollouts: 14
+      skip: false
+    controller:
+      n_concurrent_rollouts: 1

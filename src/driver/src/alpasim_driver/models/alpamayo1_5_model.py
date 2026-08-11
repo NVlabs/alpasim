@@ -13,7 +13,12 @@ from alpamayo1_5 import helper
 from alpamayo1_5.models.alpamayo1_5 import Alpamayo1_5
 
 from ..schema import ModelConfig
-from .alpamayo_base import CAMERA_NAME_TO_INDEX, AlpamayoBaseModel
+from .alpamayo_base import (
+    CAMERA_NAME_TO_INDEX,
+    AlpamayoBaseModel,
+    configure_deterministic_runtime,
+)
+from .trajectory_selection import TrajectorySelectionStrategy
 
 logger = logging.getLogger(__name__)
 _ATTN_IMPLEMENTATION = "sdpa"
@@ -29,22 +34,8 @@ class Alpamayo15Model(AlpamayoBaseModel):
     """
 
     @classmethod
-    def from_config(
-        cls,
-        model_cfg: ModelConfig,
-        device: torch.device,
-        camera_ids: list[str],
-        context_length: int | None,
-        output_frequency_hz: int,
-    ) -> "Alpamayo15Model":
-        """Create Alpamayo15Model from driver configuration."""
-        return cls(
-            checkpoint_path=model_cfg.checkpoint_path,
-            device=device,
-            camera_ids=camera_ids,
-            context_length=context_length or cls.DEFAULT_CONTEXT_LENGTH,
-            use_classifier_free_guidance_nav=model_cfg.use_classifier_free_guidance_nav,
-        )
+    def _variant_init_kwargs(cls, model_cfg: ModelConfig) -> dict[str, Any]:
+        return {"cfg_guidance_weight": model_cfg.cfg_guidance_weight}
 
     def __init__(
         self,
@@ -55,7 +46,13 @@ class Alpamayo15Model(AlpamayoBaseModel):
         num_traj_samples: int = 1,
         top_p: float = 0.98,
         temperature: float = 0.6,
-        use_classifier_free_guidance_nav: bool = False,
+        cfg_guidance_weight: float | None = None,
+        force_determinism: bool = False,
+        selection_strategy: TrajectorySelectionStrategy = (
+            TrajectorySelectionStrategy.ALWAYS_FIRST
+        ),
+        max_num_distance_points: int = 64,
+        skip_first_n_distance_points: int = 0,
     ):
         """Initialize Alpamayo 1.5 model.
 
@@ -67,9 +64,22 @@ class Alpamayo15Model(AlpamayoBaseModel):
             num_traj_samples: Number of trajectory samples to generate.
             top_p: Top-p sampling parameter for VLM generation.
             temperature: Temperature for VLM sampling.
-            use_classifier_free_guidance_nav: If True, use classifier-free guidance navigation
-                sampling.  Requires roughly 60 GB VRAM (vs ~40 GB standard).
+            cfg_guidance_weight: Weight for classifier-free guidance on the
+                navigation instruction.  Unset leaves guidance to the
+                checkpoint's diffusion config; a weight forces it on and blends
+                the conditioned and unconditioned velocity fields, which costs a
+                second forward pass and roughly 60 GB VRAM (vs ~40 GB).  A weight
+                of 1.0 reproduces the conditioned field and buys nothing.
+            force_determinism: Whether to make stochastic inference repeatable from
+                each prediction's inference seed.
+            selection_strategy: How to pick one of the sampled trajectories.
+            max_num_distance_points: Waypoints entering the selection distance
+                average.
+            skip_first_n_distance_points: Leading waypoints excluded from the
+                selection distance average.
         """
+        if force_determinism:
+            configure_deterministic_runtime()
         logger.info("Loading Alpamayo 1.5 checkpoint from %s", checkpoint_path)
         logger.info("Using Alpamayo 1.5 attn_implementation=%s", _ATTN_IMPLEMENTATION)
 
@@ -80,7 +90,7 @@ class Alpamayo15Model(AlpamayoBaseModel):
         ).to(device)
         processor = helper.get_processor(model.tokenizer)
 
-        self._use_classifier_free_guidance_nav = use_classifier_free_guidance_nav
+        self._cfg_guidance_weight = cfg_guidance_weight
 
         self._init_common(
             model=model,
@@ -92,33 +102,58 @@ class Alpamayo15Model(AlpamayoBaseModel):
             num_traj_samples=num_traj_samples,
             top_p=top_p,
             temperature=temperature,
+            force_determinism=force_determinism,
+            selection_strategy=selection_strategy,
+            max_num_distance_points=max_num_distance_points,
+            skip_first_n_distance_points=skip_first_n_distance_points,
         )
 
-        if use_classifier_free_guidance_nav:
-            logger.info("CFG nav sampling enabled (requires ~60 GB VRAM)")
+        if cfg_guidance_weight is not None:
+            logger.info(
+                "Navigation guidance enabled with weight %s (requires ~60 GB VRAM)",
+                cfg_guidance_weight,
+            )
 
-    def _create_chat_message(self, image_frames: torch.Tensor) -> list:
-        """Create chat message with camera indices for Alpamayo 1.5."""
-        # Sort camera IDs by index (same order used in _preprocess_images)
+    def _create_chat_message(
+        self, image_frames: torch.Tensor, nav_text: str | None
+    ) -> list:
+        """Create chat message with camera indices and navigation text."""
+        return self._helper.create_message(
+            image_frames.flatten(0, 1),
+            self._camera_indices(),
+            num_frames_per_camera=self._context_length,
+            nav_text=nav_text,
+        )
+
+    def _camera_indices(self) -> torch.Tensor:
+        """Return camera indices in the order used by image preprocessing."""
         sorted_camera_ids = sorted(
             self._camera_ids, key=lambda cam_id: CAMERA_NAME_TO_INDEX[cam_id]
         )
-        camera_indices = torch.tensor(
+        return torch.tensor(
             [CAMERA_NAME_TO_INDEX[cam_id] for cam_id in sorted_camera_ids]
         )
 
-        return self._helper.create_message(image_frames.flatten(0, 1), camera_indices)
-
     def _run_inference(
-        self, model_inputs: dict[str, Any]
+        self, model_inputs: dict[str, Any], nav_text: str | None
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        """Run inference, optionally using CFG nav sampling."""
-        if self._use_classifier_free_guidance_nav:
-            return self._model.sample_trajectories_from_data_with_vlm_rollout_cfg_nav(
-                data=model_inputs,
-                top_p=self._top_p,
-                temperature=self._temperature,
-                num_traj_samples=self._num_traj_samples,
-                return_extra=True,
-            )
-        return super()._run_inference(model_inputs)
+        """Run inference, guiding towards the navigation instruction if asked.
+
+        Guidance blends a pass conditioned on the instruction with one that is
+        not, so it needs an instruction to guide towards.
+        """
+        if self._cfg_guidance_weight is None or nav_text is None:
+            return super()._run_inference(model_inputs, nav_text)
+
+        return self._model.sample_trajectories_from_data_with_vlm_rollout_cfg_nav(
+            data=model_inputs,
+            top_p=self._top_p,
+            temperature=self._temperature,
+            num_traj_samples=self._num_traj_samples,
+            max_generation_length=self.MAX_GENERATION_LENGTH,
+            diffusion_kwargs={
+                "use_classifier_free_guidance": True,
+                "inference_guidance_weight": self._cfg_guidance_weight,
+            },
+            return_extra=True,
+        )

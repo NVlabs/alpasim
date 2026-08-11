@@ -12,6 +12,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import torch
+from alpasim_utils.geometry import Pose, Trajectory
 from PIL import Image
 
 
@@ -33,7 +34,8 @@ class CameraFrame(NamedTuple):
     """A single camera frame with timestamp."""
 
     timestamp_us: int
-    image: np.ndarray  # HWC uint8 RGB
+    # HWC uint8, on the inference device when the driver decoded it there.
+    image: np.ndarray | torch.Tensor
 
 
 CameraImages = dict[str, list[CameraFrame]]
@@ -54,17 +56,82 @@ class PredictionInput:
     acceleration: float  # m/s²
     ego_pose_history: list[Any]  # list[PoseAtTime]
     inference_seed: int  # Session seed plus the zero-based inference count
+    # Plan selected in the previous cycle of this session, in the local frame.
+    # None before the first plan; only used by models that select between
+    # multiple sampled trajectories.
+    previous_plan: Trajectory | None
+    # Latest route submitted for this session, with waypoints in the rig frame
+    # at the route's own timestamp.  None until the first route arrives, and
+    # for scenarios that run without a route.
+    route: Any | None  # Route
 
 
 @dataclass
 class ModelPrediction:
-    """Unified model output."""
+    """Unified model output.
 
-    trajectory_xy: np.ndarray  # (T, 2) x,y offsets in rig frame
-    headings: np.ndarray  # (T,) headings in radians (rig frame)
+    Waypoints are full 6-DoF poses in the rig frame.  Models that sample a
+    single trajectory report it as the only candidate.
+    """
+
+    candidate_positions: np.ndarray  # (K, T, 3) waypoint positions, rig frame
+    candidate_rotations: np.ndarray  # (K, T, 3, 3) waypoint rotations, rig frame
+    # Index into the candidate axis of the trajectory the vehicle drives.
+    selected_index: int = 0
     reasoning_text: str | None = (
         None  # optional text output (e.g. chain-of-causation reasoning)
     )
+    # The returned plan in the local frame, fed back as
+    # ``PredictionInput.previous_plan``.  Only set by models that select between
+    # multiple sampled trajectories.
+    selected_plan: Trajectory | None = None
+    # Exact spatial and temporal origin used to build the model inputs.  When
+    # present, response conversion must use this origin instead of a later pose
+    # snapshot or the DriveRequest time.
+    model_t0_us: int | None = None
+    pose_local_to_rig_t0: Pose | None = None
+    waypoint_timestamps_us: np.ndarray | None = None
+
+    @property
+    def selected_positions(self) -> np.ndarray:
+        """(T, 3) positions of the driven waypoints in the rig frame."""
+        return self.candidate_positions[self.selected_index]
+
+    @property
+    def selected_rotations(self) -> np.ndarray:
+        """(T, 3, 3) rotations of the driven waypoints in the rig frame."""
+        return self.candidate_rotations[self.selected_index]
+
+    @classmethod
+    def from_planar(
+        cls, trajectory_xy: np.ndarray, headings: np.ndarray
+    ) -> ModelPrediction:
+        """Build a single-candidate prediction from a ground-plane trajectory.
+
+        Args:
+            trajectory_xy: (T, 2) x,y offsets in the rig frame.
+            headings: (T,) headings in radians in the rig frame.
+
+        Returns:
+            A prediction whose waypoints sit in the rig's z=0 plane and rotate
+            about the rig's z axis only.
+        """
+        positions = np.zeros((len(trajectory_xy), 3), dtype=float)
+        positions[:, :2] = trajectory_xy
+
+        cos_heading = np.cos(headings)
+        sin_heading = np.sin(headings)
+        rotations = np.zeros((len(headings), 3, 3), dtype=float)
+        rotations[:, 0, 0] = cos_heading
+        rotations[:, 0, 1] = -sin_heading
+        rotations[:, 1, 0] = sin_heading
+        rotations[:, 1, 1] = cos_heading
+        rotations[:, 2, 2] = 1.0
+
+        return cls(
+            candidate_positions=positions[np.newaxis],
+            candidate_rotations=rotations[np.newaxis],
+        )
 
 
 class ModelInputValidationError(ValueError):
@@ -83,6 +150,9 @@ class BaseTrajectoryModel(ABC):
     Each model implements _encode_command() to convert the canonical DriveCommand
     to its own format (VAM vs Transfuser have different encodings).
     """
+
+    # Smallest render ``(height, width)`` the model may be driven with.
+    MIN_FRAME_HW: tuple[int, int] | None = None
 
     @staticmethod
     def _compute_headings_from_trajectory_batch(
@@ -229,10 +299,11 @@ class BaseTrajectoryModel(ABC):
                 :class:`PredictionInput` for field descriptions.
 
         Returns:
-            ModelPrediction with trajectory and headings in rig frame
-            coordinates (x forward, y left). Headings must always be
-            provided - use _compute_headings_from_trajectory() if the
-            model doesn't natively output headings.
+            ModelPrediction with waypoint poses in rig frame coordinates
+            (x forward, y left, z up). Models that plan in the ground plane
+            build it with :meth:`ModelPrediction.from_planar`, deriving the
+            headings with :meth:`_compute_headings_from_trajectory` when they
+            do not natively output them.
 
         Raises:
             ValueError: If camera_images keys don't match expected cameras

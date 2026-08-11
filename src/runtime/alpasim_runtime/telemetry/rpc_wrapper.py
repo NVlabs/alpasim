@@ -5,8 +5,9 @@
 Wrapper for profiling gRPC calls with queue depth and blocking time tracking.
 
 Supports both single-process and multiprocessing modes. For multiprocessing,
-call init_shared_rpc_tracking() in the main process before spawning workers,
-then call set_shared_rpc_tracking() in each worker with the returned values.
+call init_shared_rpc_tracking() with the worker process context in the main
+process before spawning workers, then call set_shared_rpc_tracking() in each
+worker with the returned values.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from multiprocessing import Manager
+from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
 from typing import Any, Callable, MutableMapping
 
@@ -40,7 +41,7 @@ _rpc_lock: LockLike = threading.Lock()
 _manager: SyncManager | None = None
 
 
-def init_shared_rpc_tracking() -> SharedRpcTracking:
+def init_shared_rpc_tracking(process_context: BaseContext) -> SharedRpcTracking:
     """
     Initialize shared RPC tracking for multiprocessing.
 
@@ -49,13 +50,14 @@ def init_shared_rpc_tracking() -> SharedRpcTracking:
 
     Example:
         # In main process
-        shared_tracking = init_shared_rpc_tracking()
+        process_context = multiprocessing.get_context("spawn")
+        shared_tracking = init_shared_rpc_tracking(process_context)
 
         # Pass to workers via initializer or args
-        process = Process(target=worker, args=(shared_tracking,))
+        process = process_context.Process(target=worker, args=(shared_tracking,))
     """
     global _active_rpc_counts, _rpc_lock, _manager
-    _manager = Manager()
+    _manager = process_context.Manager()
     _active_rpc_counts = _manager.dict()
     _rpc_lock = _manager.Lock()
     return _active_rpc_counts, _rpc_lock

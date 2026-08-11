@@ -96,7 +96,10 @@ For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 ### **Sample Data**
 
 - **Hugging Face Dataset**:
-  [PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
+  [PhysicalAI-Autonomous-Vehicles-NuRec 26.01](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release)
+  is recommended for new runs. See
+  [Test Suites & Scenes](data/scenes/README.md) for release selection and legacy
+  dataset commands.
 - **Sample Artifacts**: Included in the repository via Git LFS
 
 ## Contributing

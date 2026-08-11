@@ -15,6 +15,7 @@ from alpasim_grpc.v0.common_pb2 import DynamicState, Vec3
 from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.config import PhysicsUpdateMode, RenderBundling
 from alpasim_runtime.delay_buffer import DelayBuffer
+from alpasim_runtime.events.force_gt_utils import force_gt_dynamic_trajectory
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
 from alpasim_runtime.services.controller_service import (
     ControllerService,
@@ -171,6 +172,8 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound.force_gt_duration_us = 100_000
     unbound.force_gt_period = range(0, 100_000)
     unbound.skip_driver_during_force_gt = False
+    unbound.use_cached_frames_during_force_gt = False
+    unbound.force_gt_frame_cache_extra_key = None
     unbound.save_path_root = "/tmp/test"
     unbound.image_format = 2  # JPEG
     unbound.ego_mask_rig_config_id = "default"
@@ -244,6 +247,7 @@ def rollout_state(
             ego_traj_estimate, zero_dynamics
         ),
         traffic_objs=mock_traffic_objs,
+        force_gt_dynamics=force_gt_dynamic_trajectory(mock_unbound.gt_ego_trajectory),
     )
     state.step_context = StepContext()
     return state

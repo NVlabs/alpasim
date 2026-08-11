@@ -211,6 +211,29 @@ def test_load_and_merge_csvs_multiple_no_overlap(tmp_path: Path):
     assert set(result["uuid"].to_list()) == {"uuid-1", "uuid-2"}
 
 
+def test_load_and_merge_csvs_preserves_optional_catalog_columns(tmp_path: Path):
+    """Catalog-specific metadata columns merge with nulls for older catalogs."""
+    csv_a = tmp_path / "a.csv"
+    csv_a.write_text(
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision\n"
+        "uuid-1,clipgt-aaa,0.1,path/a,2025-01-01 00:00:00,huggingface,\n"
+    )
+    csv_b = tmp_path / "b.csv"
+    csv_b.write_text(
+        "uuid,scene_id,nre_version_string,path,last_modified,artifact_repository,hf_revision,map_type\n"
+        "uuid-2,clipgt-bbb,0.1,path/b,2025-01-01 00:00:00,swiftstack,,mads_stitched\n"
+    )
+
+    result = _load_and_merge_csvs([str(csv_a), str(csv_b)], dedup_key="uuid")
+
+    assert result.height == 2
+    assert "map_type" in result.columns
+    assert result.filter(pl.col("uuid") == "uuid-1")["map_type"].to_list() == [None]
+    assert result.filter(pl.col("uuid") == "uuid-2")["map_type"].to_list() == [
+        "mads_stitched"
+    ]
+
+
 def test_load_and_merge_csvs_duplicate_raises(tmp_path: Path):
     """Duplicate UUIDs across files raise ValueError."""
     csv_a = tmp_path / "a.csv"

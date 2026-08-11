@@ -170,6 +170,15 @@ if (( RESTART_COUNT > 0 )); then
     RESUME_ARGS+=(runtime.enable_autoresume=true)
 fi
 
+# sbatch exports the caller's environment. A submission made from an srun shell
+# can therefore carry step-local PMIx state whose backing paths disappear before
+# this job starts, causing direct Enroot launches to mount nonexistent paths.
+while IFS= read -r variable; do
+    case "${variable}" in
+        PMIX_*|SLURM_STEP_*) unset "${variable}" ;;
+    esac
+done < <(compgen -v)
+
 uv run --project ${REPO_ROOT_DIR}/src/wizard --python 3.12 \
     alpasim_wizard \
     wizard.log_dir=$LOGDIR \

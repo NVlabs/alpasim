@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,12 @@ from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.config import RendererConfig, RendererKind
-from alpasim_runtime.daemon.engine import DaemonEngine, build_simulation_return
+from alpasim_runtime.daemon.engine import (
+    DaemonEngine,
+    InvalidRequestError,
+    build_simulation_return,
+)
+from alpasim_runtime.daemon.scheduler import DaemonUnavailableError
 from alpasim_runtime.scene_loader import SceneLoader, _build_artifact_scene_provider
 from alpasim_runtime.worker.ipc import JobResult
 
@@ -373,6 +379,30 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
 
 
 @pytest.mark.asyncio
+async def test_engine_simulate_rejects_offset_for_video_model_renderer() -> None:
+    """A start offset is rejected up front when the renderer is the video model."""
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
+    engine._started = True
+    engine._renderer_kind = RendererKind.video_model
+
+    request = runtime_pb2.SimulationRequest(
+        rollout_specs=[
+            runtime_pb2.RolloutSpec(
+                scenario_id="clipgt-a", nr_rollouts=1, start_time_offset_us=1_000_000
+            )
+        ]
+    )
+
+    with pytest.raises(InvalidRequestError, match="video_model"):
+        await engine.simulate(request)
+
+
+@pytest.mark.asyncio
 async def test_engine_simulate_no_driver_pool_when_request_has_no_available_drivers() -> (
     None
 ):
@@ -414,6 +444,196 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
 
     assert len(captured_driver_pool) == 1
     assert captured_driver_pool[0] is None
+
+
+@pytest.mark.asyncio
+async def test_engine_prefetch_scene_coalesces_duplicate_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Concurrent requests for one scene share a single NRE backend load."""
+    load_started = asyncio.Event()
+    release_load = asyncio.Event()
+    prefetch_calls: list[tuple[str, str]] = []
+
+    async def _prefetch_scene(address: str, scene_id: str) -> None:
+        prefetch_calls.append((address, scene_id))
+        load_started.set()
+        await release_load.wait()
+
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
+    engine._started = True
+    engine._scene_loader = MagicMock()
+    engine._scene_loader.has_scene.return_value = True
+    engine._runtime_context = SimpleNamespace(
+        config=SimpleNamespace(
+            user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
+        ),
+        pools={"renderer": AddressPool(["nre.local:50052"], 4, skip=False)},
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.prefetch_nre_scene", _prefetch_scene
+    )
+
+    with caplog.at_level("INFO"):
+        first = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        await load_started.wait()
+        second = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        await asyncio.sleep(0)
+        release_load.set()
+        await asyncio.gather(first, second)
+
+    assert prefetch_calls == [("nre.local:50052", "scene-A")]
+    assert "coalesced" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_engine_prefetch_scene_requires_one_renderer_address() -> None:
+    """Prefetch rejects ambiguous multi-renderer routing."""
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
+    engine._started = True
+    engine._scene_loader = MagicMock()
+    engine._scene_loader.has_scene.return_value = True
+    engine._runtime_context = SimpleNamespace(
+        config=SimpleNamespace(
+            user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
+        ),
+        pools={
+            "renderer": AddressPool(
+                ["nre-0.local:50052", "nre-1.local:50052"], 4, skip=False
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="exactly one renderer address"):
+        await engine.prefetch_scene("scene-A")
+
+
+@pytest.mark.asyncio
+async def test_engine_shutdown_rejects_new_scene_prefetches(tmp_path: Path) -> None:
+    """Shutdown stops admitting prefetches before awaiting component cleanup."""
+    shutdown_started = asyncio.Event()
+    release_shutdown = asyncio.Event()
+
+    async def _shutdown(*, reason: str) -> None:
+        del reason
+        shutdown_started.set()
+        await release_shutdown.wait()
+
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir=str(tmp_path / "log"),
+    )
+    engine._started = True
+    engine._scheduler = SimpleNamespace(shutdown=_shutdown)
+    engine._worker_runtime = SimpleNamespace(stop=AsyncMock())
+
+    shutdown = asyncio.create_task(engine.shutdown())
+    await shutdown_started.wait()
+
+    with pytest.raises(DaemonUnavailableError, match="daemon is shutting down"):
+        await engine.prefetch_scene("scene-A")
+
+    release_shutdown.set()
+    await shutdown
+
+
+@pytest.mark.asyncio
+async def test_engine_shutdown_stops_worker_when_scheduler_shutdown_fails() -> None:
+    """Worker cleanup and reference cleanup still run after scheduler failures."""
+    worker_runtime = SimpleNamespace(stop=AsyncMock())
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
+    engine._started = True
+    engine._runtime_context = SimpleNamespace()
+    engine._scene_loader = MagicMock()
+    engine._scheduler = SimpleNamespace(
+        shutdown=AsyncMock(side_effect=RuntimeError("scheduler failed"))
+    )
+    engine._worker_runtime = worker_runtime
+
+    with pytest.raises(RuntimeError, match="scheduler failed"):
+        await engine.shutdown()
+
+    worker_runtime.stop.assert_awaited_once()
+    assert engine._scheduler is None
+    assert engine._worker_runtime is None
+    assert engine._runtime_context is None
+    assert engine._scene_loader is None
+    assert engine._started is False
+    assert engine._shutting_down is False
+    await engine.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_engine_prefetch_retrieves_failure_after_waiter_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shielded warmup failure is observed even if the last waiter was canceled."""
+    load_started = asyncio.Event()
+    release_load = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    unhandled_contexts: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, context: unhandled_contexts.append(context))
+
+    async def _prefetch_scene(address: str, scene_id: str) -> None:
+        del address, scene_id
+        load_started.set()
+        await release_load.wait()
+        raise RuntimeError("prefetch failed")
+
+    engine = DaemonEngine(
+        user_config="u.yaml",
+        network_config="n.yaml",
+        eval_config="e.yaml",
+        log_dir="/tmp/log",
+    )
+    engine._started = True
+    engine._scene_loader = MagicMock()
+    engine._scene_loader.has_scene.return_value = True
+    engine._runtime_context = SimpleNamespace(
+        config=SimpleNamespace(
+            user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
+        ),
+        pools={"renderer": AddressPool(["nre.local:50052"], 4, skip=False)},
+    )
+    monkeypatch.setattr(
+        "alpasim_runtime.daemon.engine.prefetch_nre_scene", _prefetch_scene
+    )
+
+    try:
+        waiter = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        await load_started.wait()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        release_load.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert unhandled_contexts == []
 
 
 # ---------------------------------------------------------------------------

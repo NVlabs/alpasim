@@ -8,7 +8,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 from alpasim_wizard.scenes.csv_utils import (
+    SCENES_COLUMNS,
+    SUITES_COLUMNS,
     CSVValidationError,
+    check_catalog_headers,
+    merge_scenes_csv,
     merge_suites_csv,
     validate_csvs,
 )
@@ -56,10 +60,16 @@ def test_scene_csvs_are_valid(scenes_csv: Path, suites_csv: Path):
 
 
 @pytest.mark.parametrize(
-    ("suite_id", "hf_revision"),
-    [("public_2601", "26.01"), ("public_2604", "26.04")],
+    ("suite_id", "hf_revision", "expected_count"),
+    [
+        ("public_2601", "26.01", 913),
+        ("public_2601_video_model", "26.01", 729),
+        ("public_2604", "26.04", 1606),
+    ],
 )
-def test_public_suite_pins_its_release(suite_id: str, hf_revision: str):
+def test_public_suite_pins_its_release(
+    suite_id: str, hf_revision: str, expected_count: int
+):
     """A versioned public suite selects artifacts from that release."""
     scenes = pl.read_csv(SCENES_CSV, infer_schema_length=0)
     suite = pl.read_csv(SUITES_CSV, infer_schema_length=0).filter(
@@ -69,7 +79,26 @@ def test_public_suite_pins_its_release(suite_id: str, hf_revision: str):
     selected = suite.join(scenes, on=["scene_id", "uuid"], how="inner")
 
     assert selected.height == suite.height
+    assert suite.height == expected_count
+    assert suite["scene_id"].n_unique() == expected_count
+    assert suite["uuid"].n_unique() == expected_count
     assert selected["hf_revision"].unique().to_list() == [hf_revision]
+    paths = selected["path"]
+    assert paths.is_not_null().all()
+    assert paths.str.starts_with(f"sample_set/{hf_revision}_release/").all()
+
+
+def test_video_model_suite_is_a_subset_of_public_2601():
+    """Video-model scenes must also pass the public 26.01 validity filter."""
+    suites = pl.read_csv(SUITES_CSV, infer_schema_length=0)
+    public = suites.filter(pl.col("test_suite_id") == "public_2601").select(
+        ["scene_id", "uuid"]
+    )
+    video_model = suites.filter(
+        pl.col("test_suite_id") == "public_2601_video_model"
+    ).select(["scene_id", "uuid"])
+
+    assert video_model.join(public, on=["scene_id", "uuid"], how="anti").is_empty()
 
 
 def test_validate_csvs_catches_duplicate_uuids(tmp_path):
@@ -273,3 +302,184 @@ def test_validate_csvs_passes_for_valid_data(tmp_path):
 
     # Should not raise
     validate_csvs(str(scenes), str(suites))
+
+
+def test_merge_scenes_csv_appends_to_a_wider_catalog(tmp_path):
+    """A catalog may carry more columns than SCENES_COLUMNS; merging must still work.
+
+    The internal scenes CSV has fifteen columns against the seven in SCENES_COLUMNS. Selecting the
+    constant rather than the file's own header made the two frames different widths, so nothing
+    could be appended to that catalog at all.
+    """
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    extra = ["source_artifact_uuid", "session_id", "map_type"]
+    header = SCENES_COLUMNS + extra
+    existing = pl.DataFrame(
+        [
+            {
+                **{c: "" for c in extra},
+                "uuid": "11111111-1111-4111-8111-111111111111",
+                "scene_id": "clipgt-11111111-1111-4111-8111-111111111111",
+                "nre_version_string": "26.4.96-91b06fb8",
+                "path": "alpasim/artifacts/NRE/run/a.usdz",
+                "last_modified": "2026-07-31 12:00:00",
+                "artifact_repository": "swiftstack",
+                "hf_revision": "",
+            }
+        ]
+    ).select(header)
+    existing.write_csv(scenes_csv)
+
+    new_rows = pl.DataFrame(
+        [
+            {
+                "uuid": "22222222-2222-4222-8222-222222222222",
+                "scene_id": "clipgt-22222222-2222-4222-8222-222222222222",
+                "nre_version_string": "26.4.96-91b06fb8",
+                "path": "alpasim/artifacts/NRE/run/b.usdz",
+                "last_modified": "2026-07-31 12:00:00",
+                "artifact_repository": "swiftstack",
+                "hf_revision": "",
+            }
+        ]
+    )
+
+    added, duplicates = merge_scenes_csv(str(scenes_csv), new_rows)
+
+    assert (added, duplicates) == (1, 0)
+    result = pl.read_csv(scenes_csv)
+    assert result.columns == header, "merge must not change the catalog's schema"
+    assert result.height == 2
+
+
+def test_merge_scenes_csv_rejects_rows_missing_required_columns(tmp_path):
+    """A caller that omits a required column gets a clear error, not a silent null."""
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    pl.DataFrame(schema={c: pl.Utf8 for c in SCENES_COLUMNS}).write_csv(scenes_csv)
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        merge_scenes_csv(
+            str(scenes_csv),
+            pl.DataFrame([{"uuid": "abc", "scene_id": "clipgt-abc"}]),
+        )
+
+
+def test_merge_scenes_csv_rejects_rows_missing_the_dedupe_key(tmp_path):
+    """Omitting uuid must hit the same contract, not polars' own column lookup.
+
+    The dedupe filter reads uuid, so validation has to run before it or the caller gets a
+    ColumnNotFoundError naming one column instead of a ValueError naming all of them.
+    """
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    pl.DataFrame(schema={c: pl.Utf8 for c in SCENES_COLUMNS}).write_csv(scenes_csv)
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        merge_scenes_csv(
+            str(scenes_csv),
+            pl.DataFrame([{"scene_id": "clipgt-abc", "path": "alpasim/a.usdz"}]),
+        )
+
+
+def test_merge_suites_csv_rejects_rows_missing_the_dedupe_key(tmp_path):
+    """The suites dedupe key gets the same treatment as the scenes one."""
+    suites_csv = tmp_path / "sim_suites.csv"
+    pl.DataFrame(schema={c: pl.Utf8 for c in SUITES_COLUMNS}).write_csv(suites_csv)
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        merge_suites_csv(
+            str(suites_csv),
+            pl.DataFrame([{"uuid": "abc", "scene_id": "clipgt-abc"}]),
+        )
+
+
+def test_merge_scenes_csv_rejects_a_catalog_missing_required_columns(tmp_path):
+    """A malformed header must fail before the write, not silently drop the values it lacks.
+
+    Taking the file's own header as the target means a catalog narrower than the contract would
+    otherwise absorb valid rows and discard the columns it happens to be missing.
+    """
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    header = [c for c in SCENES_COLUMNS if c not in ("scene_id", "hf_revision")]
+    pl.DataFrame(schema={c: pl.Utf8 for c in header}).write_csv(scenes_csv)
+    before = scenes_csv.read_text()
+
+    new_rows = pl.DataFrame(
+        [
+            {
+                "uuid": "22222222-2222-4222-8222-222222222222",
+                "scene_id": "clipgt-22222222-2222-4222-8222-222222222222",
+                "nre_version_string": "26.4.96-91b06fb8",
+                "path": "alpasim/artifacts/NRE/run/b.usdz",
+                "last_modified": "2026-07-31 12:00:00",
+                "artifact_repository": "swiftstack",
+                "hf_revision": "",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Existing CSV is missing required columns"):
+        merge_scenes_csv(str(scenes_csv), new_rows)
+
+    assert scenes_csv.read_text() == before, "a rejected merge must not touch the file"
+
+
+def test_merge_scenes_csv_preserves_numeric_looking_revision_pins(tmp_path):
+    """Revision pins are strings; inferring them from the catalog's contents corrupts them.
+
+    A catalog whose hf_revision values all look numeric reads back as Float64 unless the reader
+    forces strings, which turns the existing "26.10" into 26.1 and the incoming "v1" into null.
+    """
+    scenes_csv = tmp_path / "sim_scenes.csv"
+
+    def row(n: str, revision: str) -> dict[str, str]:
+        return {
+            "uuid": n * 8,
+            "scene_id": f"clipgt-{n * 8}",
+            "nre_version_string": "26.4.96-91b06fb8",
+            "path": f"alpasim/artifacts/NRE/run/{n}.usdz",
+            "last_modified": "2026-07-31 12:00:00",
+            "artifact_repository": "huggingface",
+            "hf_revision": revision,
+        }
+
+    pl.DataFrame([row("1", "26.10"), row("2", "25.05")]).write_csv(scenes_csv)
+
+    added, duplicates = merge_scenes_csv(
+        str(scenes_csv), pl.DataFrame([row("3", "v1")])
+    )
+
+    assert (added, duplicates) == (1, 0)
+    result = pl.read_csv(scenes_csv, infer_schema_length=0)
+    assert result["hf_revision"].to_list() == ["26.10", "25.05", "v1"]
+
+
+def test_check_catalog_headers_rejects_the_pair_before_the_first_write(tmp_path):
+    """A bad suites header must stop the scenes merge too, or the pair drifts apart.
+
+    Callers write the scenes catalog first, so a suites header caught only when its own merge
+    runs would leave the scenes file already updated and no matching suite rows.
+    """
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    suites_csv = tmp_path / "sim_suites.csv"
+    pl.DataFrame(schema={c: pl.Utf8 for c in SCENES_COLUMNS}).write_csv(scenes_csv)
+    pl.DataFrame(schema={c: pl.Utf8 for c in SUITES_COLUMNS if c != "uuid"}).write_csv(
+        suites_csv
+    )
+
+    with pytest.raises(ValueError, match=r"sim_suites\.csv.*missing required columns"):
+        check_catalog_headers(
+            (str(scenes_csv), SCENES_COLUMNS), (str(suites_csv), SUITES_COLUMNS)
+        )
+
+
+def test_check_catalog_headers_ignores_files_that_do_not_exist(tmp_path):
+    """Creating a catalog is the merge's job; a missing path is not a malformed one."""
+    check_catalog_headers((str(tmp_path / "absent.csv"), SCENES_COLUMNS))
+
+
+def test_check_catalog_headers_ignores_a_none_path(tmp_path):
+    """--suites-csv is optional, so a scenes-only run passes None and must not crash."""
+    scenes_csv = tmp_path / "sim_scenes.csv"
+    pl.DataFrame(schema={c: pl.Utf8 for c in SCENES_COLUMNS}).write_csv(scenes_csv)
+
+    check_catalog_headers((str(scenes_csv), SCENES_COLUMNS), (None, SUITES_COLUMNS))

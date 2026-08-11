@@ -77,7 +77,7 @@ class TestStraightLineIdentityRotation:
     def test_output_shapes(self) -> None:
         poses = _make_straight_line_poses(n=20)
         current_ts = poses[-1].timestamp_us
-        xyz, rot = build_ego_history(poses, current_ts)
+        xyz, rot, _ = build_ego_history(poses, current_ts)
 
         assert xyz.shape == (1, 1, NUM_HISTORY_STEPS, 3)
         assert rot.shape == (1, 1, NUM_HISTORY_STEPS, 3, 3)
@@ -85,7 +85,7 @@ class TestStraightLineIdentityRotation:
     def test_t0_position_is_origin(self) -> None:
         poses = _make_straight_line_poses(n=20)
         current_ts = poses[-1].timestamp_us
-        xyz, _ = build_ego_history(poses, current_ts)
+        xyz, _, _ = build_ego_history(poses, current_ts)
 
         # t0 is the last step — should be [0, 0, 0] in rig frame
         t0_xyz = xyz[0, 0, -1].numpy()
@@ -94,7 +94,7 @@ class TestStraightLineIdentityRotation:
     def test_t0_rotation_is_identity(self) -> None:
         poses = _make_straight_line_poses(n=20)
         current_ts = poses[-1].timestamp_us
-        _, rot = build_ego_history(poses, current_ts)
+        _, rot, _ = build_ego_history(poses, current_ts)
 
         # t0 rotation should be eye(3)
         t0_rot = rot[0, 0, -1].numpy()
@@ -104,7 +104,7 @@ class TestStraightLineIdentityRotation:
         """In rig frame, past positions should have negative x (behind t0)."""
         poses = _make_straight_line_poses(n=20)
         current_ts = poses[-1].timestamp_us
-        xyz, _ = build_ego_history(poses, current_ts)
+        xyz, _, _ = build_ego_history(poses, current_ts)
 
         # All history steps before t0 should be behind (negative x in rig frame)
         for i in range(NUM_HISTORY_STEPS - 1):
@@ -130,7 +130,7 @@ class TestTurningPoses:
     def test_output_shapes(self) -> None:
         poses = self._make_turning_poses()
         current_ts = poses[-1].timestamp_us
-        xyz, rot = build_ego_history(poses, current_ts)
+        xyz, rot, _ = build_ego_history(poses, current_ts)
 
         assert xyz.shape == (1, 1, NUM_HISTORY_STEPS, 3)
         assert rot.shape == (1, 1, NUM_HISTORY_STEPS, 3, 3)
@@ -138,7 +138,7 @@ class TestTurningPoses:
     def test_rotation_matrices_orthogonal(self) -> None:
         poses = self._make_turning_poses()
         current_ts = poses[-1].timestamp_us
-        _, rot = build_ego_history(poses, current_ts)
+        _, rot, _ = build_ego_history(poses, current_ts)
 
         for t in range(NUM_HISTORY_STEPS):
             R = rot[0, 0, t].numpy()
@@ -175,7 +175,7 @@ class TestAntipodalQuaternions:
         """Positions should stay finite and bounded."""
         poses = self._make_antipodal_poses()
         current_ts = poses[-1].timestamp_us
-        xyz, rot = build_ego_history(poses, current_ts)
+        xyz, rot, _ = build_ego_history(poses, current_ts)
 
         assert torch.isfinite(xyz).all()
         assert torch.isfinite(rot).all()
@@ -183,7 +183,7 @@ class TestAntipodalQuaternions:
     def test_rotation_matrices_valid(self) -> None:
         poses = self._make_antipodal_poses()
         current_ts = poses[-1].timestamp_us
-        _, rot = build_ego_history(poses, current_ts)
+        _, rot, _ = build_ego_history(poses, current_ts)
 
         for t in range(NUM_HISTORY_STEPS):
             R = rot[0, 0, t].numpy()
@@ -193,7 +193,7 @@ class TestAntipodalQuaternions:
     def test_output_shapes(self) -> None:
         poses = self._make_antipodal_poses()
         current_ts = poses[-1].timestamp_us
-        xyz, rot = build_ego_history(poses, current_ts)
+        xyz, rot, _ = build_ego_history(poses, current_ts)
 
         assert xyz.shape == (1, 1, NUM_HISTORY_STEPS, 3)
         assert rot.shape == (1, 1, NUM_HISTORY_STEPS, 3, 3)

@@ -64,6 +64,8 @@ def _make_prediction_input(
         acceleration=0.0,
         ego_pose_history=[],
         inference_seed=seed,
+        previous_plan=None,
+        route=None,
     )
 
 
@@ -142,8 +144,8 @@ class TestPredictBatch:
         assert len(results) == 1
         pred = results[0]
         assert isinstance(pred, ModelPrediction)
-        assert pred.trajectory_xy.shape == (6, 2)
-        assert pred.headings.shape == (6,)
+        assert pred.selected_positions.shape == (6, 3)
+        assert pred.selected_rotations.shape == (6, 3, 3)
 
     def test_batch_returns_correct_count(self, vam_model):
         """predict_batch with 4 inputs returns 4 ModelPredictions with correct shapes."""
@@ -158,8 +160,8 @@ class TestPredictBatch:
         assert len(results) == 4
         for pred in results:
             assert isinstance(pred, ModelPrediction)
-            assert pred.trajectory_xy.shape == (6, 2)
-            assert pred.headings.shape == (6,)
+            assert pred.selected_positions.shape == (6, 3)
+            assert pred.selected_rotations.shape == (6, 3, 3)
 
     def test_tokenizer_called_once_with_full_batch(self, vam_model):
         """For 3 inputs * 8 frames = 24 frames, the tokenizer must be called
@@ -209,10 +211,7 @@ class TestPredictBatch:
         model, _, _ = vam_model
         inp = _make_prediction_input()
 
-        sentinel = ModelPrediction(
-            trajectory_xy=np.zeros((6, 2)),
-            headings=np.zeros(6),
-        )
+        sentinel = ModelPrediction.from_planar(np.zeros((6, 2)), np.zeros(6))
         with mock.patch.object(
             model, "predict_batch", return_value=[sentinel]
         ) as mock_pb:

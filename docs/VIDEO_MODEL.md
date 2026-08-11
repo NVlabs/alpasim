@@ -25,7 +25,7 @@ prompt, and the recorded first frame.
 The image below shows a camera frame with the HD map conditioning render
 alpha-composited on top:
 
-![Camera frame with HD map conditioning render overlaid](assets/images/frame-with-hdmap-render-overlaid.png)
+![Camera frame with HD map conditioning render overlaid](/docs/assets/images/frame-with-hdmap-render-overlaid.png)
 
 The recorded first frame is the visual anchor for generation. This is why the
 first frame, camera calibration, and HD map render must all agree. If a local
@@ -83,8 +83,7 @@ docker build -t flashdreams-alpasim:local -f docker/Dockerfile.alpasim .
 > :warning: Build with the same Docker context that will run Alpasim. You can check with `docker context show`; Docker Compose only sees images in that active daemon.
 
 ### Deploy
-Run Alpasim with the managed FlashDreams deploy preset. For the default VaVam
-policy:
+Run Alpasim with the managed FlashDreams deploy preset. For VaVAM:
 
 ```bash
 cd ../alpasim
@@ -98,10 +97,10 @@ uv run --project src/wizard alpasim_wizard \
 
 > :warning: the initial run will download large model checkpoints to a local cache. Consider setting `+runtime.endpoints.startup_timeout_s=600` or more to prevent premature timeout on your first run.
 
-`driver=vavam_video_model` uses the same VaVam model and camera selection as
-`driver=vavam`, but skips the local camera calibration override that is only
-valid for the default NuRec renderer. Video-model sessions use the recorded
-USDZ calibration for their first-frame JPEGs.
+`driver=vavam_video_model` keeps the recorded USDZ FTheta calibration used by
+the video model and enables driver-side rectification to the pinhole view
+expected by VaVAM. The normal `driver=vavam` preset instead asks NuRec to render
+that pinhole view directly and does not run the rectifier.
 
 For Alpamayo1.5, use the matching single-camera driver preset:
 
@@ -136,18 +135,36 @@ uv run --project src/wizard huggingface-cli login
 
 ## Scene Data
 
-The video-model deploy config uses the same default 26.01 Hugging Face scene
-catalog as the sensorsim renderer. If necessary, the wizard downloads the
-selected USDZ artifacts into the configured scene cache.
+The video-model deploy config supports both current public NRE releases. For
+26.01, the UUID-pinned `public_2601_video_model` suite contains the 729
+compatible artifacts. The replacement 26.04 artifacts selected by
+`public_2604` are compatible across the full 1,606-scene suite. Select either
+suite with:
+
+```bash
+# Recommended 26.01 subset
+scenes.test_suite_id=public_2601_video_model
+
+# Broader 26.04 suite
+scenes.test_suite_id=public_2604
+```
+
+Each selected artifact provides a timestamped front-wide JPEG, parseable
+front-wide FTheta calibration, and the ClipGT map parquets consumed by
+OmniDreams.
+
+See [Test Suites & Scenes](../data/scenes/README.md) for the exact scene list
+and cache-refresh guidance. If necessary, the wizard downloads selected USDZ
+artifacts into the configured scene cache.
 
 Set `HF_TOKEN` as described in [ONBOARDING.md](ONBOARDING.md) before running if
 the scene is not already cached.
 
 ## Driver And Timing Notes
 
-The driver config owns the camera rig and rectification calibration. Prefer a
-driver preset that matches the video-model view count instead of injecting
-`+cameras=...` by hand.
+The video-model session obtains its camera rig and calibration from the
+recorded USDZ seed frames. Prefer a driver preset that matches the generated
+view count instead of injecting `+cameras=...` by hand.
 
 The OmniDreams recipe documented here supports only single-view generation. Use
 a front-wide camera driver preset with the 8-frame timing preset:
@@ -158,8 +175,9 @@ driver=vavam_video_model +chunking=8frame
 driver=alpamayo1_5_1cam +chunking=8frame
 ```
 
-VAVAM uses a single latest image (`context_length=1`), so no image-history
-subsampling is needed.
+VaVAM uses a single latest image (`context_length=1`), so no image-history
+subsampling is needed. Its video-model preset rectifies recorded FTheta frames
+in the driver; its NuRec preset receives pinhole frames directly.
 
 Alpamayo uses a four-frame image history at 10 Hz. The video model emits frames
 at 30 Hz, so Alpamayo video-model runs should use driver-side subsampling. The

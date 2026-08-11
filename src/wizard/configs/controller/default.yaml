@@ -1,4 +1,4 @@
-mpc_implementation: linear
+mpc_implementation: nonlinear
 n_horizon: 20
 dt_mpc: 0.1
 gains:

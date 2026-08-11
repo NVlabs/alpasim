@@ -165,7 +165,9 @@ def ensure_sqsh_path(
     sqsh_path = os.path.join(write_cache, sqsh_fname)
     lock_path = os.path.join(write_cache, ".lock_" + sqsh_fname + ".lock")
 
-    with FileLock(lock_path, timeout=-1):
+    # Cache entries and their locks are shared across cluster users, so their
+    # permissions must not depend on the first creator's umask.
+    with FileLock(lock_path, timeout=-1, mode=0o666):
         # Recheck after acquiring lock (another process may have created it)
         if os.path.isfile(sqsh_path):
             return os.path.abspath(sqsh_path)
@@ -199,6 +201,7 @@ def ensure_sqsh_path(
                 f"enroot import failed for {image}: {e.stderr or e.stdout or str(e)}"
             ) from e
 
+        os.chmod(sqsh_path, 0o644)
         return os.path.abspath(sqsh_path)
 
 

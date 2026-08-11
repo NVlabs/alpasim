@@ -7,8 +7,13 @@ import "alpasim_grpc/v0/common.proto";
 
 service RuntimeService {
     rpc simulate (SimulationRequest) returns (SimulationReturn);
+    rpc prefetch_scene (ScenePrefetchRequest) returns (common.Empty);
     rpc get_runtime_info (common.Empty) returns (RuntimeInfo);
     rpc shut_down (common.Empty) returns (common.Empty);
+}
+
+message ScenePrefetchRequest {
+    string scene_id = 1;
 }
 
 message RolloutSpec {
@@ -17,6 +22,9 @@ message RolloutSpec {
     // Optional client-supplied session UUIDs, one per rollout. If set,
     // length must equal nr_rollouts. Empty (default) ⇒ runtime generates.
     repeated string session_uuids = 3;
+    // Microseconds to skip from the start of the recording; the rollout begins
+    // that far into the clip. 0 (default) starts at the clip's first frame.
+    fixed64 start_time_offset_us = 4;
 }
 
 message SimulationRequest {

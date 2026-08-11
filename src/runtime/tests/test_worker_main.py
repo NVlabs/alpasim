@@ -113,6 +113,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
         rollouts_dir,
         eval_config,
         eval_executor=None,
+        force_gt_frame_cache=None,
     ) -> JobResult:
         del (
             user_config,
@@ -121,6 +122,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
             rollouts_dir,
             eval_config,
             eval_executor,
+            force_gt_frame_cache,
         )
         nonlocal seen_version_ids
         seen_version_ids = version_ids
@@ -166,6 +168,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
     )
     user_config = MagicMock()
     user_config.endpoints.startup_timeout_s = 1
+    user_config.simulation_config.force_gt_frame_cache.enabled = False
     scene_loader = MagicMock()
     scene_loader.get_data_source.return_value = MagicMock()
 
@@ -342,7 +345,7 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
             kind=RendererKind.video_model,
             video_model_config=video_model_config,
         ),
-        simulation_config=MagicMock(),
+        simulation_config=MagicMock(force_gt_frame_cache=MagicMock(enabled=False)),
     )
 
     data_source = MagicMock()

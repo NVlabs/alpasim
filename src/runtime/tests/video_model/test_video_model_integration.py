@@ -207,10 +207,9 @@ def test_parse_cameras_from_usdz_extracts_intrinsics_and_extrinsics(
     assert front.intrinsics.shutter_type == sensorsim_pb2.ShutterType.GLOBAL
     assert front.intrinsics.HasField("ftheta_param")
     ft = front.intrinsics.ftheta_param
-    # Both polynomial directions are populated (the parser inverts whichever
-    # one is missing from the parquet).
+    # Preserve only the canonical polynomial direction from the parquet.
     assert len(ft.pixeldist_to_angle_poly) > 0
-    assert len(ft.angle_to_pixeldist_poly) > 0
+    assert len(ft.angle_to_pixeldist_poly) == 0
     # Extrinsics: translation comes from nominalSensor2Rig_FLU (no corrections).
     front_t = front.rig_to_camera.vec3
     assert math.isclose(float(front_t[0]), 2.1, abs_tol=1e-4)

@@ -28,10 +28,7 @@ from alpasim_runtime.types import Clock, RuntimeCamera
 
 @pytest.mark.asyncio
 async def test_video_model_service_uses_large_grpc_message_limits(monkeypatch) -> None:
-    from alpasim_runtime.services.video_model_service import (
-        MAX_GRPC_MESSAGE_BYTES,
-        VideoModelService,
-    )
+    from alpasim_runtime.services.video_model_service import VideoModelService
 
     captured: dict[str, object] = {}
     fake_channel = object()
@@ -46,7 +43,7 @@ async def test_video_model_service_uses_large_grpc_message_limits(monkeypatch) -
             captured["channel"] = channel
 
     monkeypatch.setattr(
-        "alpasim_runtime.services.video_model_service.grpc.aio.insecure_channel",
+        "alpasim_runtime.services.service_base.grpc.aio.insecure_channel",
         fake_insecure_channel,
     )
     monkeypatch.setattr(
@@ -59,10 +56,16 @@ async def test_video_model_service_uses_large_grpc_message_limits(monkeypatch) -
 
     assert captured["address"] == "localhost:50056"
     assert captured["channel"] is fake_channel
-    assert captured["options"] == [
-        ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
-        ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
-    ]
+    options = dict(captured["options"])
+    assert options.keys() == {
+        "grpc.max_receive_message_length",
+        "grpc.max_send_message_length",
+    }
+    assert options["grpc.max_receive_message_length"] > 4 * 1024 * 1024
+    assert (
+        options["grpc.max_send_message_length"]
+        == options["grpc.max_receive_message_length"]
+    )
 
 
 def test_video_model_runtime_config_rejects_unknown_field() -> None:
@@ -77,11 +80,9 @@ def test_video_model_runtime_config_rejects_unknown_field() -> None:
 def test_deploy_yaml_files_present() -> None:
     """The deploy + chunking YAMLs ship with the wizard's core configs.
 
-    Note: cameras intentionally have no renderer-level config group -- the
-    driver config (driver=vavam / driver=alpamayo1_5 / ...) owns the
-    camera rig + rectification calibration; injecting a separate +cameras=
-    override on top of that would mismatch the renderer output and the
-    driver's rectifier.
+    Cameras intentionally have no renderer-level config group. Video-model
+    sessions use the camera rig and calibration tied to their USDZ seed frames;
+    injecting a separate +cameras= override would mismatch that input.
     """
     from pathlib import Path
 

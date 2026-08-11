@@ -1,10 +1,10 @@
 # @package _global_
 # Deploy for an EXTERNAL video model renderer with a LOCAL driver.
 #
-# The driver config (driver=vavam / driver=alpamayo1_5 / ...) owns the
-# camera rig and rectification calibration; do NOT inject a
-# +cameras=<...> override -- that breaks the driver's rectifier and the
-# policy starts producing garbage decisions.
+# The video-model session obtains its camera rig and calibration from the
+# recorded USDZ seed frames. Select a driver preset with the matching view
+# count; do not inject a separate +cameras=<...> override. VaVAM uses
+# driver=vavam_video_model to rectify the recorded FTheta output in the driver.
 #
 # See docs/VIDEO_MODEL.md for server commands and driver-specific notes such as
 # Alpamayo image-history subsampling.

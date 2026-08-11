@@ -1,0 +1,15 @@
+# Should be used in defaults list, e.g.
+# - /driver: alpamayo1_5_cfg_guidance
+# Type validation happens at driver runtime via OmegaConf.structured merge
+
+defaults:
+  - alpamayo1_5
+  - _self_
+
+# Alpamayo 1.5 pushed towards the navigation instruction derived from the route,
+# by blending the conditioned and unconditioned velocity fields with this weight.
+# Costs a second forward pass (~60 GB VRAM instead of ~40 GB), and a weight of
+# 1.0 pays for it while reproducing the conditioned field, so only > 1 is useful.
+
+model:
+  cfg_guidance_weight: 1.5

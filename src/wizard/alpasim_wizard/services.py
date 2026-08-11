@@ -14,7 +14,7 @@ from importlib.resources import files as resource_files
 from typing import Any, Iterator, List, Literal
 
 from .context import WizardContext
-from .schema import ContainerConfig, RunMode, ServiceConfig
+from .schema import ContainerConfig, RunMethod, RunMode, ServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -489,6 +489,10 @@ def _build_prometheus_container(
         for volume in volumes:
             if not volume.host_exists():
                 raise FileNotFoundError(f"Mount point does not exist: {volume.host}")
+    environments = list(config.environments)
+    if cfg.wizard.run_method == RunMethod.SLURM_ENROOT:
+        environments.append("ALPASIM_PROCESS_EXPORTER_MODE=host")
+
     container = ContainerDefinition(
         uuid=uuid,
         name=name,
@@ -497,7 +501,7 @@ def _build_prometheus_container(
         service_config=config,
         context=context,
         workdir=config.workdir,
-        environments=list(config.environments),
+        environments=environments,
         volumes=volumes,
         published_ports=prometheus_ports,
     )

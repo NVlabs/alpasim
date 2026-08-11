@@ -24,12 +24,12 @@ def test_validate_ego_history_span_raises_clear_error_for_too_few_poses() -> Non
         ModelInputValidationError,
         match=(
             r"AlpamayoTest needs at least 2 ego poses spanning 1500\.0ms.*"
-            r"latest_camera_frame_us=2"
+            r"planning_t0_us=2"
         ),
     ):
         _validate_ego_history_span(
             [_pose(1_000_000)],
-            latest_camera_frame_us=2_000_000,
+            planning_t0_us=2_000_000,
             num_history_steps=16,
             history_time_step=0.1,
             model_name="AlpamayoTest",
@@ -46,7 +46,7 @@ def test_validate_ego_history_span_raises_clear_error_for_short_span() -> None:
     ):
         _validate_ego_history_span(
             [_pose(1_500_000), _pose(2_000_000)],
-            latest_camera_frame_us=2_000_000,
+            planning_t0_us=2_000_000,
             num_history_steps=16,
             history_time_step=0.1,
             model_name="AlpamayoTest",
@@ -59,12 +59,12 @@ def test_validate_ego_history_span_raises_clear_error_for_stale_history() -> Non
         match=(
             r"AlpamayoTest ego pose history is stale: "
             r"available_span=1500\.0ms, required_span=1500\.0ms, "
-            r"latest_available_us=1500000, latest_camera_frame_us=2000000"
+            r"latest_available_us=1500000, planning_t0_us=2000000"
         ),
     ):
         _validate_ego_history_span(
             [_pose(0), _pose(1_500_000)],
-            latest_camera_frame_us=2_000_000,
+            planning_t0_us=2_000_000,
             num_history_steps=16,
             history_time_step=0.1,
             model_name="AlpamayoTest",
@@ -74,7 +74,7 @@ def test_validate_ego_history_span_raises_clear_error_for_stale_history() -> Non
 def test_validate_ego_history_span_accepts_required_span() -> None:
     _validate_ego_history_span(
         [_pose(500_000), _pose(2_000_000)],
-        latest_camera_frame_us=2_000_000,
+        planning_t0_us=2_000_000,
         num_history_steps=16,
         history_time_step=0.1,
         model_name="AlpamayoTest",

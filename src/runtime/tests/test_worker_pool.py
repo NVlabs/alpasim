@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing as mp
 from multiprocessing import Queue
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock
 
+import alpasim_runtime.worker.runtime as worker_runtime_module
 import pytest
 from alpasim_runtime.address_pool import AddressPool, ServiceAddress
 from alpasim_runtime.config import (
@@ -33,6 +36,10 @@ from alpasim_runtime.worker.ipc import (
     _ShutdownSentinel,
 )
 from alpasim_runtime.worker.runtime import WorkerRuntime
+
+
+def _report_worker_start_method(args: SimpleNamespace) -> None:
+    args.result_queue.put(mp.get_start_method())
 
 
 def _make_pools(
@@ -67,6 +74,7 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config.user.scene_affine_dispatch.enabled = False
     config.user.scene_affine_dispatch.max_renderers_per_scene = 2
     config.user.scene_affine_dispatch.max_scenes_per_renderer = None
+    config.user.simulation_config.force_gt_frame_cache.enabled = False
     config.user.renderer = RendererConfig(kind=RendererKind.sensorsim)
     config.user.endpoints.driver.skip = False
     config.user.endpoints.driver.n_concurrent_rollouts = 2
@@ -365,6 +373,29 @@ async def test_worker_runtime_lifecycle_inline() -> None:
     assert result.request_id == "req-1"
     assert result.job_id == "job-1"
 
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_runtime_starts_subprocesses_with_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process_context = mp.get_context("spawn")
+    job_queue = process_context.Queue()
+    result_queue = process_context.Queue()
+    monkeypatch.setattr(
+        worker_runtime_module,
+        "worker_main",
+        _report_worker_start_method,
+    )
+
+    runtime = WorkerRuntime(
+        job_queue=job_queue,
+        result_queue=result_queue,
+        worker_args=[SimpleNamespace(result_queue=result_queue)],
+    )
+
+    assert result_queue.get(timeout=10) == "spawn"
     await runtime.stop()
 
 

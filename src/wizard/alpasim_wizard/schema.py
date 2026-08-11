@@ -69,8 +69,13 @@ class ScenesConfig:
 
 class RunMethod(Enum):
     SLURM = "slurm"
+    SLURM_ENROOT = "slurm_enroot"
     DOCKER_COMPOSE = "docker_compose"
     NONE = "none"
+
+    @property
+    def is_slurm(self) -> bool:
+        return self in (RunMethod.SLURM, RunMethod.SLURM_ENROOT)
 
 
 class RunMode(Enum):
@@ -141,9 +146,17 @@ class WizardConfig:
     # allocations on CI nodes), otherwise overlapping steps are killed.
     slurm_cpu_bind_none: bool = False
 
+    # Root directory where the wizard installs direct-Enroot FUSE tools.
+    # Required with run_method=SLURM_ENROOT.
+    fuse_dir: str | None = None
+
+    # Optional persistent node-local cache for direct-Enroot squash images.
+    node_local_sqsh_cache_dir: str | None = None
+    node_local_sqsh_cache_max_gib: int = 500
+
     # Run GPU services through CUDA MPS so kernels from co-located processes
     # execute concurrently instead of time-slicing between CUDA contexts.
-    # Starts a per-job MPS control daemon on the node. SLURM only.
+    # Starts a per-job MPS control daemon on the node. Slurm run methods only.
     enable_mps: bool = False
 
     # External service addresses for services running outside the deployment.

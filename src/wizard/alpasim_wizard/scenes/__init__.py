@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 """Scene management module using Polars-backed CSV files."""
 
@@ -8,6 +8,7 @@ from alpasim_wizard.scenes.csv_utils import (
     SUITES_COLUMNS,
     ArtifactRepository,
     CSVValidationError,
+    check_catalog_headers,
     merge_scenes_csv,
     merge_suites_csv,
     validate_csvs,
@@ -22,6 +23,7 @@ __all__ = [
     "SUITES_COLUMNS",
     "SceneIdAndUuid",
     "USDZManager",
+    "check_catalog_headers",
     "merge_scenes_csv",
     "merge_suites_csv",
     "validate_csvs",

@@ -37,8 +37,6 @@ from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils.geometry import Pose, Trajectory, pose_to_grpc
 from alpasim_utils.types import ImageWithMetadata
 
-import grpc
-
 logger = logging.getLogger(__name__)
 
 WILDCARD_SCENE_ID = "*"
@@ -84,18 +82,13 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
     def stub_class(self) -> Type[SensorsimServiceStub]:
         return SensorsimServiceStub
 
-    async def _open_connection(self) -> None:
-        """Open a gRPC connection that supports batched multi-camera images."""
-        if self.skip:
-            return
-        self.channel = grpc.aio.insecure_channel(
-            self.address,
-            options=[
-                ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
-                ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
-            ],
-        )
-        self.stub = self.stub_class(self.channel)
+    @property
+    def channel_options(self) -> list[tuple[str, int]]:
+        """Allow batched multi-camera images larger than gRPC's default."""
+        return [
+            ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+            ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+        ]
 
     async def _sensorsim_rpc(
         self,

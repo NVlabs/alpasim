@@ -17,6 +17,7 @@ from alpasim_grpc.v0.physics_pb2 import (
 )
 from alpasim_grpc.v0.sensorsim_pb2 import (
     AvailableEgoMasksReturn,
+    BatchRGBRenderRequest,
     DynamicObject,
     EgoMaskId,
     PosePair,
@@ -161,6 +162,21 @@ class TestLoadExchangesPairing:
             recorded_response.ego_mask_metadata[0].ego_mask_id.camera_logical_id
             == "camera_front_wide_120fov"
         )
+
+    @pytest.mark.asyncio
+    async def test_batch_render_request_is_loaded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        request = BatchRGBRenderRequest()
+        request.items.add(camera_name="camera_front_wide_120fov")
+        self._patch_asl_reader(monkeypatch, [LogEntry(batch_render_request=request)])
+
+        reader = ASLReader("dummy.asl")
+        await reader.load_exchanges()
+
+        assert reader.get_exchanges("sensorsim", "batch_render_rgb") == [
+            (request, None)
+        ]
 
     @pytest.mark.asyncio
     async def test_response_without_pending_request_raises_clear_error(

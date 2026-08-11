@@ -37,3 +37,9 @@ asset_harvesting/
 # which does not require uv.lock.
 **/uv.lock
 .worktrees/
+
+# Rollout viewer scratch output
+/rollout_viewer_data/
+/*.log
+/plugins/internal/src/tools/rollout_viewer/rollout_viewer_data/
+/plugins/internal/src/tools/rollout_viewer/**/*.log

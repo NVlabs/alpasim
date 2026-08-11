@@ -33,6 +33,7 @@ from alpasim_runtime.config import RendererKind, UserSimulatorConfig
 from alpasim_runtime.errors import RolloutError
 from alpasim_runtime.event_loop import create_event_rollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
+from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
 from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.services.controller_service import ControllerService
@@ -75,6 +76,7 @@ async def run_single_rollout(
     rollouts_dir: str,
     eval_config: EvalConfig,
     eval_executor: ProcessPoolExecutor,
+    force_gt_frame_cache: ForceGtFrameCache | None = None,
 ) -> JobResult:
     """Execute one rollout with the addresses assigned by the parent."""
     ep = job.endpoints
@@ -133,6 +135,7 @@ async def run_single_rollout(
                 data_source=data_source,
                 rollouts_dir=rollouts_dir,
                 session_uuid=job.session_uuid,
+                start_time_offset_us=job.start_time_offset_us,
                 renderer_service=renderer_service,
             ),
         )
@@ -148,6 +151,7 @@ async def run_single_rollout(
             camera_catalog=camera_catalog,
             eval_config=eval_config,
             eval_executor=eval_executor,
+            force_gt_frame_cache=force_gt_frame_cache,
         ).run()
 
         return JobResult(
@@ -232,6 +236,17 @@ async def run_worker_loop(
     shutdown_event = asyncio.Event()
     rollout_count = 0
 
+    # Globally shared, on-disk cache reused across rollouts/runs/nodes so
+    # force-GT frames are rendered once per scene + render configuration. Only
+    # built when the force-GT frame cache is enabled.
+    force_gt_frame_cache: ForceGtFrameCache | None = None
+    force_gt_cache_config = user_config.simulation_config.force_gt_frame_cache
+    if force_gt_cache_config.enabled:
+        # cache_dir is validated non-empty in validate_renderer_config.
+        cache_dir = force_gt_cache_config.cache_dir
+        force_gt_frame_cache = ForceGtFrameCache(cache_dir)
+        module_logger.info("Force-GT frame cache directory: %s", cache_dir)
+
     # Install event loop idle profiler
     install_event_loop_idle_profiler(loop)
 
@@ -300,6 +315,7 @@ async def run_worker_loop(
                     rollouts_dir=rollouts_dir,
                     eval_config=eval_config,
                     eval_executor=eval_executor,
+                    force_gt_frame_cache=force_gt_frame_cache,
                 )
             finally:
                 if telemetry_ctx is not None:

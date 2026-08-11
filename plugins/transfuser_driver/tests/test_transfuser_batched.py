@@ -37,6 +37,11 @@ N_WAYPOINTS = 6
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _yaws(rotations: np.ndarray) -> np.ndarray:
+    """Yaw angles of (N, 3, 3) rotation matrices."""
+    return np.arctan2(rotations[:, 1, 0], rotations[:, 0, 0])
+
+
 def _make_image(h: int = PER_CAM_H, w: int = PER_CAM_W, seed: int = 0) -> np.ndarray:
     """Generate a deterministic random image."""
     rng = np.random.RandomState(seed)
@@ -61,6 +66,8 @@ def _make_prediction_input(
         acceleration=acceleration,
         ego_pose_history=[],
         inference_seed=seed,
+        previous_plan=None,
+        route=None,
     )
 
 
@@ -134,8 +141,8 @@ class TestPredictBatch:
         assert len(results) == 1
         pred = results[0]
         assert isinstance(pred, ModelPrediction)
-        assert pred.trajectory_xy.shape == (N_WAYPOINTS, 2)
-        assert pred.headings.shape == (N_WAYPOINTS,)
+        assert pred.selected_positions.shape == (N_WAYPOINTS, 3)
+        assert pred.selected_rotations.shape == (N_WAYPOINTS, 3, 3)
 
     def test_batch_returns_correct_count(self, transfuser_model):
         """predict_batch with 4 inputs returns 4 ModelPredictions."""
@@ -147,8 +154,8 @@ class TestPredictBatch:
         assert len(results) == 4
         for pred in results:
             assert isinstance(pred, ModelPrediction)
-            assert pred.trajectory_xy.shape == (N_WAYPOINTS, 2)
-            assert pred.headings.shape == (N_WAYPOINTS,)
+            assert pred.selected_positions.shape == (N_WAYPOINTS, 3)
+            assert pred.selected_rotations.shape == (N_WAYPOINTS, 3, 3)
 
     def test_empty_input_returns_empty(self, transfuser_model):
         """predict_batch with empty list returns empty list."""
@@ -197,9 +204,8 @@ class TestPredictBatch:
         model, _ = transfuser_model
         inp = _make_prediction_input()
 
-        sentinel = ModelPrediction(
-            trajectory_xy=np.zeros((N_WAYPOINTS, 2)),
-            headings=np.zeros(N_WAYPOINTS),
+        sentinel = ModelPrediction.from_planar(
+            np.zeros((N_WAYPOINTS, 2)), np.zeros(N_WAYPOINTS)
         )
         with mock.patch.object(
             model, "predict_batch", return_value=[sentinel]
@@ -231,10 +237,11 @@ class TestPredictBatch:
         results = model.predict_batch([inp])
 
         np.testing.assert_array_almost_equal(
-            results[0].trajectory_xy, np.array([[1.0, -2.0], [3.0, -4.0]])
+            results[0].selected_positions,
+            np.array([[1.0, -2.0, 0.0], [3.0, -4.0, 0.0]]),
         )
         np.testing.assert_array_almost_equal(
-            results[0].headings, np.array([-0.5, -1.0])
+            _yaws(results[0].selected_rotations), np.array([-0.5, -1.0])
         )
 
     def test_headings_computed_when_none(self, transfuser_model):
@@ -254,8 +261,9 @@ class TestPredictBatch:
         # Y is inverted: waypoints become [[1, 0], [2, 0]]
         # Heading from (0,0)->(1,0) = atan2(0, 1) = 0
         # Heading from (1,0)->(2,0) = atan2(0, 1) = 0
-        assert results[0].headings.shape == (2,)
-        np.testing.assert_array_almost_equal(results[0].headings, [0.0, 0.0])
+        np.testing.assert_array_almost_equal(
+            _yaws(results[0].selected_rotations), [0.0, 0.0]
+        )
 
     def test_wrong_frame_count_raises(self, transfuser_model):
         """ValueError when a camera has != 1 frame."""
@@ -280,6 +288,8 @@ class TestPredictBatch:
             acceleration=0.0,
             ego_pose_history=[],
             inference_seed=0,
+            previous_plan=None,
+            route=None,
         )
 
         with pytest.raises(ValueError, match=r"expects 1 frame"):

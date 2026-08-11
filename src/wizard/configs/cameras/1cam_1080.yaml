@@ -1,0 +1,15 @@
+# @package _global_
+
+runtime:
+  simulation_config:
+      cameras:
+      -
+        # We want 1080x1920 but NRE will resize to match original camera aspect ratio.
+        # So we set 1080x1900 here, which will be resized to 1080x1916.
+        height: 1080
+        width: 1900
+        logical_id: camera_front_wide_120fov
+
+        # If you change this see note in base_config.yaml about `driver.inference.Cframes_subsample`
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000

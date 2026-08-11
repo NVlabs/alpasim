@@ -9,7 +9,14 @@ from alpasim_plugins.plugins import models as model_registry
 
 # The entry-point names that the driver package registers.
 # transfuser is provided by the optional alpasim_transfuser plugin, not the core driver.
-EXPECTED_MODELS = ["alpamayo1", "alpamayo1_5", "manual", "vam"]
+EXPECTED_MODELS = [
+    "alpamayo1",
+    "alpamayo1_5",
+    "alpamayo1_5_recipes_sft",
+    "alpamayo2",
+    "manual",
+    "vam",
+]
 
 
 def test_all_expected_models_registered() -> None:

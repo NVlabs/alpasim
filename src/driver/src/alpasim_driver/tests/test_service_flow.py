@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-import asyncio
 import subprocess
 from io import BytesIO
 from pathlib import Path
@@ -71,8 +70,7 @@ def _ensure_vavam_assets() -> Path:
     return assets_dir
 
 
-@pytest.mark.asyncio
-async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
+def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     repo_root = _get_repo_root()
     cfg_path = repo_root / "src" / "wizard" / "configs" / "driver" / "vavam.yaml"
     raw_cfg = OmegaConf.load(cfg_path)
@@ -88,11 +86,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     schema = OmegaConf.structured(DriverConfig)
     cfg = OmegaConf.merge(schema, raw_cfg)
 
-    loop = asyncio.get_running_loop()
-    service = EgoDriverService(
-        cfg=cfg,
-        loop=loop,
-    )
+    service = EgoDriverService(cfg=cfg)
 
     session_uuid = "test-session"
     rollout_spec = DriveSessionRequest.RolloutSpec()
@@ -107,11 +101,11 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     camera_def.logical_id = desired_camera_name
     camera_def.intrinsics.resolution_h = test_image_height
     camera_def.intrinsics.resolution_w = test_image_width
-    ftheta = camera_def.intrinsics.ftheta_param
-    ftheta.principal_point_x = test_image_width / 2.0
-    ftheta.principal_point_y = test_image_height / 2.0
-    ftheta.angle_to_pixeldist_poly.extend([0.0, 1.0])
-    ftheta.pixeldist_to_angle_poly.extend([0.0, 1.0])
+    pinhole = camera_def.intrinsics.opencv_pinhole_param
+    pinhole.focal_length_x = 800.0
+    pinhole.focal_length_y = 800.0
+    pinhole.principal_point_x = test_image_width / 2.0
+    pinhole.principal_point_y = test_image_height / 2.0
     start_request = DriveSessionRequest(
         session_uuid=session_uuid,
         random_seed=0,
@@ -119,7 +113,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
     )
 
     try:
-        await service.start_session(start_request, None)
+        service.start_session(start_request, None)
         session = service._sessions[session_uuid]
 
         # Check multi-camera frame caches
@@ -159,7 +153,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
                 trajectory=traj_msg,
                 dynamic_states=[dynamic_state],
             )
-            await service.submit_egomotion_observation(egomotion_request, None)
+            service.submit_egomotion_observation(egomotion_request, None)
 
         for i in range(context):
             image_array = (
@@ -180,7 +174,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
                     image_bytes=buffer.getvalue(),
                 ),
             )
-            await service.submit_image_observation(image_request, None)
+            service.submit_image_observation(image_request, None)
 
         route_msg = Route()
         waypoint = route_msg.waypoints.add()
@@ -191,7 +185,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
             session_uuid=session_uuid,
             route=route_msg,
         )
-        await service.submit_route(route_request, None)
+        service.submit_route(route_request, None)
 
         drive_request = DriveRequest(
             session_uuid=session_uuid,
@@ -199,7 +193,7 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
             time_query_us=base_ts + context * dt,
         )
 
-        response: DriveResponse = await service.drive(drive_request, None)
+        response: DriveResponse = service.drive(drive_request, None)
 
         assert len(response.trajectory.poses) > 1
         latest_pose = response.trajectory.poses[0]
@@ -209,6 +203,6 @@ async def test_vam_policy_drive_flow(tmp_path: Path) -> None:
         assert latest_pose.timestamp_us == expected_last_ts
         assert pytest.approx(latest_pose.pose.vec.x, rel=1e-5) == expected_last_x
     finally:
-        await service.stop_worker()
+        service.stop_worker()
         if session_uuid in service._sessions:
             del service._sessions[session_uuid]

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Sequence
 from enum import Enum
 
 import polars as pl
@@ -53,12 +54,72 @@ SCENE_ID_PATTERN = re.compile(r"^clipgt-[\w-]+$")
 VALID_ARTIFACT_REPOSITORIES = {repo.value for repo in ArtifactRepository}
 
 
+def _missing_columns(columns: Sequence[str], required_columns: list[str]) -> list[str]:
+    """Required columns absent from ``columns``, in contract order."""
+    return [c for c in required_columns if c not in columns]
+
+
+def check_catalog_headers(*catalogs: tuple[str | None, list[str]]) -> None:
+    """Raise if any given catalog's header lacks its required columns.
+
+    A path that is None or not on disk is skipped: there is no header to check.
+    """
+    for csv_path, required_columns in catalogs:
+        if csv_path is None or not os.path.exists(csv_path):
+            continue
+        header = pl.read_csv(csv_path, n_rows=0).columns
+        missing = _missing_columns(header, required_columns)
+        if missing:
+            raise ValueError(
+                f"Existing CSV '{csv_path}' is missing required columns: {missing}"
+            )
+
+
+def align_to_existing(
+    existing: pl.DataFrame, new_rows: pl.DataFrame, required_columns: list[str]
+) -> pl.DataFrame:
+    """Shape new rows to the columns the CSV on disk actually has.
+
+    The required columns are the contract; a catalog may carry more, and its own header is the
+    target both frames must agree on. Columns the target has but the caller omitted are filled
+    with null; columns the caller supplies that the target lacks are dropped, so a merge can never
+    widen the schema by accident. The result is cast to the target's dtypes so it can be
+    concatenated with it.
+
+    Raises ValueError when either frame is missing a required column: the caller's rows would be
+    incomplete, and a target header narrower than the contract would silently drop values.
+    """
+    missing = _missing_columns(new_rows.columns, required_columns)
+    if missing:
+        raise ValueError(f"New rows are missing required columns: {missing}")
+
+    if not existing.width:
+        target = required_columns
+    else:
+        missing = _missing_columns(existing.columns, required_columns)
+        if missing:
+            raise ValueError(f"Existing CSV is missing required columns: {missing}")
+        target = existing.columns
+
+    aligned = new_rows
+    for column in target:
+        if column not in aligned.columns:
+            aligned = aligned.with_columns(pl.lit(None).alias(column))
+    aligned = aligned.select(target)
+
+    if existing.width:
+        aligned = aligned.cast({c: existing.schema[c] for c in target})
+    return aligned
+
+
 def load_or_create_csv(
     path: str, columns: list[str], create_if_missing: bool = False
 ) -> pl.DataFrame:
     """Load existing CSV or create empty DataFrame with columns."""
     if os.path.exists(path):
-        return pl.read_csv(path)
+        # Force all columns to String, as sceneset.py does: inference would read a catalog of
+        # numeric-looking hf_revision pins as Float64 and rewrite "26.10" as 26.1 on merge.
+        return pl.read_csv(path, infer_schema_length=0)
 
     if not create_if_missing:
         raise FileNotFoundError(
@@ -92,6 +153,7 @@ def merge_scenes_csv(
     existing = load_or_create_csv(
         csv_path, SCENES_COLUMNS, create_if_missing=(create_if_missing or dry_run)
     )
+    new_rows = align_to_existing(existing, new_rows, SCENES_COLUMNS)
     existing_uuids = set(existing["uuid"].to_list()) if existing.height > 0 else set()
     new_only = new_rows.filter(~pl.col("uuid").is_in(existing_uuids))
     duplicates = new_rows.height - new_only.height
@@ -100,7 +162,7 @@ def merge_scenes_csv(
         return (new_only.height, duplicates)
 
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    combined = pl.concat([existing, new_only.select(SCENES_COLUMNS)])
+    combined = pl.concat([existing, new_only])
     combined.write_csv(csv_path)
 
     return (new_only.height, duplicates)
@@ -131,6 +193,8 @@ def merge_suites_csv(
         csv_path, SUITES_COLUMNS, create_if_missing=(create_if_missing or dry_run)
     )
 
+    new_rows = align_to_existing(existing, new_rows, SUITES_COLUMNS)
+
     if existing.height > 0:
         existing_pairs = set(
             zip(
@@ -153,7 +217,7 @@ def merge_suites_csv(
         return (new_only.height, duplicates)
 
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    combined = pl.concat([existing, new_only.select(SUITES_COLUMNS)])
+    combined = pl.concat([existing, new_only])
     combined.write_csv(csv_path)
 
     return (new_only.height, duplicates)
@@ -173,7 +237,6 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
         - Required columns present (uuid, scene_id, nre_version_string, path,
           last_modified, artifact_repository)
         - No duplicate UUIDs
-        - No duplicate (scene_id, nre_version_string) pairs
         - UUID format valid (alphanumeric with hyphens/underscores)
         - scene_id format valid (must start with "clipgt-")
         - last_modified format valid (ISO format: "YYYY-MM-DD HH:MM:SS")
@@ -213,22 +276,6 @@ def validate_csvs(scenes_csv: str, suites_csv: str | None = None) -> None:
             dup_list = unique_dups.to_list()[:5]
             suffix = "..." if len(unique_dups) > 5 else ""
             errors.append(f"Duplicate UUIDs in scenes CSV: {dup_list}{suffix}")
-
-        # Check for duplicate (scene_id, nre_version_string) pairs
-        dup_scene_version = scenes_df.filter(
-            pl.struct(["scene_id", "nre_version_string"]).is_duplicated()
-        )
-        if dup_scene_version.height > 0:
-            dup_list = list(
-                zip(
-                    dup_scene_version["scene_id"].to_list()[:5],
-                    dup_scene_version["nre_version_string"].to_list()[:5],
-                )
-            )
-            errors.append(
-                f"Duplicate (scene_id, nre_version_string) pairs in scenes CSV: {dup_list}"
-                f"{'...' if dup_scene_version.height > 5 else ''}"
-            )
 
         # Check UUID format
         invalid_uuids = scenes_df.filter(

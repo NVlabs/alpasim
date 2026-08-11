@@ -95,6 +95,19 @@ def test_alpasimvdc_one_step(dt_propagation_us) -> None:
         system_manager.close_session(close_session_request)
 
 
+def test_coerce_dynamic_state_preserves_yaw_rate(tmp_path) -> None:
+    """Coercing dynamic state initializes the model from ground-truth yaw rate."""
+    system_manager = SystemManager(str(tmp_path), controller_config=ControllerConfig())
+    system_manager.start_session(SESSION_UUID)
+    request = run_controller_and_vehicle_model_request()
+    request.state.state.angular_velocity.z = 0.2
+    request.coerce_dynamic_state = True
+
+    response = system_manager.run_controller_and_vehicle_model(request)
+
+    assert response.states[-1].dynamic_state.angular_velocity.z != 0.0
+
+
 def test_session_lifecycle() -> None:
     """Test the full session lifecycle including edge cases."""
     system_manager = SystemManager(".", controller_config=ControllerConfig())

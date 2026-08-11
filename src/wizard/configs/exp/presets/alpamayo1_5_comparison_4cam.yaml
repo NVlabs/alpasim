@@ -1,0 +1,49 @@
+# @package _global_
+
+# Four-camera, six-candidate Alpamayo 1.5 comparison matching the established
+# public_2601 evaluation: left cross, front wide, right cross, and front tele.
+
+wizard:
+  timeout: 2400
+  nr_retries: 2
+  slurm_cpu_bind_none: true
+
+runtime:
+  simulation_config:
+    n_rollouts: 3
+    route_generator_type: NONE
+    cameras:
+      - logical_id: camera_cross_left_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_front_wide_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_cross_right_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_front_tele_30fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+
+driver:
+  inference:
+    use_cameras:
+      - camera_cross_left_120fov
+      - camera_front_wide_120fov
+      - camera_cross_right_120fov
+      - camera_front_tele_30fov
+  model:
+    num_trajectory_samples: 6
+    trajectory_selection:
+      strategy: CLOSEST_LATERAL
+      max_num_distance_points: 64
+      skip_first_n_distance_points: 0

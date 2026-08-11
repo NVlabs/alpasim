@@ -63,6 +63,52 @@ def test_rig_loads_camera_frame_ranges() -> None:
     assert rig.first_camera_frame_end_us(["camera_front", "camera_left"]) == 1_100
 
 
+def test_rig_clip_start_drops_early_frames_and_trims_trajectory() -> None:
+    """clip_start trims the trajectory to the offset and drops earlier frames."""
+    (rig,) = Rig.load_from_json(
+        _rig_json(
+            {
+                "unique-front": [[1_050, 1_100], [1_250, 1_300]],
+                "unique-left": [[1_000, 1_050], [1_300, 1_350]],
+            }
+        )
+    )
+
+    # Trajectory spans [1_000, 2_000]; offset 200 -> new start 1_200, so the
+    # first frame of each camera closes before the cut and is dropped.
+    clipped = rig.clip_start(200)
+
+    assert clipped.trajectory.time_range_us.start == 1_200
+    assert clipped.camera_frame_ranges_us["unique-front"] == [range(1_250, 1_300)]
+    assert clipped.camera_frame_ranges_us["unique-left"] == [range(1_300, 1_350)]
+    assert clipped.first_camera_frame_end_us(["camera_front", "camera_left"]) == 1_300
+
+    # The original rig is left unchanged.
+    assert rig.trajectory.time_range_us.start == 1_000
+    assert len(rig.camera_frame_ranges_us["unique-front"]) == 2
+
+
+def test_rig_clip_start_drops_frame_exposing_across_the_new_start() -> None:
+    """A frame that opens before the new start is dropped even if it closes after."""
+    (rig,) = Rig.load_from_json(
+        _rig_json(
+            {
+                "unique-front": [[1_150, 1_250], [1_250, 1_350]],
+                "unique-left": [[1_150, 1_250], [1_250, 1_350]],
+            }
+        )
+    )
+
+    # Trajectory spans [1_000, 2_000]; offset 200 -> new start 1_200. The first
+    # frame closes after the new start but opens 50 us before it, so the trimmed
+    # trajectory cannot supply its start pose.
+    clipped = rig.clip_start(200)
+
+    assert clipped.camera_frame_ranges_us["unique-front"] == [range(1_250, 1_350)]
+    assert clipped.camera_frame_timestamps_us["unique-front"] == [1_350]
+    assert clipped.first_camera_frame_end_us(["camera_front", "camera_left"]) == 1_350
+
+
 def test_rig_load_rejects_missing_camera_frame_timestamps() -> None:
     with pytest.raises(ValueError, match="Missing cameras_frame_timestamps_us"):
         Rig.load_from_json(_rig_json(None))

@@ -1,0 +1,71 @@
+# @package _global_
+
+# Six-camera, six-candidate Alpamayo 2 comparison. It uses the public rig
+# profile [0, 1, 2, 3, 5, 6], omitting rear tele (index 4), which is absent from
+# the public six-camera release data.
+
+wizard:
+  timeout: 7200
+  nr_retries: 0
+  slurm_cpu_bind_none: true
+
+services:
+  driver:
+    environments:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+runtime:
+  simulation_config:
+    n_rollouts: 3
+    route_generator_type: NONE
+    cameras:
+      - logical_id: camera_cross_left_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_front_wide_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_cross_right_120fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_rear_left_70fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_rear_right_70fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+      - logical_id: camera_front_tele_30fov
+        height: 1080
+        width: 1900
+        frame_interval_us: 100_000
+        shutter_duration_us: 30_000
+
+driver:
+  inference:
+    use_cameras:
+      - camera_cross_left_120fov
+      - camera_front_wide_120fov
+      - camera_cross_right_120fov
+      - camera_rear_left_70fov
+      - camera_rear_right_70fov
+      - camera_front_tele_30fov
+  model:
+    num_trajectory_samples: 6
+    trajectory_candidate_microbatch_size: 3
+    trajectory_selection:
+      strategy: CLOSEST_LATERAL
+      max_num_distance_points: 64
+      skip_first_n_distance_points: 0

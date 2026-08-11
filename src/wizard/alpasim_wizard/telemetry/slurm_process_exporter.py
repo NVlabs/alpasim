@@ -325,7 +325,7 @@ class MetricsServer(http.server.HTTPServer):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--job-id", default=None)
+    parser.add_argument("--job-id", required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--procfs", default="/host/proc", type=Path)
     parser.add_argument("--cgroupfs", default="/host/sys/fs/cgroup", type=Path)
@@ -333,7 +333,7 @@ def main() -> None:
     args = parser.parse_args()
 
     server = MetricsServer(("0.0.0.0", args.port), MetricsHandler)
-    server.job_id = args.job_id or os.environ["SLURM_JOB_ID"]
+    server.job_id = args.job_id
     server.procfs = args.procfs
     server.cgroupfs = args.cgroupfs
     server.cache_seconds = args.cache_seconds

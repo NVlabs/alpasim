@@ -37,7 +37,6 @@ from __future__ import annotations
 import io
 import json
 import logging
-import math
 import zipfile
 from pathlib import Path
 from typing import Union
@@ -138,36 +137,6 @@ def _parse_polynomial(poly_str: str) -> list[float]:
     return [float(c) for c in poly_str.strip().split()]
 
 
-def _invert_polynomial(
-    coeffs: list[float],
-    *,
-    x_max: float,
-    n_samples: int = 256,
-    degree: int | None = None,
-) -> list[float]:
-    """Fit the inverse polynomial of ``y = poly(x)`` over ``x in [0, x_max]``.
-
-    The MADS calibration parquet stores either ``pixeldistance-to-angle`` or
-    ``angle-to-pixeldistance`` form, never both, but downstream consumers
-    (server + alpasim rectifier) ask for whichever direction they need.
-    Polynomial inversion in closed form depends on the parent polynomial's
-    structure, so we just sample-and-refit at the same degree -- empirically
-    this matches the original to <1e-6 over the FOV for both directions of
-    the FTheta polynomials we've seen in practice.
-    """
-    if not coeffs:
-        return []
-    if degree is None:
-        degree = max(1, len(coeffs) - 1)
-    xs = np.linspace(0.0, x_max, n_samples)
-    ys = np.polynomial.polynomial.polyval(xs, coeffs)
-    # Sort by y so polyfit sees a monotonic input (FTheta polynomials are
-    # monotonic over the valid FOV by construction).
-    order = np.argsort(ys)
-    inv_coeffs = np.polynomial.polynomial.polyfit(ys[order], xs[order], degree)
-    return inv_coeffs.tolist()
-
-
 def _compute_corrected_pose(sensor: dict) -> Pose:
     """Compose ``nominalSensor2Rig_FLU`` with the per-sensor corrections.
 
@@ -218,31 +187,18 @@ def _build_camera_definition(name: str, sensor: dict, props: dict) -> CameraDefi
     ftheta.principal_point_x = cx
     ftheta.principal_point_y = cy
 
-    # We always populate BOTH polynomial directions on the proto -- the
-    # parquet stores only the canonical one (per ``polynomial-type``), but
-    # downstream consumers ask for whichever direction they need:
-    #   - the video-model server uses the canonical polynomial
-    #   - alpasim's driver-side rectifier
-    #     (`alpasim_driver/rectification.py:ray_to_pixel`) always reads
-    #     `angle_to_pixeldist_poly`
-    # so we numerically invert the canonical polynomial and store both.
-    half_diag = math.hypot(width / 2.0, height / 2.0)
+    # Preserve the canonical polynomial direction stored in the parquet.
+    # The video-model server follows reference_poly when interpreting it.
     if poly_type_str == "pixeldistance-to-angle":
         ftheta.reference_poly = (
             sensorsim_pb2.FthetaCameraParam.PolynomialType.PIXELDIST_TO_ANGLE
         )
         ftheta.pixeldist_to_angle_poly.extend(poly_coeffs)
-        ftheta.angle_to_pixeldist_poly.extend(
-            _invert_polynomial(poly_coeffs, x_max=half_diag * 1.05)
-        )
     elif poly_type_str == "angle-to-pixeldistance":
         ftheta.reference_poly = (
             sensorsim_pb2.FthetaCameraParam.PolynomialType.ANGLE_TO_PIXELDIST
         )
         ftheta.angle_to_pixeldist_poly.extend(poly_coeffs)
-        ftheta.pixeldist_to_angle_poly.extend(
-            _invert_polynomial(poly_coeffs, x_max=math.radians(80.0))
-        )
     else:
         raise ValueError(f"Unknown polynomial-type: {poly_type_str!r}")
 

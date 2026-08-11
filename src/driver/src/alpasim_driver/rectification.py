@@ -3,7 +3,8 @@
 
 """Module to rectify f-theta camera renders into pinhole frames.
 
-Note: NuRec renderer will support pinhole rendering natively in the future.
+NuRec renders requested pinhole cameras directly. This compatibility path is
+for renderers such as the video model that still return recorded f-theta images.
 """
 
 from __future__ import annotations
@@ -145,9 +146,6 @@ class _FthetaCamera:
 
         self._angle_to_pixeldist = np.asarray(
             intrinsics.angle_to_pixeldist_poly, dtype=np.float64
-        )
-        self._pixeldist_to_angle = np.asarray(
-            intrinsics.pixeldist_to_angle_poly, dtype=np.float64
         )
         self._principal_point = np.array(
             [intrinsics.principal_point_x, intrinsics.principal_point_y],
@@ -504,33 +502,3 @@ def build_ftheta_rectifier_for_resolution(
         source_resolution_hw=source_resolution_hw,
         target_intrinsics=target_cfg,
     )
-
-
-def build_rectifier_map(
-    rectification_cfg: dict[str, RectificationTargetConfig] | None,
-    desired_cameras: set[str],
-    camera_lookup: dict[str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera],
-) -> dict[str, FthetaToPinholeRectifier | None]:
-    """Instantiate per-camera rectifiers as requested in the Hydra config."""
-
-    rectifiers: dict[str, FthetaToPinholeRectifier | None] = {
-        logical_id: None for logical_id in desired_cameras
-    }
-    if rectification_cfg is None:
-        return rectifiers
-
-    for logical_id in desired_cameras:
-        target_cfg = rectification_cfg[logical_id]
-        camera_proto = camera_lookup[logical_id]
-
-        rectifiers[logical_id] = build_ftheta_rectifier_for_resolution(
-            camera_proto=camera_proto,
-            target_cfg=target_cfg,
-            source_resolution_hw=(
-                int(camera_proto.intrinsics.resolution_h),
-                int(camera_proto.intrinsics.resolution_w),
-            ),
-        )
-        logger.info("Enabled f-theta→pinhole rectification for %s", logical_id)
-
-    return rectifiers

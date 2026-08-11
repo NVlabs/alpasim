@@ -2,6 +2,50 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## August 2026 public sync updates (11.08.26)
+
+This release adds Alpamayo 2 support, improves Alpamayo image processing, and
+makes Slurm deployments more robust.
+
+### Alpamayo 2 driver
+
+Use `driver=alpamayo2` to run the public Alpamayo 2 Super model. The driver
+supports multi-camera inputs, multiple trajectory candidates, and
+memory-friendly candidate batching for large models.
+
+### Alpamayo image processing
+
+Alpamayo 1 and 1.5 now decode and resize camera images on the GPU, improving
+throughput and matching the production preprocessing path more closely. This
+can slightly change trajectories across GPU types.
+
+**Migration**: `driver=alpamayo1_5_1cam` now uses the new
+`cameras=1cam_1080` configuration. Alpamayo runs now reject camera images
+smaller than 320×576 pixels.
+
+### Slurm deployments
+
+Slurm launches now clear inherited step environment variables, preventing
+failures when starting AlpaSim from an existing `srun` session. Deployments can
+also opt into `wizard.run_method=SLURM_ENROOT` to start services directly from
+squash images with private writable overlays and optional node-local image
+caching.
+
+## Direct pinhole rendering for VaVAM and Transfuser (04.08.26)
+
+[!567](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/567)
+moves the VaVAM and Transfuser camera calibration into
+`runtime.extra_cameras`, so NuRec (the renderer service) renders the policy's
+OpenCV pinhole view directly without CPU-side FTheta-to-pinhole remapping.
+Driver rectification remains available as an explicit compatibility path for
+renderers that cannot render the requested projection, including
+`driver=vavam_video_model`.
+
+**Migration**: For Sensorsim/NuRec deployments, move custom
+`driver.rectification` intrinsics to matching `runtime.extra_cameras`
+definitions. Video-model deployments should retain recorded FTheta calibration
+and enable driver rectification instead.
+
 ## July 2026 public sync updates (12.07.26)
 
 This sync expands the public scene catalog, improves rollout reliability and

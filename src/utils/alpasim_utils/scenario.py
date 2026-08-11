@@ -165,6 +165,34 @@ class Rig:
             ).values()
         )
 
+    def clip_start(self, offset_us: int) -> Self:
+        """Return a copy with the first ``offset_us`` of the recording removed.
+
+        Drops the ego-trajectory samples before ``trajectory start + offset_us``
+        and every camera frame whose shutter opens before it, so the rest of the
+        pipeline treats the clip as if it were that much shorter. Frames are cut
+        by shutter-open because the renderer interpolates the sensor pose across
+        the whole exposure window, which the trimmed trajectory cannot cover.
+        """
+        new_start_us = self.trajectory.time_range_us.start + offset_us
+        trajectory = self.trajectory.clip(
+            new_start_us, self.trajectory.time_range_us.stop
+        )
+        camera_frame_ranges_us = {
+            unique_id: [r for r in ranges if r.start >= new_start_us]
+            for unique_id, ranges in self.camera_frame_ranges_us.items()
+        }
+        camera_frame_timestamps_us = {
+            unique_id: [r.stop for r in ranges]
+            for unique_id, ranges in camera_frame_ranges_us.items()
+        }
+        return replace(
+            self,
+            trajectory=trajectory,
+            camera_frame_ranges_us=camera_frame_ranges_us,
+            camera_frame_timestamps_us=camera_frame_timestamps_us,
+        )
+
     @classmethod
     def load_from_json(cls, json_str: str) -> list[Self]:
         """

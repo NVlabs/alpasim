@@ -359,6 +359,14 @@ class TestControllerAndEgoPhysicsPipeline:
         await event.run(rollout_state, EventQueue())
 
         call_kwargs = mock_controller.run_controller_and_vehicle.call_args.kwargs
+        assert rollout_state.force_gt_dynamics is not None
+        expected_dynamics = rollout_state.force_gt_dynamics.interpolate_dynamics(
+            np.array([100_000], dtype=np.uint64)
+        )[0]
+        np.testing.assert_allclose(
+            call_kwargs["rig_linear_acceleration_in_rig"],
+            expected_dynamics[6:9],
+        )
         assert (
             call_kwargs["fallback_trajectory_local_to_rig"]
             is rollout_state.unbound.gt_ego_trajectory
@@ -412,6 +420,76 @@ class TestControllerAndEgoPhysicsPipeline:
         clip_start, clip_end = force_gt_trajectory.clip.call_args.args
         assert clip_start == 200_000
         assert clip_end <= force_gt_trajectory.time_range_us.stop
+
+    @pytest.mark.asyncio
+    async def test_controller_event_recoerces_gt_speed_at_handoff(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_controller: AsyncMock,
+        simple_trajectory: Trajectory,
+    ) -> None:
+        """The force-GT to policy transition should initialize from GT dynamics."""
+        handoff_us = 100_000
+        rollout_state.unbound.closed_loop_start_us = handoff_us
+        rollout_state.unbound.force_gt_duration_us = handoff_us
+
+        rollout_state.step_context = StepContext(
+            step_start_us=0,
+            target_time_us=handoff_us,
+            force_gt=True,
+            driver_trajectory=simple_trajectory,
+        )
+        await ControllerEvent(
+            timestamp_us=0,
+            control_timestep_us=handoff_us,
+            services=service_bundle,
+        ).run(rollout_state, EventQueue())
+        force_gt_call = mock_controller.run_controller_and_vehicle.call_args.kwargs
+        assert force_gt_call["force_gt"] is True
+        assert force_gt_call["coerce_dynamic_state"] is True
+
+        mock_controller.run_controller_and_vehicle.reset_mock()
+        rollout_state.step_context = StepContext(
+            step_start_us=handoff_us,
+            target_time_us=2 * handoff_us,
+            force_gt=False,
+            driver_trajectory=simple_trajectory,
+        )
+        await ControllerEvent(
+            timestamp_us=handoff_us,
+            control_timestep_us=handoff_us,
+            services=service_bundle,
+        ).run(rollout_state, EventQueue())
+
+        handoff_call = mock_controller.run_controller_and_vehicle.call_args.kwargs
+        assert handoff_call["force_gt"] is False
+        assert handoff_call["coerce_dynamic_state"] is True
+        assert rollout_state.force_gt_dynamics is not None
+        expected_handoff_dynamics = (
+            rollout_state.force_gt_dynamics.interpolate_dynamics(
+                np.array([handoff_us], dtype=np.uint64)
+            )[0]
+        )
+        np.testing.assert_allclose(
+            handoff_call["rig_linear_velocity_in_rig"],
+            expected_handoff_dynamics[0:3],
+        )
+
+        mock_controller.run_controller_and_vehicle.reset_mock()
+        rollout_state.step_context = StepContext(
+            step_start_us=2 * handoff_us,
+            target_time_us=3 * handoff_us,
+            force_gt=False,
+            driver_trajectory=simple_trajectory,
+        )
+        await ControllerEvent(
+            timestamp_us=2 * handoff_us,
+            control_timestep_us=handoff_us,
+            services=service_bundle,
+        ).run(rollout_state, EventQueue())
+        post_handoff_call = mock_controller.run_controller_and_vehicle.call_args.kwargs
+        assert post_handoff_call["coerce_dynamic_state"] is False
 
     @pytest.mark.asyncio
     async def test_controller_event_rejects_force_gt_trajectory_outside_step(

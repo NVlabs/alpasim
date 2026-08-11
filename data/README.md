@@ -15,6 +15,6 @@ This directory contains all subdirectories which we will need to mount to the va
 5. `drivers`
     * Local driver assets (e.g. AR1 checkpoints). The wizard creates this dir if missing when using `deploy=local`.
 
-**HuggingFace models (e.g. AR1):** Set the `HF_HOME` environment variable to control where models are cached (defaults to `~/.cache/huggingface`). Download models with `huggingface-cli download nvidia/Alpamayo-R1-10B` (you may need `huggingface-cli login` first). The wizard mounts the HF cache into the driver container.
+**HuggingFace models (e.g. Alpamayo):** Set the `HF_HOME` environment variable to control where models are cached (defaults to `~/.cache/huggingface`). Download a gated model with `huggingface-cli download nvidia/Alpamayo2-Super` after `huggingface-cli login`; the wizard mounts the HF cache into the driver container.
 
-The `auto-init.sh` and `auto-init-aws.sh` scripts automatically download example files necessary in each subdirectory. `auto-init.sh` prompts you to choose which model(s) to download (VaVAM-B and/or AR1).
+The `auto-init.sh` script automatically downloads example files necessary in each subdirectory and prompts you to choose which model(s) to download, including VaVAM-B, Alpamayo 1, 1.5, and 2 Super.

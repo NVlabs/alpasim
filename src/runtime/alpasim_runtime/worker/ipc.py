@@ -58,6 +58,8 @@ class PendingRolloutJob:
     rollout_spec_index: int
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
+    # µs to skip from the recording start. See RolloutSpec in runtime.proto.
+    start_time_offset_us: int = 0
     # Number of failed attempts before this pending attempt.
     retry_attempt: int = 0
     # Creation time (monotonic clock); basis for scheduler-wait telemetry.
@@ -83,6 +85,8 @@ class AssignedRolloutJob:
     scheduler_wait_seconds: float
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
+    # µs to skip from the recording start. See RolloutSpec in runtime.proto.
+    start_time_offset_us: int = 0
 
 
 @dataclass

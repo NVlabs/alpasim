@@ -132,6 +132,78 @@ def test_create_uses_rig_start_for_context_and_closed_loop_after_force_gt(
     assert rollout.traffic_objs["actor"].trajectory.time_range_us.start == 0
 
 
+def test_create_applies_start_time_offset(tmp_path) -> None:
+    """A start offset trims the clip so every timing anchor moves to the offset."""
+    rollout = UnboundRollout.create(
+        simulation_config=_simulation_config(),
+        scene_id="scene",
+        version_ids=RolloutMetadata.VersionIds(),
+        data_source=_artifact(),
+        rollouts_dir=str(tmp_path),
+        renderer_service=_sensorsim_renderer(),
+        start_time_offset_us=200_000,
+    )
+
+    # First camera frames (front .stop=200_000, left .stop=150_000) fall at or
+    # before the offset and are dropped; the second frames become the anchor.
+    assert rollout.first_camera_frame_ranges_us["camera_front"] == range(
+        270_000, 300_000
+    )
+    assert rollout.first_camera_frame_ranges_us["camera_left"] == range(
+        220_000, 250_000
+    )
+    assert rollout.egomotion_context_start_us == 200_000
+    assert rollout.render_start_timestamp_us == 250_000
+    assert rollout.first_policy_timestamp_us == 250_000
+    assert rollout.closed_loop_start_us == 350_000
+    assert rollout.end_timestamp_us == 450_000
+    assert rollout.n_sim_steps == 2
+    # GT and traffic are trimmed to begin at the offset.
+    assert rollout.gt_ego_trajectory.time_range_us.start == 200_000
+    assert rollout.traffic_objs["actor"].trajectory.time_range_us.start == 200_000
+
+
+def test_create_offset_zero_matches_no_offset(tmp_path) -> None:
+    """Passing offset 0 performs no clip and is identical to omitting it."""
+
+    def _anchors(**offset_kwarg) -> tuple[int, ...]:
+        rollout = UnboundRollout.create(
+            simulation_config=_simulation_config(),
+            scene_id="scene",
+            version_ids=RolloutMetadata.VersionIds(),
+            data_source=_artifact(),
+            rollouts_dir=str(tmp_path),
+            renderer_service=_sensorsim_renderer(),
+            **offset_kwarg,
+        )
+        return (
+            rollout.egomotion_context_start_us,
+            rollout.render_start_timestamp_us,
+            rollout.first_policy_timestamp_us,
+            rollout.closed_loop_start_us,
+            rollout.end_timestamp_us,
+            rollout.n_sim_steps,
+        )
+
+    assert _anchors(start_time_offset_us=0) == _anchors()
+
+
+def test_create_start_time_offset_past_camera_frames_raises(tmp_path) -> None:
+    """An offset that leaves no data fails as a (non-retryable) scene error."""
+    # camera_left's last frame ends at 250_000, so an offset there leaves it with
+    # no frames; create() reports this as an offset-aware InvalidSceneError.
+    with pytest.raises(InvalidSceneError, match="start_time_offset_us"):
+        UnboundRollout.create(
+            simulation_config=_simulation_config(),
+            scene_id="scene",
+            version_ids=RolloutMetadata.VersionIds(),
+            data_source=_artifact(),
+            rollouts_dir=str(tmp_path),
+            renderer_service=_sensorsim_renderer(),
+            start_time_offset_us=250_000,
+        )
+
+
 def test_create_clips_n_sim_steps_to_complete_policy_steps(tmp_path) -> None:
     rollout = UnboundRollout.create(
         simulation_config=_simulation_config(n_sim_steps=10),

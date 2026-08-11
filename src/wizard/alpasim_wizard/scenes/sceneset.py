@@ -52,7 +52,7 @@ def _load_and_merge_csvs(
     if len(frames) == 1:
         return frames[0]
 
-    merged = pl.concat(frames)
+    merged = pl.concat(frames, how="diagonal")
 
     # Check for duplicates across files
     key = [dedup_key] if isinstance(dedup_key, str) else dedup_key

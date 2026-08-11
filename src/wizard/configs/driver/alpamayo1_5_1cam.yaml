@@ -4,7 +4,7 @@
 
 defaults:
   - alpamayo1_5
-  - /cameras: 1cam
+  - /cameras: 1cam_1080
   - _self_
 
 # Alpamayo 1.5 single-camera preset for public single-view video-model runs.

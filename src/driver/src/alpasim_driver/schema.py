@@ -9,6 +9,22 @@ from omegaconf import MISSING
 
 
 @dataclass
+class TrajectorySelectionConfig:
+    """Selection between sampled trajectory candidates (Alpamayo models only).
+
+    Only takes effect with ``ModelConfig.num_trajectory_samples > 1``.
+    """
+
+    # ALWAYS_FIRST, CLOSEST_3D or CLOSEST_LATERAL; the latter two keep the
+    # driven path consistent with the plan of the previous cycle.
+    strategy: str = "ALWAYS_FIRST"
+    # Waypoints entering the distance average, counted from the first one used.
+    max_num_distance_points: int = 64
+    # Leading waypoints excluded from the distance average.
+    skip_first_n_distance_points: int = 0
+
+
+@dataclass
 class ModelConfig:
     """Unified model configuration for all model types.
 
@@ -25,8 +41,24 @@ class ModelConfig:
     checkpoint_path: str = MISSING  # Path to model checkpoint (.pt/.pth)
     device: str = MISSING  # Device to run inference on (cuda/cpu)
     tokenizer_path: str | None = None  # Only required for VAM
-    use_classifier_free_guidance_nav: bool = False  # A1.5 only
-    force_determinism: bool = False  # Alpamayo 1 only
+    # Weight for classifier-free guidance on the navigation instruction (A1.5
+    # only).  Unset leaves guidance to the checkpoint's diffusion config; a
+    # weight forces it on and blends the conditioned and unconditioned velocity
+    # fields, which costs a second forward pass (~60 GB VRAM) and needs an
+    # instruction to blend towards.
+    cfg_guidance_weight: float | None = None
+    force_determinism: bool = False  # Alpamayo models only
+    num_trajectory_samples: int = 1  # Alpamayo models only
+    # Where camera JPEGs are decoded.  ``cuda`` leaves the frames on the
+    # device, so the model's preprocessing resizes there too (Alpamayo models
+    # only; the others reach for numpy and will refuse a device frame).
+    image_decode_device: str = "cpu"  # cpu | cuda
+    # Alpamayo 2 only. Splits candidate sampling into sequential calls to cap
+    # peak GPU memory; unset samples all candidates in one call.
+    trajectory_candidate_microbatch_size: int | None = None
+    trajectory_selection: TrajectorySelectionConfig = field(
+        default_factory=TrajectorySelectionConfig
+    )
 
 
 @dataclass
@@ -96,8 +128,8 @@ class RectificationTargetConfig:
     tangential: tuple[float, ...] = ()
     thin_prism: tuple[float, ...] = ()
 
-    # We rectify a larger canvas and only crop in the end to allow for
-    # margin when applying the distortion of the pinhole camera.
+    # Rectify a larger canvas before cropping so pinhole distortion does not
+    # discard pixels needed at the final image boundary.
     max_overscan_scale: float = 2.0
     safety_margin_px: int = 10
 
@@ -131,5 +163,6 @@ class DriverConfig:
     # If true, generates debug images in `output_dir`
     plot_debug_images: bool = False
 
-    # Optional per-camera rectification definitions
+    # Optional f-theta-to-pinhole compatibility path, keyed by camera ID.
+    # NuRec presets leave this unset because NuRec renders pinhole directly.
     rectification: dict[str, RectificationTargetConfig] | None = None

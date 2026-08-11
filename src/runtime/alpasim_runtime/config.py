@@ -278,6 +278,25 @@ class RenderBundling(Enum):
 
 
 @dataclass
+class ForceGtFrameCacheConfig:
+    """Shared on-disk cache of deterministic force-GT camera frames.
+
+    During the force-GT warmup the ego follows the recorded trajectory, so
+    frames for a given scene + render configuration can be reused across
+    rollouts instead of re-rendered each time (sensorsim renderer only).
+    """
+
+    # Reuse force-GT frames from the shared cache instead of re-rendering them.
+    enabled: bool = False
+    # Shared storage for the cache; required when ``enabled``.
+    # Layout: <dir>/<scene_uuid>/<render_signature>/<cam>__<start>_<end>.<ext>.
+    cache_dir: str | None = None
+    # Folded into the cache render signature to bust the cache when the renderer
+    # launch spec changes; auto-filled by the wizard, set manually to override.
+    extra_key: str | None = None
+
+
+@dataclass
 class SimulationConfig:
     """
     Shared simulation parameters — applies to all scenes.
@@ -288,8 +307,17 @@ class SimulationConfig:
 
     control_timestep_us: int = 100_000
     pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
+    # Global default µs to skip from the start of each recording so the rollout
+    # begins that far into the clip. SceneConfig.start_time_offset_us overrides
+    # this per scene. 0 = start at the clip's first frame.
+    start_time_offset_us: int = 0
     force_gt_duration_us: int = 500_000  # 0.5s
     skip_driver_during_force_gt: bool = False
+    # Shared on-disk cache of deterministic force-GT camera frames, reused across
+    # rollouts instead of re-rendering them. See ``ForceGtFrameCacheConfig``.
+    force_gt_frame_cache: ForceGtFrameCacheConfig = field(
+        default_factory=ForceGtFrameCacheConfig
+    )
 
     # if true, we assert that each call to policy happens immediately after a frame has been
     # provided for each camera and the latest egomotion update. This flag does not modify
@@ -333,6 +361,9 @@ class SceneConfig:
 
     scene_id: str = MISSING
     n_rollouts: int | None = None  # None = use SimulationConfig.n_rollouts
+    # None = use SimulationConfig.start_time_offset_us. µs to skip from the
+    # recording start so the rollout begins that far into the clip.
+    start_time_offset_us: int | None = None
 
 
 @dataclass

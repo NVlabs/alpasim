@@ -5,6 +5,7 @@
 
 from .alpamayo1_5_model import Alpamayo15Model
 from .alpamayo1_model import Alpamayo1Model
+from .alpamayo2_model import Alpamayo2Model
 from .base import (
     BaseTrajectoryModel,
     CameraFrame,
@@ -19,6 +20,7 @@ from .vam_model import VAMModel
 __all__ = [
     "Alpamayo15Model",
     "Alpamayo1Model",
+    "Alpamayo2Model",
     "BaseTrajectoryModel",
     "CameraFrame",
     "CameraImages",

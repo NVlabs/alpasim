@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
 import os
@@ -13,13 +12,13 @@ import pickle
 import queue
 import socket
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from io import BytesIO
 from typing import Any, Callable, cast
 
 import hydra
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from alpasim_grpc import API_VERSION_MESSAGE
@@ -27,12 +26,9 @@ from alpasim_grpc.v0 import sensorsim_pb2
 from alpasim_grpc.v0.common_pb2 import (
     DynamicState,
     Empty,
-    Pose,
     PoseAtTime,
-    Quat,
     SessionRequestStatus,
     Trajectory,
-    Vec3,
     VersionId,
 )
 from alpasim_grpc.v0.egodriver_pb2 import (
@@ -51,12 +47,14 @@ from alpasim_grpc.v0.egodriver_pb2_grpc import (
     add_EgodriverServiceServicer_to_server,
 )
 from alpasim_plugins.plugins import models as model_registry
-from alpasim_utils.geometry import quat_to_yaw, yaw_to_quat_components
+from alpasim_utils.geometry import Pose as GeometryPose
+from alpasim_utils.geometry import Trajectory as GeometryTrajectory
+from alpasim_utils.geometry import pose_from_grpc, pose_to_grpc_at_time
 from omegaconf import OmegaConf
 from PIL import Image
+from torchvision.io import decode_jpeg
 
 import grpc
-import grpc.aio
 
 from .frame_cache import FrameCache
 from .models import DriveCommand
@@ -101,26 +99,54 @@ def _get_external_ip() -> str:
         return "unknown"
 
 
-def _rig_est_offsets_to_local_positions(
-    current_pose_in_local: PoseAtTime, offsets_in_rig: np.ndarray
-) -> np.ndarray:
-    """Project rig-est displacements onto the local-frame pose anchored by `current_pose`."""
+def _rig_est_waypoints_to_local_trajectory(
+    positions_in_rig: np.ndarray,
+    rotations_in_rig: np.ndarray,
+    pose_local_to_rig_t0: GeometryPose,
+    model_t0_us: int,
+    waypoint_timestamps_us: np.ndarray,
+) -> Trajectory:
+    """Express rig-est waypoint poses in the local frame anchored at model t0.
 
-    curr_x = current_pose_in_local.pose.vec.x
-    curr_y = current_pose_in_local.pose.vec.y
+    Args:
+        positions_in_rig: (T, 3) waypoint positions in the rig-est frame.
+        rotations_in_rig: (T, 3, 3) waypoint rotation matrices in the rig-est
+            frame.
+        pose_local_to_rig_t0: Rig pose in the local frame at model t0.
+        model_t0_us: Exact planning time used to build the model inputs.
+        waypoint_timestamps_us: Exact timestamps for the predicted waypoints.
 
-    curr_quat = current_pose_in_local.pose.quat
-    curr_yaw = quat_to_yaw(curr_quat)
+    Returns:
+        The trajectory in the local frame, led by the rig pose at model t0.
+        Empty when there are no waypoints.
+    """
+    if len(positions_in_rig) == 0:
+        return Trajectory()
+    if len(waypoint_timestamps_us) != len(positions_in_rig):
+        raise ValueError(
+            "Waypoint timestamps and positions must have the same length, got "
+            f"{len(waypoint_timestamps_us)} and {len(positions_in_rig)}."
+        )
 
-    cos_yaw = np.cos(curr_yaw)
-    sin_yaw = np.sin(curr_yaw)
+    waypoints_in_rig = np.tile(
+        np.eye(4, dtype=np.float32), (len(positions_in_rig), 1, 1)
+    )
+    waypoints_in_rig[:, :3, :3] = rotations_in_rig
+    waypoints_in_rig[:, :3, 3] = positions_in_rig
 
-    offsets_array = np.asarray(offsets_in_rig, dtype=float).reshape(-1, 2)
-    rotation = np.array([[cos_yaw, -sin_yaw], [sin_yaw, cos_yaw]], dtype=float)
-    rotated_offsets = offsets_array @ rotation.T
-
-    translation = np.array([curr_x, curr_y], dtype=float)
-    return rotated_offsets + translation
+    trajectory = Trajectory(
+        poses=[pose_to_grpc_at_time(pose_local_to_rig_t0, model_t0_us)]
+    )
+    for waypoint_in_rig, timestamp_us in zip(
+        waypoints_in_rig, waypoint_timestamps_us, strict=True
+    ):
+        waypoint_in_local = pose_local_to_rig_t0 @ GeometryPose.from_se3(
+            waypoint_in_rig
+        )
+        trajectory.poses.append(
+            pose_to_grpc_at_time(waypoint_in_local, int(timestamp_us))
+        )
+    return trajectory
 
 
 # Unique queue marker instructing the worker thread to flush and exit.
@@ -136,7 +162,7 @@ class DriveJob:
     command: DriveCommand
     pose: PoseAtTime | None
     timestamp_us: int
-    result: asyncio.Future[DriveResponse]
+    result: Future[ModelPrediction]
 
 
 @dataclass
@@ -148,15 +174,24 @@ class Session:
     debug_scene_id: str
 
     frame_caches: dict[str, FrameCache]
-    available_cameras_logical_ids: set[str]
-    desired_cameras_logical_ids: set[str]
-    camera_specs: dict[str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera]
     rectification_cfg: dict[str, RectificationTargetConfig] | None = None
-    rectifiers: dict[str, FthetaToPinholeRectifier | None] = field(default_factory=dict)
+    rectification_camera_specs: dict[
+        str, sensorsim_pb2.AvailableCamerasReturn.AvailableCamera
+    ] = field(default_factory=dict)
+    rectifiers: dict[str, FthetaToPinholeRectifier] = field(default_factory=dict)
+    rectifier_locks: dict[str, threading.Lock] = field(default_factory=dict, repr=False)
     poses: list[PoseAtTime] = field(default_factory=list)
     dynamic_states: list[tuple[int, DynamicState]] = field(default_factory=list)
     current_command: DriveCommand = DriveCommand.STRAIGHT  # Default to straight
     inference_count: int = 0
+    # Plan the model selected in the most recent inference of this session, in
+    # the local frame.  Used by models that select between multiple sampled
+    # trajectories.  None until such a model returns one.
+    last_selected_plan: GeometryTrajectory | None = None
+    # Most recent route, with waypoints in the rig frame at its own timestamp.
+    # None until the first route arrives, and for scenarios without a route.
+    route: Route | None = None
+    frames_trail_request_warned: bool = False
 
     @staticmethod
     def create(
@@ -186,7 +221,6 @@ class Session:
             else request.session_uuid
         )
 
-        available_cameras_logical_ids: set[str] = set()
         vehicle = request.rollout_spec.vehicle
         if vehicle is None:
             raise ValueError("Vehicle definition is required in DriveSessionRequest")
@@ -199,7 +233,6 @@ class Session:
                 raise ValueError(
                     "Logical ID is required for each camera in VehicleDefinition"
                 )
-            available_cameras_logical_ids.add(camera_def.logical_id)
             camera_specs[camera_def.logical_id] = camera_def
             logger.debug(
                 f"Available camera: {camera_def.logical_id}, "
@@ -211,22 +244,21 @@ class Session:
         if not desired_cameras_logical_ids:
             raise ValueError("No cameras specified in inference configuration")
 
-        missing_defs = desired_cameras_logical_ids - set(camera_specs.keys())
+        missing_defs = desired_cameras_logical_ids - camera_specs.keys()
         if missing_defs:
             raise ValueError(
                 f"Requested cameras {sorted(missing_defs)} are missing from the rollout spec"
             )
-        if cfg.rectification is not None:
-            missing_rect = desired_cameras_logical_ids - set(cfg.rectification.keys())
-            if missing_rect:
-                raise ValueError(
-                    "Missing rectification targets for cameras "
-                    f"{sorted(missing_rect)} in driver configuration"
-                )
 
-        rectifiers: dict[str, FthetaToPinholeRectifier | None] = {
-            logical_id: None for logical_id in desired_cameras_logical_ids
-        }
+        rectification_camera_ids = set(cfg.rectification or {})
+        unexpected_rectification = (
+            rectification_camera_ids - desired_cameras_logical_ids
+        )
+        if unexpected_rectification:
+            raise ValueError(
+                "Rectification configured for cameras not used by inference: "
+                f"{sorted(unexpected_rectification)}"
+            )
 
         # Create a FrameCache for each desired camera
         frame_caches: dict[str, FrameCache] = {}
@@ -242,17 +274,23 @@ class Session:
             seed=request.random_seed,
             debug_scene_id=debug_scene_id,
             frame_caches=frame_caches,
-            available_cameras_logical_ids=available_cameras_logical_ids,
-            desired_cameras_logical_ids=desired_cameras_logical_ids,
-            camera_specs=camera_specs,
             rectification_cfg=cfg.rectification,
-            rectifiers=rectifiers,
+            rectification_camera_specs={
+                logical_id: camera_specs[logical_id]
+                for logical_id in rectification_camera_ids
+            },
+            rectifier_locks={
+                logical_id: threading.Lock() for logical_id in rectification_camera_ids
+            },
         )
 
         return session
 
     def add_image(
-        self, logical_id: str, image_tensor: np.ndarray, timestamp_us: int
+        self,
+        logical_id: str,
+        image_tensor: np.ndarray | torch.Tensor,
+        timestamp_us: int,
     ) -> None:
         """Add an image observation for a specific camera."""
         if logical_id not in self.frame_caches:
@@ -271,46 +309,28 @@ class Session:
             return 0
         return min(cache.frame_count() for cache in self.frame_caches.values())
 
-    def _maybe_build_rectifier(
-        self, logical_id: str, source_resolution_hw: tuple[int, int]
-    ) -> FthetaToPinholeRectifier | None:
-        """Instantiate and cache a rectifier once the true source resolution is known."""
-
-        # Check if there's a rectifier for target camera in the config
-        if self.rectification_cfg is None or logical_id not in self.rectification_cfg:
-            return None
-
-        # Check if we already have a rectifier for this camera
-        if self.rectifiers.get(logical_id) is not None:
-            return self.rectifiers[logical_id]
-
-        # Build the rectifier
-        rectifier = build_ftheta_rectifier_for_resolution(
-            camera_proto=self.camera_specs[logical_id],
-            target_cfg=self.rectification_cfg[logical_id],
-            source_resolution_hw=source_resolution_hw,
-        )
-        self.rectifiers[logical_id] = rectifier
-        logger.debug(
-            "Built f-theta rectifier for %s using source resolution %s",
-            logical_id,
-            source_resolution_hw,
-        )
-        return rectifier
-
     def rectify_image(self, logical_id: str, image: Image.Image) -> Image.Image:
-        """Apply rectification for logical_id if configured."""
-        source_resolution_hw = (image.height, image.width)
-
-        # Need to do this lazily as we won't know the source resolution until
-        # after the first image is received.
-        # (The available cameras define the native camera resolutio, not the
-        # rendering resolution.)
-        rectifier = self._maybe_build_rectifier(logical_id, source_resolution_hw)
-
-        if rectifier is None:
+        """Rectify an f-theta image when this camera explicitly opts in."""
+        if self.rectification_cfg is None or logical_id not in self.rectification_cfg:
             return image
-        return Image.fromarray(rectifier.rectify(np.array(image)))
+
+        with self.rectifier_locks[logical_id]:
+            rectifier = self.rectifiers.get(logical_id)
+            if rectifier is None:
+                rectifier = build_ftheta_rectifier_for_resolution(
+                    camera_proto=self.rectification_camera_specs[logical_id],
+                    target_cfg=self.rectification_cfg[logical_id],
+                    source_resolution_hw=(image.height, image.width),
+                )
+                self.rectifiers[logical_id] = rectifier
+                logger.info(
+                    "Enabled f-theta-to-pinhole rectification for %s at %sx%s",
+                    logical_id,
+                    image.width,
+                    image.height,
+                )
+
+        return Image.fromarray(rectifier.rectify(np.asarray(image)))
 
     def add_egoposes(self, egoposes: Trajectory) -> None:
         """Add rig-est pose observations in the local frame."""
@@ -385,19 +405,19 @@ class Session:
         )
 
 
-def async_log_call(func: Callable) -> Callable:
-    """Helper to add logging for gRPC calls (sync or async)."""
+def log_call(func: Callable) -> Callable:
+    """Helper to add logging for gRPC calls."""
 
     @functools.wraps(func)
-    async def async_wrapped(*args: Any, **kwargs: Any) -> Any:
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             logger.debug("Calling %s", func.__name__)
-            return await func(*args, **kwargs)
+            return func(*args, **kwargs)
         except Exception:  # pragma: no cover - logging assistance
             logger.exception("Exception in %s", func.__name__)
             raise
 
-    return async_wrapped
+    return wrapped
 
 
 def _create_model(
@@ -439,7 +459,6 @@ class EgoDriverService(EgodriverServiceServicer):
     def __init__(
         self,
         cfg: DriverConfig,
-        loop: asyncio.AbstractEventLoop,
     ) -> None:
         """Initialize the Ego Driver service.
 
@@ -448,13 +467,10 @@ class EgoDriverService(EgodriverServiceServicer):
 
         Args:
             cfg: Hydra configuration containing model paths and inference settings
-            loop: Asyncio event loop for coordinating async operations and scheduling
-                futures from the worker thread back to the async gRPC handlers
         """
 
         # Private members
         self._cfg = cfg
-        self._loop = loop
 
         # Determine device
         self._device = torch.device(
@@ -469,6 +485,17 @@ class EgoDriverService(EgodriverServiceServicer):
             context_length=cfg.inference.context_length,
             output_frequency_hz=cfg.inference.output_frequency_hz,
         )
+
+        decode_device = cfg.model.image_decode_device
+        if decode_device not in ("cpu", "cuda"):
+            raise ValueError(
+                f"Unknown image_decode_device {decode_device!r}, expected cpu or cuda"
+            )
+        if decode_device == "cuda" and cfg.rectification:
+            raise ValueError(
+                "Rectification runs on host images, so it cannot be combined with "
+                "image_decode_device=cuda"
+            )
 
         # Get context length from model or config override
         self._context_length = (
@@ -487,12 +514,14 @@ class EgoDriverService(EgodriverServiceServicer):
         self._max_batch_size = cfg.inference.max_batch_size
         self._job_queue: queue.Queue[DriveJob | object] = queue.Queue()
         self._worker_stop = threading.Event()
+        self._worker_lifecycle_lock = threading.Lock()
         self._worker_thread = threading.Thread(
             target=self._worker_main,
             name="ego-driver-worker",
             daemon=True,
         )
         self._sessions: dict[str, Session] = {}
+        self._sessions_lock = threading.Lock()
 
         # Initialize trajectory optimizer if enabled
         self._trajectory_optimizer: TrajectoryOptimizer | None = None
@@ -528,13 +557,14 @@ class EgoDriverService(EgodriverServiceServicer):
 
         self._worker_thread.start()
 
-    async def stop_worker(self) -> None:
+    def stop_worker(self) -> None:
         """Signal the worker thread to stop and wait for it to exit."""
-        if not self._worker_stop.is_set():
-            self._worker_stop.set()
-            self._job_queue.put_nowait(_SENTINEL_JOB)
+        with self._worker_lifecycle_lock:
+            if not self._worker_stop.is_set():
+                self._worker_stop.set()
+                self._job_queue.put_nowait(_SENTINEL_JOB)
         if self._worker_thread.is_alive():
-            await asyncio.to_thread(self._worker_thread.join)
+            self._worker_thread.join()
 
     def _worker_main(self) -> None:
         """Blocking worker loop that batches drive jobs for inference."""
@@ -584,15 +614,11 @@ class EgoDriverService(EgodriverServiceServicer):
             except Exception as exc:
                 logger.exception("Inference batch failed")
                 for pending_job in batch:
-                    self._loop.call_soon_threadsafe(
-                        pending_job.result.set_exception, exc
-                    )
+                    pending_job.result.set_exception(exc)
             else:
                 logger.debug("Inference batch succeeded")
                 for pending_job, response in zip(batch, responses, strict=True):
-                    self._loop.call_soon_threadsafe(
-                        pending_job.result.set_result, response
-                    )
+                    pending_job.result.set_result(response)
 
             if stop_after_batch:
                 break
@@ -606,7 +632,7 @@ class EgoDriverService(EgodriverServiceServicer):
                 break
             if leftover is _SENTINEL_JOB:
                 continue
-            self._loop.call_soon_threadsafe(leftover.result.cancel)
+            leftover.result.cancel()
 
     def _get_speed_and_acceleration(self, session: Session) -> tuple[float, float]:
         """Extract speed and acceleration from session's dynamic state.
@@ -650,48 +676,30 @@ class EgoDriverService(EgodriverServiceServicer):
 
         return camera_images
 
-    def _maybe_save_rectification_debug_image(
+    def _maybe_save_debug_image(
         self,
-        pre_image: Image.Image,
-        post_image: Image.Image,
+        frame: np.ndarray | torch.Tensor,
         scene_id: str,
         logical_id: str,
         timestamp_us: int,
     ) -> None:
-        """Save pre- and post-rectification images side by side for
-        debugging."""
+        """Save the HWC frame supplied to the model for debugging."""
 
         if not self._cfg.plot_debug_images:
             return
 
         if not self._cfg.output_dir:
-            logger.warning("Output directory is not set; skipping rectification dump")
+            logger.warning("Output directory is not set; skipping debug image dump")
             return
 
-        session_folder = os.path.join(
-            self._cfg.output_dir, scene_id, "rectification_debug"
-        )
+        session_folder = os.path.join(self._cfg.output_dir, scene_id, "debug_images")
         os.makedirs(session_folder, exist_ok=True)
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-        axes[0].imshow(np.array(pre_image))
-        axes[0].set_title(f"Pre-rectification ({pre_image.width}x{pre_image.height})")
-        axes[0].axis("off")
-
-        axes[1].imshow(np.array(post_image))
-        axes[1].set_title(
-            f"Post-rectification ({post_image.width}x{post_image.height})"
-        )
-        axes[1].axis("off")
-
-        fig.suptitle(f"{logical_id} @ {timestamp_us} µs")
-        fig.tight_layout()
-
-        filename = f"{timestamp_us}_{logical_id}_rectification.png"
+        filename = f"{timestamp_us}_{logical_id}.png"
         output_path = os.path.join(session_folder, filename)
-        fig.savefig(output_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        if isinstance(frame, torch.Tensor):
+            frame = frame.cpu().numpy()
+        Image.fromarray(frame).save(output_path)
 
     def _run_batch(self, batch: list[DriveJob]) -> list[ModelPrediction]:
         """Run inference for a batch of jobs using the model abstraction.
@@ -704,59 +712,104 @@ class EgoDriverService(EgodriverServiceServicer):
             speed, acceleration = self._get_speed_and_acceleration(job.session)
             inference_seed = job.session.seed + job.session.inference_count
             job.session.inference_count += 1
+            camera_images = self._prepare_camera_images(job.session)
+            self._warn_once_if_frames_trail_request(job, camera_images)
             inputs.append(
                 PredictionInput(
-                    camera_images=self._prepare_camera_images(job.session),
+                    camera_images=camera_images,
                     command=job.command,
                     speed=speed,
                     acceleration=acceleration,
                     ego_pose_history=job.session.poses,
                     inference_seed=inference_seed,
+                    previous_plan=job.session.last_selected_plan,
+                    route=job.session.route,
                 )
             )
-        return self._model.predict_batch(inputs)
 
-    @async_log_call
-    async def start_session(
-        self, request: DriveSessionRequest, context: grpc.aio.ServicerContext
+        predictions = self._model.predict_batch(inputs)
+
+        for job, prediction in zip(batch, predictions, strict=True):
+            # Carry the plan into the next inference of this session so the model
+            # can keep its trajectory choice consistent across planning cycles.
+            job.session.last_selected_plan = prediction.selected_plan
+
+        return predictions
+
+    def _warn_once_if_frames_trail_request(
+        self, job: DriveJob, camera_images: CameraImages
+    ) -> None:
+        """Report a gap between the newest camera frame and the request time.
+
+        Models predict from the newest camera frame. Alpamayo predictions carry
+        that frame's exact t0 and interpolated pose through response conversion;
+        older plugins without explicit reference metadata retain the historical
+        request-time fallback. Report any gap so fallback plugins cannot silently
+        anchor a trajectory at a different time than the frame they observed.
+        """
+        if job.session.frames_trail_request_warned:
+            return
+
+        # Models that drive without cameras have nothing to compare.
+        newest_frame_us = max(
+            (
+                timestamp_us
+                for frames in camera_images.values()
+                for timestamp_us, _ in frames
+            ),
+            default=job.timestamp_us,
+        )
+        if newest_frame_us == job.timestamp_us:
+            return
+
+        job.session.frames_trail_request_warned = True
+        logger.warning(
+            "Newest camera frame is %+dus from the drive request "
+            "(frame=%d, request=%d). Predictions with explicit model-t0 metadata "
+            "retain the frame anchor; fallback plugins use the request anchor.",
+            newest_frame_us - job.timestamp_us,
+            newest_frame_us,
+            job.timestamp_us,
+        )
+
+    @log_call
+    def start_session(
+        self, request: DriveSessionRequest, context: grpc.ServicerContext
     ) -> SessionRequestStatus:
-        if request.session_uuid in self._sessions:
-            context.abort(
-                grpc.StatusCode.ALREADY_EXISTS,
-                f"Session {request.session_uuid} already exists.",
-            )
-            return SessionRequestStatus()
+        with self._sessions_lock:
+            if request.session_uuid in self._sessions:
+                context.abort(
+                    grpc.StatusCode.ALREADY_EXISTS,
+                    f"Session {request.session_uuid} already exists.",
+                )
+                return SessionRequestStatus()
 
-        logger.info(
-            "Starting %s session %s",
-            self._cfg.model.model_type,
-            request.session_uuid,
-        )
-        session = Session.create(
-            request,
-            self._cfg,
-            self._context_length,
-            subsample_factor=self._cfg.inference.subsample_factor,
-        )
-        self._sessions[request.session_uuid] = session
+            logger.info(
+                "Starting %s session %s",
+                self._cfg.model.model_type,
+                request.session_uuid,
+            )
+            session = Session.create(
+                request,
+                self._cfg,
+                self._context_length,
+                subsample_factor=self._cfg.inference.subsample_factor,
+            )
+            self._sessions[request.session_uuid] = session
 
         return SessionRequestStatus()
 
-    @async_log_call
-    async def close_session(
-        self, request: DriveSessionCloseRequest, context: grpc.aio.ServicerContext
+    @log_call
+    def close_session(
+        self, request: DriveSessionCloseRequest, context: grpc.ServicerContext
     ) -> Empty:
-        if request.session_uuid not in self._sessions:
-            raise KeyError(f"Session {request.session_uuid} does not exist.")
-
-        logger.info(f"Closing session {request.session_uuid}")
-        del self._sessions[request.session_uuid]
+        with self._sessions_lock:
+            logger.info(f"Closing session {request.session_uuid}")
+            del self._sessions[request.session_uuid]
         return Empty()
 
-    @async_log_call
-    async def get_version(
-        self, request: Empty, context: grpc.aio.ServicerContext
-    ) -> VersionId:
+    @log_call
+    def get_version(self, request: Empty, context: grpc.ServicerContext) -> VersionId:
         driver_version = version("alpasim_driver")
         model_type = self._cfg.model.model_type
         return VersionId(
@@ -765,35 +818,56 @@ class EgoDriverService(EgodriverServiceServicer):
             grpc_api_version=API_VERSION_MESSAGE,
         )
 
-    @async_log_call
-    async def submit_image_observation(
-        self, request: RolloutCameraImage, context: grpc.aio.ServicerContext
+    @log_call
+    def submit_image_observation(
+        self, request: RolloutCameraImage, context: grpc.ServicerContext
     ) -> Empty:
         grpc_image = request.camera_image
-        image = Image.open(BytesIO(grpc_image.image_bytes))
         session = self._sessions[request.session_uuid]
-        if grpc_image.logical_id not in session.desired_cameras_logical_ids:
+        if grpc_image.logical_id not in session.frame_caches:
             raise ValueError(f"Camera {grpc_image.logical_id} not in desired cameras")
 
-        rectified_image = session.rectify_image(grpc_image.logical_id, image)
-        self._maybe_save_rectification_debug_image(
-            image,
-            rectified_image,
+        if self._cfg.model.image_decode_device == "cuda":
+            # nvJPEG straight onto the inference device, so the model's
+            # preprocessing resizes there.  Permuting to HWC costs nothing, it
+            # only relabels the strides, and it keeps one frame layout.
+            buffer = torch.frombuffer(
+                bytearray(grpc_image.image_bytes), dtype=torch.uint8
+            )
+            frame = decode_jpeg(buffer, device=self._device).permute(1, 2, 0)
+        else:
+            image = Image.open(BytesIO(grpc_image.image_bytes))
+            frame = np.array(session.rectify_image(grpc_image.logical_id, image))
+
+        height, width = frame.shape[0], frame.shape[1]
+        minimum = self._model.MIN_FRAME_HW
+        if minimum is not None and (height < minimum[0] or width < minimum[1]):
+            # Small renders do not fail on their own: Alpamayo's vision
+            # processor fits frames to a pixel budget that a 320x512 render
+            # already meets, so it passes through untouched and costs vision
+            # tokens with no trace in the logs.
+            raise ValueError(
+                f"Camera {grpc_image.logical_id} renders {height}x{width}, below "
+                f"the {minimum[0]}x{minimum[1]} this model needs."
+            )
+
+        self._maybe_save_debug_image(
+            frame,
             session.debug_scene_id,
             grpc_image.logical_id,
             grpc_image.frame_end_us,
         )
         session.add_image(
             grpc_image.logical_id,
-            np.array(rectified_image),
+            frame,
             grpc_image.frame_end_us,
         )
 
         return Empty()
 
-    @async_log_call
-    async def submit_egomotion_observation(
-        self, request: RolloutEgoTrajectory, context: grpc.aio.ServicerContext
+    @log_call
+    def submit_egomotion_observation(
+        self, request: RolloutEgoTrajectory, context: grpc.ServicerContext
     ) -> Empty:
         session = self._sessions[request.session_uuid]
 
@@ -808,28 +882,30 @@ class EgoDriverService(EgodriverServiceServicer):
 
         return Empty()
 
-    @async_log_call
-    async def submit_route(
-        self, request: RouteRequest, context: grpc.aio.ServicerContext
+    @log_call
+    def submit_route(
+        self, request: RouteRequest, context: grpc.ServicerContext
     ) -> Empty:
         logger.debug("submit_route: waypoint count=%s", len(request.route.waypoints))
+        session = self._sessions[request.session_uuid]
+        session.route = request.route
         if self._cfg.route is not None:
-            self._sessions[request.session_uuid].update_command_from_route(
+            session.update_command_from_route(
                 request.route,
                 self._cfg.route.use_waypoint_commands,
                 self._cfg.route.command_distance_threshold,
                 self._cfg.route.min_lookahead_distance,
             )
         else:
-            self._sessions[request.session_uuid].update_command_from_route(
+            session.update_command_from_route(
                 request.route,
                 use_waypoint_commands=False,
             )
         return Empty()
 
-    @async_log_call
-    async def submit_recording_ground_truth(
-        self, request: GroundTruthRequest, context: grpc.aio.ServicerContext
+    @log_call
+    def submit_recording_ground_truth(
+        self, request: GroundTruthRequest, context: grpc.ServicerContext
     ) -> Empty:
         logger.debug("Ground truth received but not used by driver")
         return Empty()
@@ -838,13 +914,10 @@ class EgoDriverService(EgodriverServiceServicer):
         """Check if all cameras have enough frames for inference."""
         return session.all_cameras_ready()
 
-    @async_log_call
-    async def drive(
-        self, request: DriveRequest, context: grpc.aio.ServicerContext
+    @log_call
+    def drive(
+        self, request: DriveRequest, context: grpc.ServicerContext
     ) -> DriveResponse:
-        if request.session_uuid not in self._sessions:
-            raise KeyError(f"Session {request.session_uuid} not found")
-
         session = self._sessions[request.session_uuid]
 
         if not self._check_frames_ready(session):
@@ -879,7 +952,7 @@ class EgoDriverService(EgodriverServiceServicer):
                 trajectory=empty_traj,
             )
 
-        future: asyncio.Future[ModelPrediction] = self._loop.create_future()
+        future: Future[ModelPrediction] = Future()
         job = DriveJob(
             session_id=request.session_uuid,
             session=session,
@@ -888,14 +961,22 @@ class EgoDriverService(EgodriverServiceServicer):
             timestamp_us=request.time_now_us,
             result=future,
         )
-        self._job_queue.put_nowait(job)
+        with self._worker_lifecycle_lock:
+            if self._worker_stop.is_set():
+                if context is not None:
+                    context.abort(
+                        grpc.StatusCode.UNAVAILABLE,
+                        "Driver inference worker is stopping",
+                    )
+                raise RuntimeError("Driver inference worker is stopping")
+            self._job_queue.put_nowait(job)
 
         try:
-            prediction = await future
+            prediction = future.result()
         except ModelInputValidationError as exc:
             logger.error("Driver input validation failed: %s", exc)
             if context is not None:
-                await context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
             raise
 
         # Convert model prediction to Alpasim trajectory format
@@ -917,7 +998,10 @@ class EgoDriverService(EgodriverServiceServicer):
             "reasoning_text": reasoning_text,
         }
         debug_info = DriveResponse.DebugInfo(
-            unstructured_debug_info=pickle.dumps(debug_data)
+            unstructured_debug_info=pickle.dumps(debug_data),
+            sampled_trajectories=self._sampled_alpasim_trajectories(
+                prediction, job.pose, job.timestamp_us
+            ),
         )
         response = DriveResponse(trajectory=alpasim_traj, debug_info=debug_info)
 
@@ -930,51 +1014,39 @@ class EgoDriverService(EgodriverServiceServicer):
         current_pose: PoseAtTime,
         time_now_us: int,
     ) -> Trajectory:
-        """Convert model prediction to Alpasim trajectory format.
-
-        If the model provides headings, use them directly.
-        Otherwise, compute headings from position deltas (existing behavior).
+        """Convert the driven waypoints of a prediction to Alpasim trajectory format.
 
         Args:
-            prediction: Model prediction with trajectory_xy and optional headings.
+            prediction: Model prediction with waypoint poses in the rig frame.
             current_pose: Current vehicle pose in local frame.
             time_now_us: Current time in microseconds.
 
         Returns:
             Alpasim Trajectory protobuf message.
         """
-        trajectory = Trajectory()
-
-        model_trajectory = prediction.trajectory_xy
-        if model_trajectory is None or len(model_trajectory) == 0:
-            return trajectory
-
-        trajectory.poses.append(current_pose)
-
-        curr_z = current_pose.pose.vec.z
+        positions = prediction.selected_positions
         frequency_hz = self._model.output_frequency_hz
-        time_delta_us = int(1_000_000 / frequency_hz)
-        time_step = 1.0 / frequency_hz
 
-        # Apply trajectory optimization in rig frame if enabled
-        optimized_trajectory = model_trajectory
-        if self._trajectory_optimizer is not None and len(model_trajectory) >= 2:
+        # Apply trajectory optimization in rig frame if enabled.  It moves the
+        # waypoints within the ground plane and leaves their orientation to the
+        # model, so only x and y are taken from its result.
+        if self._trajectory_optimizer is not None and len(positions) >= 2:
             # Add heading to create [N, 3] trajectory for optimizer
-            rig_trajectory = add_heading_to_trajectory(model_trajectory)
+            rig_trajectory = add_heading_to_trajectory(positions[:, :2])
 
             # Run optimization
             opt_cfg = self._cfg.trajectory_optimizer
             result = self._trajectory_optimizer.optimize(
                 trajectory=rig_trajectory,
-                time_step=time_step,
+                time_step=1.0 / frequency_hz,
                 vehicle_constraints=self._vehicle_constraints,
                 retime_in_frenet=opt_cfg.retime_in_frenet,
                 retime_alpha=opt_cfg.retime_alpha,
             )
 
             if result.success:
-                # Extract x,y from optimized trajectory
-                optimized_trajectory = result.trajectory[:, :2]
+                positions = positions.copy()
+                positions[:, :2] = result.trajectory[:, :2]
                 logger.debug(
                     "Trajectory optimization succeeded: iterations=%s, cost=%.4f",
                     result.iterations,
@@ -983,57 +1055,110 @@ class EgoDriverService(EgodriverServiceServicer):
             else:
                 logger.warning("Trajectory optimization failed: %s", result.message)
 
-        # Convert rig offsets to local frame positions
-        local_positions = _rig_est_offsets_to_local_positions(
-            current_pose, optimized_trajectory
+        pose_local_to_rig_t0, model_t0_us, waypoint_timestamps_us = (
+            self._prediction_reference(prediction, current_pose, time_now_us)
         )
-        num_positions = local_positions.shape[0]
+        return _rig_est_waypoints_to_local_trajectory(
+            positions,
+            prediction.selected_rotations,
+            pose_local_to_rig_t0,
+            model_t0_us,
+            waypoint_timestamps_us,
+        )
 
-        if num_positions == 0:
-            return trajectory
+    def _prediction_reference(
+        self,
+        prediction: ModelPrediction,
+        current_pose: PoseAtTime,
+        time_now_us: int,
+    ) -> tuple[GeometryPose, int, np.ndarray]:
+        """Resolve the exact frame and timestamps for response conversion.
 
-        # Pre-compute timestamps
-        steps = np.arange(1, num_positions + 1, dtype=np.int64)
-        timestamps_us = (time_now_us + steps * time_delta_us).tolist()
-
-        # Transform model headings from rig frame to local frame
-        current_yaw = quat_to_yaw(current_pose.pose.quat)
-        local_yaws = prediction.headings + current_yaw
-
-        for local_xy, yaw, timestamp_us in zip(
-            local_positions, local_yaws, timestamps_us, strict=True
-        ):
-            local_x, local_y = map(float, local_xy)
-            quat_w, quat_x, quat_y, quat_z = yaw_to_quat_components(float(yaw))
-
-            trajectory.poses.append(
-                PoseAtTime(
-                    pose=Pose(
-                        vec=Vec3(x=local_x, y=local_y, z=curr_z),
-                        quat=Quat(w=quat_w, x=quat_x, y=quat_y, z=quat_z),
-                    ),
-                    timestamp_us=timestamp_us,
+        Alpamayo models report the camera-derived t0 and its interpolated pose.
+        Other model plugins retain the historical request-time fallback.
+        """
+        reference_fields = (
+            prediction.model_t0_us,
+            prediction.pose_local_to_rig_t0,
+            prediction.waypoint_timestamps_us,
+        )
+        if all(value is None for value in reference_fields):
+            model_t0_us = time_now_us
+            step_us = int(1_000_000 / self._model.output_frequency_hz)
+            waypoint_timestamps_us = (
+                model_t0_us
+                + np.arange(
+                    1, prediction.candidate_positions.shape[1] + 1, dtype=np.uint64
                 )
+                * step_us
+            )
+            return (
+                pose_from_grpc(current_pose.pose),
+                model_t0_us,
+                waypoint_timestamps_us,
+            )
+        if any(value is None for value in reference_fields):
+            raise ValueError(
+                "ModelPrediction must provide model_t0_us, "
+                "pose_local_to_rig_t0, and waypoint_timestamps_us together."
             )
 
-        return trajectory
+        assert prediction.model_t0_us is not None
+        assert prediction.pose_local_to_rig_t0 is not None
+        assert prediction.waypoint_timestamps_us is not None
+        return (
+            prediction.pose_local_to_rig_t0,
+            int(prediction.model_t0_us),
+            np.asarray(prediction.waypoint_timestamps_us, dtype=np.uint64),
+        )
+
+    def _sampled_alpasim_trajectories(
+        self,
+        prediction: ModelPrediction,
+        current_pose: PoseAtTime,
+        time_now_us: int,
+    ) -> list[Trajectory]:
+        """Convert every sampled candidate of a prediction to Alpasim trajectories.
+
+        Reported alongside the driven trajectory so that scorers can measure the
+        spread of the samples the model drew, e.g. minADE.
+        """
+        pose_local_to_rig_t0, model_t0_us, waypoint_timestamps_us = (
+            self._prediction_reference(prediction, current_pose, time_now_us)
+        )
+        return [
+            _rig_est_waypoints_to_local_trajectory(
+                positions,
+                rotations,
+                pose_local_to_rig_t0,
+                model_t0_us,
+                waypoint_timestamps_us,
+            )
+            for positions, rotations in zip(
+                prediction.candidate_positions,
+                prediction.candidate_rotations,
+                strict=True,
+            )
+        ]
 
 
-async def serve(cfg: DriverConfig) -> None:
-    """Start the gRPC server with the driver service."""
-    server = grpc.aio.server()
-    loop = asyncio.get_running_loop()
+def serve(cfg: DriverConfig, ready_event: threading.Event | None = None) -> None:
+    """Start the gRPC server with the driver service.
 
-    service = EgoDriverService(
-        cfg=cfg,
-        loop=loop,
-    )
+    Args:
+        cfg: Driver configuration.
+        ready_event: Optional event to signal when the service is initialized.
+            Used when the server runs in a background thread (GUI mode).
+    """
+    server = grpc.server(ThreadPoolExecutor())
+
+    service = EgoDriverService(cfg=cfg)
     add_EgodriverServiceServicer_to_server(service, server)
 
     address = f"{cfg.host}:{cfg.port}"
     server.add_insecure_port(address)
 
-    await server.start()
+    server.start()
     external_ip = _get_external_ip()
     logger.info(
         "Starting %s driver on %s (external IP: %s:%d)",
@@ -1043,54 +1168,15 @@ async def serve(cfg: DriverConfig) -> None:
         cfg.port,
     )
 
-    try:
-        await server.wait_for_termination()
-    finally:
-        await service.stop_worker()
-
-
-def _run_grpc_in_thread(cfg: DriverConfig, ready_event: threading.Event) -> None:
-    """Run the gRPC server in a background thread.
-
-    Used when the main thread is needed for GUI (e.g., ManualModel on macOS).
-
-    Args:
-        cfg: Driver configuration.
-        ready_event: Event to signal when the service is initialized.
-    """
-
-    async def serve_with_signal() -> None:
-        server = grpc.aio.server()
-        loop = asyncio.get_running_loop()
-
-        service = EgoDriverService(
-            cfg=cfg,
-            loop=loop,
-        )
-        add_EgodriverServiceServicer_to_server(service, server)
-
-        address = f"{cfg.host}:{cfg.port}"
-        server.add_insecure_port(address)
-
-        await server.start()
-        external_ip = _get_external_ip()
-        logger.info(
-            "Starting %s driver on %s (external IP: %s:%d)",
-            cfg.model.model_type,
-            address,
-            external_ip,
-            cfg.port,
-        )
-
-        # Signal that the service (and model) is ready
+    if ready_event is not None:
         ready_event.set()
 
-        try:
-            await server.wait_for_termination()
-        finally:
-            await service.stop_worker()
-
-    asyncio.run(serve_with_signal())
+    try:
+        server.wait_for_termination()
+    finally:
+        server_stop = server.stop(grace=None)
+        service.stop_worker()
+        server_stop.wait()
 
 
 @hydra.main(
@@ -1122,7 +1208,7 @@ def main(hydra_cfg: DriverConfig) -> None:
 
         ready_event = threading.Event()
         grpc_thread = threading.Thread(
-            target=_run_grpc_in_thread,
+            target=serve,
             args=(cfg, ready_event),
             name="grpc-server",
             daemon=True,
@@ -1141,7 +1227,7 @@ def main(hydra_cfg: DriverConfig) -> None:
 
         return
 
-    asyncio.run(serve(cfg))
+    serve(cfg)
 
 
 if __name__ == "__main__":

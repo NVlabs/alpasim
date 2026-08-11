@@ -24,7 +24,9 @@ from alpasim_runtime.config import (
     SingleUserEndpointConfig,
     UserEndpointConfig,
     UserSimulatorConfig,
+    VideoModelConfig,
 )
+from alpasim_runtime.runtime_context import validate_renderer_config
 from alpasim_runtime.validation import (
     _log_awaitable_progress,
     gather_versions_from_addresses,
@@ -403,3 +405,63 @@ async def test_gather_versions_fails_when_non_skipped_service_has_no_addresses(
             _make_user_endpoints(),
             renderer_kind=RendererKind.sensorsim,
         )
+
+
+def _force_gt_cache_config(
+    skip_rendering: bool,
+    trafficsim_skip: bool,
+    skip_driver: bool = True,
+    cache_dir: str | None = "/force_gt_cache",
+) -> SimulatorConfig:
+    config = _make_simulator_config()
+    config.user.simulation_config.force_gt_frame_cache.enabled = skip_rendering
+    config.user.simulation_config.skip_driver_during_force_gt = skip_driver
+    config.user.simulation_config.force_gt_frame_cache.cache_dir = cache_dir
+    config.user.endpoints.trafficsim.skip = trafficsim_skip
+    return config
+
+
+def test_force_gt_cache_noop_when_feature_disabled() -> None:
+    config = _force_gt_cache_config(
+        skip_rendering=False, trafficsim_skip=False, skip_driver=False
+    )
+    # No raise: caching is off, so the cache restrictions do not apply.
+    validate_renderer_config(config)
+
+
+def test_force_gt_cache_ok_when_trafficsim_and_driver_skipped() -> None:
+    config = _force_gt_cache_config(skip_rendering=True, trafficsim_skip=True)
+    validate_renderer_config(config)
+
+
+def test_force_gt_cache_allows_caching_with_active_trafficsim() -> None:
+    # Trafficsim is handed a handover_time_us past the last force-GT frame, so it
+    # stays on logged (deterministic) traffic through the force-GT window. Caching
+    # therefore does not require trafficsim to be skipped.
+    config = _force_gt_cache_config(skip_rendering=True, trafficsim_skip=False)
+    validate_renderer_config(config)
+
+
+def test_force_gt_cache_rejects_caching_with_driver_query() -> None:
+    config = _force_gt_cache_config(
+        skip_rendering=True, trafficsim_skip=True, skip_driver=False
+    )
+    with pytest.raises(ValueError, match="skip_driver_during_force_gt"):
+        validate_renderer_config(config)
+
+
+def test_force_gt_cache_rejects_caching_without_cache_dir() -> None:
+    config = _force_gt_cache_config(
+        skip_rendering=True, trafficsim_skip=True, cache_dir=None
+    )
+    with pytest.raises(ValueError, match="force_gt_frame_cache.cache_dir"):
+        validate_renderer_config(config)
+
+
+def test_force_gt_cache_rejects_video_model_renderer() -> None:
+    config = _force_gt_cache_config(skip_rendering=True, trafficsim_skip=True)
+    config.user.renderer = RendererConfig(
+        kind=RendererKind.video_model, video_model_config=VideoModelConfig()
+    )
+    with pytest.raises(ValueError, match="only supported by the sensorsim"):
+        validate_renderer_config(config)

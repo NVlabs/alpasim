@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from alpasim_wizard.context import TelemetryPorts, WizardContext
@@ -14,7 +16,10 @@ from alpasim_wizard.schema import DebugFlags, RunMode
 
 
 def _context(
-    tmp_path: Path, *, dry_run: bool = False, enable_mps: bool = False
+    tmp_path: Path,
+    *,
+    dry_run: bool = False,
+    enable_mps: bool = False,
 ) -> WizardContext:
     cfg = SimpleNamespace(
         wizard=SimpleNamespace(
@@ -46,10 +51,17 @@ def _context(
 
 
 def _deployment(
-    tmp_path: Path, *, dry_run: bool = False, enable_mps: bool = False
+    tmp_path: Path,
+    *,
+    dry_run: bool = False,
+    enable_mps: bool = False,
 ) -> SlurmDeployment:
     deployment = SlurmDeployment.__new__(SlurmDeployment)
-    deployment.context = _context(tmp_path, dry_run=dry_run, enable_mps=enable_mps)
+    deployment.context = _context(
+        tmp_path,
+        dry_run=dry_run,
+        enable_mps=enable_mps,
+    )
     return deployment
 
 
@@ -59,6 +71,7 @@ def _container(uuid: str) -> SimpleNamespace:
 
 def _slurm_container(deployment: SlurmDeployment, gpu: int | None) -> SimpleNamespace:
     return SimpleNamespace(
+        name="driver",
         uuid="driver-0",
         context=deployment.context,
         service_config=SimpleNamespace(image="driver-image", remap_root=False),
@@ -123,92 +136,76 @@ def test_slurm_run_isolates_submit_environment_except_job_id_unless_requested(
     assert "export XDG_CACHE_HOME=/tmp/.cache;" in explicit_command
 
 
-def test_slurm_cleanup_runs_after_blocking_runtime_srun(
+@pytest.mark.parametrize(
+    (
+        "launcher_poll_results",
+        "wait_results",
+        "expected_launch_count",
+        "expect_timeout",
+    ),
+    [
+        ([None, None], [False, TimeoutError("not ready")], 1, True),
+        ([1], [False, True], 2, False),
+        ([None, 1], [False, TimeoutError("not ready"), True], 2, False),
+    ],
+    ids=["running-launcher", "exited-launcher", "exit-during-final-wait"],
+)
+def test_slurm_relaunches_service_only_after_launcher_exits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    launcher_poll_results: list[int | None],
+    wait_results: list[bool | TimeoutError],
+    expected_launch_count: int,
+    expect_timeout: bool,
 ) -> None:
     deployment = _deployment(tmp_path)
-    driver = _container("driver-0")
-    runtime = _container("runtime-0")
-    events = []
-
-    monkeypatch.setattr(
-        deployment,
-        "get_missing_containers",
-        lambda containers: containers,
-    )
-    monkeypatch.setattr(deployment, "wait_for_containers", lambda *args, **kwargs: True)
-    monkeypatch.setattr(
-        deployment,
-        "_get_slurm_dispatch_command",
-        lambda container, mode: object(),
-    )
-
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del command, log_dir, dry_run
-        events.append(("dispatch", blocking))
-        return ""
-
-    def fake_cleanup(containers):
-        events.append(("cleanup", [container.uuid for container in containers]))
-
-    monkeypatch.setattr(
-        "alpasim_wizard.deployment.slurm.dispatch_command",
-        fake_dispatch,
-    )
-    monkeypatch.setattr(deployment, "_cleanup_launched_service_steps", fake_cleanup)
-
-    deployment.deploy([driver], containers_to_start_last=[runtime])
-
-    assert events == [
-        ("dispatch", False),
-        ("dispatch", True),
-        ("cleanup", ["driver-0"]),
-    ]
-
-
-def test_slurm_cleanup_targets_only_launched_non_runtime_steps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deployment = _deployment(tmp_path)
-    driver = _container("driver-0")
+    deployment.context.cfg.wizard.nr_retries = 2
     renderer = _container("renderer-0")
     runtime = _container("runtime-0")
-    cleaned_up = []
+    initial_process = MagicMock(spec=subprocess.Popen)
+    initial_process.poll.side_effect = launcher_poll_results
+    replacement_process = MagicMock(spec=subprocess.Popen)
+    service_processes = iter([initial_process, replacement_process])
+    service_launches = []
 
     monkeypatch.setattr(
         deployment,
         "get_missing_containers",
-        lambda _containers: [driver],
+        lambda _containers: [renderer],
     )
-    monkeypatch.setattr(deployment, "wait_for_containers", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         deployment,
-        "_get_slurm_dispatch_command",
-        lambda container, mode: object(),
+        "wait_for_containers",
+        MagicMock(side_effect=wait_results),
     )
+    monkeypatch.setattr(
+        deployment,
+        "_get_dispatch_command",
+        lambda container, mode: container.uuid,
+    )
+    monkeypatch.setattr(deployment, "_cleanup_launched_service_steps", lambda _: None)
 
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del log_dir, dry_run, blocking
-        del command
-        return ""
+    def fake_background(command, *, log_dir, dry_run):
+        del log_dir, dry_run
+        service_launches.append(command)
+        return next(service_processes)
 
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.dispatch_background",
+        fake_background,
+    )
     monkeypatch.setattr(
         "alpasim_wizard.deployment.slurm.dispatch_command",
-        fake_dispatch,
-    )
-    monkeypatch.setattr(
-        deployment,
-        "_cleanup_launched_service_steps",
-        lambda containers: cleaned_up.extend(
-            container.uuid for container in containers
-        ),
+        lambda *args, **kwargs: "",
     )
 
-    deployment.deploy([driver, renderer], containers_to_start_last=[runtime])
+    if expect_timeout:
+        with pytest.raises(TimeoutError, match="not ready"):
+            deployment.deploy([renderer], containers_to_start_last=[runtime])
+    else:
+        deployment.deploy([renderer], containers_to_start_last=[runtime])
 
-    assert cleaned_up == ["driver-0"]
+    assert service_launches == ["renderer-0"] * expected_launch_count
 
 
 def test_slurm_cleanup_failure_does_not_mask_runtime_exit(
@@ -228,7 +225,7 @@ def test_slurm_cleanup_failure_does_not_mask_runtime_exit(
     monkeypatch.setattr(deployment, "wait_for_containers", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         deployment,
-        "_get_slurm_dispatch_command",
+        "_get_dispatch_command",
         lambda container, mode: (
             "runtime" if container.uuid == "runtime-0" else "service"
         ),
@@ -239,8 +236,8 @@ def test_slurm_cleanup_failure_does_not_mask_runtime_exit(
         lambda container: "cleanup",
     )
 
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del log_dir, dry_run, blocking
+    def fake_dispatch(command, *, log_dir, dry_run):
+        del log_dir, dry_run
         if command == "runtime":
             raise RuntimeError("runtime failed")
         if command == "cleanup":
@@ -251,6 +248,10 @@ def test_slurm_cleanup_failure_does_not_mask_runtime_exit(
         "alpasim_wizard.deployment.slurm.dispatch_command",
         fake_dispatch,
     )
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.dispatch_background",
+        lambda *args, **kwargs: None,
+    )
 
     with caplog.at_level(logging.WARNING, logger="alpasim_wizard.deployment.slurm"):
         with pytest.raises(RuntimeError, match="runtime failed"):
@@ -260,39 +261,32 @@ def test_slurm_cleanup_failure_does_not_mask_runtime_exit(
     assert "cleanup failed" in caplog.text
 
 
-def test_slurm_dry_run_does_not_cleanup(
+def test_slurm_cleans_up_services_when_readiness_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deployment = _deployment(tmp_path, dry_run=True)
+    deployment = _deployment(tmp_path)
     driver = _container("driver-0")
     runtime = _container("runtime-0")
-    commands = []
-
+    cleanup = MagicMock()
+    monkeypatch.setattr(deployment, "get_missing_containers", lambda _: [driver])
     monkeypatch.setattr(
         deployment,
-        "get_missing_containers",
-        lambda containers: containers,
+        "wait_for_containers",
+        MagicMock(side_effect=TimeoutError("not ready")),
     )
+    monkeypatch.setattr(deployment, "_get_dispatch_command", lambda c, _: c.uuid)
+    monkeypatch.setattr(deployment, "_cleanup_launched_services", cleanup)
     monkeypatch.setattr(
-        deployment,
-        "_get_slurm_dispatch_command",
-        lambda container, mode: object(),
+        "alpasim_wizard.deployment.slurm.dispatch_background",
+        lambda *args, **kwargs: MagicMock(spec=subprocess.Popen),
     )
 
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del command, log_dir, dry_run
-        commands.append(blocking)
-        return ""
+    with pytest.raises(TimeoutError, match="not ready"):
+        deployment.deploy([driver], containers_to_start_last=[runtime])
 
-    monkeypatch.setattr(
-        "alpasim_wizard.deployment.slurm.dispatch_command",
-        fake_dispatch,
-    )
-
-    deployment.deploy([driver], containers_to_start_last=[runtime])
-
-    assert commands == [False, True]
+    cleanup.assert_called_once()
+    assert list(cleanup.call_args.args[0]) == ["driver-0"]
 
 
 def test_slurm_run_mps_env_and_mount(
@@ -340,8 +334,8 @@ def test_mps_daemon_start_and_stop_commands(
     deployment = _deployment(tmp_path, enable_mps=True)
     commands = []
 
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del log_dir, dry_run, blocking
+    def fake_dispatch(command, *, log_dir, dry_run):
+        del log_dir, dry_run
         commands.append(command)
         return ""
 
@@ -368,8 +362,8 @@ def test_mps_pipe_dir_cleanup_runs_when_daemon_shutdown_fails(
     deployment = _deployment(tmp_path, enable_mps=True)
     commands = []
 
-    def fake_dispatch(command, *, log_dir, dry_run, blocking):
-        del log_dir, dry_run, blocking
+    def fake_dispatch(command, *, log_dir, dry_run):
+        del log_dir, dry_run
         commands.append(command)
         if command.startswith("echo quit |"):
             raise RuntimeError("MPS shutdown failed")
@@ -382,5 +376,8 @@ def test_mps_pipe_dir_cleanup_runs_when_daemon_shutdown_fails(
 
     deployment._stop_mps_daemon()
 
-    assert len(commands) == 2
-    assert commands[1] == "rm -rf /tmp/nvidia-mps-123"
+    assert commands == [
+        "echo quit | CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps-123 "
+        "nvidia-cuda-mps-control",
+        "rm -rf /tmp/nvidia-mps-123",
+    ]

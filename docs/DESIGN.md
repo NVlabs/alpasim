@@ -24,7 +24,7 @@ The simulator interfaces with [a driver](/src/driver) - the egovehicle policy ne
 main target of the simulation and creates trajectories to complete the feedback loop. The services
 communicate with a gRPC protocol defined in the [gRPC API](/src/grpc/).
 
-![Alpasim architecture diagram](assets/images/alpasim-architecture.png)
+![Alpasim architecture diagram](/docs/assets/images/alpasim-architecture.png)
 
 ## Data flow of the simulation
 

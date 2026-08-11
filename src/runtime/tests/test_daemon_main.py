@@ -86,6 +86,20 @@ async def test_servicer_returns_rollout_returns_in_request_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_servicer_prefetch_scene_forwards_scene_id() -> None:
+    """The runtime RPC acknowledges a completed scene prefetch."""
+    engine = SimpleNamespace(prefetch_scene=AsyncMock())
+    servicer = RuntimeDaemonServicer(engine=engine)
+
+    response = await servicer.prefetch_scene(
+        runtime_pb2.ScenePrefetchRequest(scene_id="clipgt-a"), _AbortContext()
+    )
+
+    assert response == common_pb2.Empty()
+    engine.prefetch_scene.assert_awaited_once_with("clipgt-a")
+
+
+@pytest.mark.asyncio
 async def test_servicer_shutdown_rpc_acknowledges_and_triggers_callback() -> None:
     on_shutdown_requested = Mock()
     servicer = RuntimeDaemonServicer(

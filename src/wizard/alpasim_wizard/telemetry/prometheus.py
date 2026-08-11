@@ -156,8 +156,7 @@ def _build_file_sd_targets(
     if local:
         runtime_host = (
             "localhost"
-            if cfg.wizard.run_method.name == "SLURM"
-            or cfg.wizard.debug_flags.use_localhost
+            if cfg.wizard.run_method.is_slurm or cfg.wizard.debug_flags.use_localhost
             else "runtime-0"
         )
         exporter_host = "localhost"
@@ -221,7 +220,7 @@ def _cleanup_stale_file_sd(file_sd_dir: Path) -> None:
             logger.warning("Skipping invalid file-SD file %s: %s", path, exc)
             continue
 
-        path.unlink()
+        path.unlink(missing_ok=True)
         with suppress(OSError):
             path.parent.rmdir()
 

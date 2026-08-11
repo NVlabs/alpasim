@@ -202,6 +202,11 @@ SERVICE_EXCHANGES = {
             response=None,  # Special case - no response in ASL
         ),
         ExchangeConfig(
+            method="batch_render_rgb",
+            request_entry="batch_render_request",
+            response=None,
+        ),
+        ExchangeConfig(
             method="get_available_cameras",
             request_entry="available_cameras_request",
             response="available_cameras_return",

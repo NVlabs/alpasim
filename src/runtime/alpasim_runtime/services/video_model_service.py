@@ -125,18 +125,13 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
         """Return the generated gRPC stub class for this renderer service."""
         return video_model_pb2_grpc.WorldModelServiceStub
 
-    async def _open_connection(self) -> None:
-        """Open gRPC connection with larger video chunk message limits."""
-        if self.skip:
-            return
-        self.channel = grpc.aio.insecure_channel(
-            self.address,
-            options=[
-                ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
-                ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
-            ],
-        )
-        self.stub = self.stub_class(self.channel)
+    @property
+    def channel_options(self) -> list[tuple[str, int]]:
+        """Allow video chunks larger than gRPC's default message size."""
+        return [
+            ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+            ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+        ]
 
     def make_initial_render_event(self, **kwargs: Any) -> Any:
         """Create the initial video-model prefetch event for a rollout."""

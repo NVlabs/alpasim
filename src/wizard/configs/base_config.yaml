@@ -23,7 +23,7 @@ defines:
   filesystem: ???
   driver_model: ???
   image_registry: ""
-  base_image: "${defines.image_registry}alpasim-base:${repo-version:}"
+  base_image: "${defines.image_registry}alpasim-base:${repo-base-image-tag:}"
   hf_cache: "${oc.env:HF_HOME,${oc.env:HOME}/.cache/huggingface}"
 
   # defaults will work out of the box \/
@@ -65,9 +65,8 @@ wizard:
   # assert that all defined volume mounts exist at the start of the simulation
   validate_mount_points: true
 
-  # the directory which will be searched for `.sqsh` files with images needed for simulation when running on ORD with
-  # `wizard.run_method=SLURM`. The default location should contain all files required for running alpasim versions from
-  # the repo but you may need to add your own cache if you're playing with custom-built images.
+  # directories searched for `.sqsh` images by Slurm deployment methods. The defaults should contain all images
+  # required by repo versions, but custom-built images may require another cache.
   sqshcaches:
     - "${defines.filesystem}/sqsh"
     - "${defines.filesystem}/sqsh/dev"
@@ -77,7 +76,7 @@ wizard:
   baseport: 6000
   runtime_server_port: null
 
-  # Does not need to be touched. For slurm runs (wizard.run_method=SLURM) this will be replaced with the slurm job ID
+  # Does not need to be touched. Slurm runs replace this with the Slurm job ID.
   slurm_job_id: null
 
   # Services to run for simulation (e.g., ["driver", "renderer", "physics", "trafficsim", "controller", "runtime"])
@@ -253,7 +252,6 @@ services:
       - "${repo-relative:'plugins'}:/repo/plugins"
       - "/proc:/host/proc:ro"
       - "/sys:/host/sys:ro"
-      - "/:/rootfs:ro"
 
 runtime:
   # nr_workers and endpoints.*.n_concurrent_rollouts are set by topology configs.
@@ -310,6 +308,19 @@ runtime:
     n_rollouts: 1 # how many rollouts to simulate for that scenario
     force_gt_duration_us: 1_700_000 # 1.7s
     skip_driver_during_force_gt: false # When true, force-GT warmup does not call driver.drive
+    # When enabled, force-GT camera frames are cached on shared storage and
+    # replayed across rollouts/runs instead of being re-rendered every time
+    # (sensorsim renderer only). cache_dir must point at a shared, writable
+    # location; inside the runtime container the scene cache is mounted at
+    # /mnt/nre-data, so a subdirectory there is shared across runs and nodes.
+    force_gt_frame_cache:
+      enabled: false
+      cache_dir: /mnt/nre-data/force_gt_frame_cache
+      # Folded into the cache key so a different renderer build/flags never reuses
+      # stale frames. Left null here: the wizard auto-fills it with a fingerprint
+      # of the renderer service spec (image + command + environments). Set a
+      # string to override the auto fingerprint or to force a fresh cache.
+      extra_key: null
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
     # Which sensorsim bundled-render RPC to use (NONE = one render_rgb per camera).
     # Options: NONE | BATCH_RENDER_RGB (NRE) | RENDER_AGGREGATED (ODL).

@@ -80,3 +80,19 @@ def test_adapter_rejects_mismatched_session_uuids_length() -> None:
 
     with pytest.raises(ValueError, match="session_uuids"):
         build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
+
+
+def test_adapter_propagates_start_time_offset_to_every_job() -> None:
+    """Every expanded PendingRolloutJob carries the spec's start_time_offset_us."""
+    req = runtime_pb2.SimulationRequest(
+        rollout_specs=[
+            runtime_pb2.RolloutSpec(
+                scenario_id="clipgt-a",
+                nr_rollouts=2,
+                start_time_offset_us=1_500_000,
+            )
+        ]
+    )
+
+    jobs = build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
+    assert [job.start_time_offset_us for job in jobs] == [1_500_000, 1_500_000]

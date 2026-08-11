@@ -47,9 +47,15 @@ def test_get_plugin_info_returns_all_groups() -> None:
 
 
 def test_models_registry_has_core_models_when_driver_installed() -> None:
-    """When alpasim_driver is installed, alpasim.models lists alpamayo1, alpamayo1_5, manual, vam."""
+    """The model registry lists every entry point from alpasim_driver."""
     names = models.get_names()
-    expected = {"alpamayo1", "alpamayo1_5", "manual", "vam"}
+    expected = {
+        "alpamayo1",
+        "alpamayo1_5",
+        "alpamayo1_5_recipes_sft",
+        "manual",
+        "vam",
+    }
     for name in expected:
         assert name in names, f"Expected model {name} in alpasim.models (got {names})"
 

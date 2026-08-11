@@ -176,6 +176,15 @@ def test_server_mode_generates_and_publishes_runtime_endpoint(tmp_path: Path) ->
     }
 
 
+def test_direct_enroot_disables_container_process_exporter(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.wizard.run_method = RunMethod.SLURM_ENROOT
+
+    container_set = build_container_set(_context(cfg), "uuid")
+
+    assert "ALPASIM_PROCESS_EXPORTER_MODE=host" in container_set.prometheus.environments
+
+
 def test_external_services_are_marked_unmanaged_in_network_config(
     tmp_path: Path,
 ) -> None:
@@ -348,6 +357,37 @@ def test_file_sd_cleanup_removes_old_unreachable_files(
     assert new_file.exists()
 
 
+def test_file_sd_cleanup_tolerates_a_concurrent_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_sd_dir = tmp_path / "file-sd"
+    file_sd_dir.mkdir(parents=True)
+    old_file = file_sd_dir / "old.json"
+    old_file.write_text(
+        json.dumps(
+            [
+                {
+                    "targets": ["host-a:6100"],
+                    "labels": {"job": "alpasim-runtime-worker"},
+                }
+            ]
+        )
+    )
+    old_mtime = time.time() - 6 * 60 * 60
+    os.utime(old_file, (old_mtime, old_mtime))
+
+    def remove_while_checking(_target: str) -> bool:
+        old_file.unlink()
+        return False
+
+    monkeypatch.setattr(prometheus, "_target_reachable", remove_while_checking)
+
+    prometheus._cleanup_stale_file_sd(file_sd_dir)
+
+    assert not old_file.exists()
+
+
 def test_central_file_sd_publication_is_removed_on_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -393,6 +433,76 @@ def test_external_video_model_is_first_class_network_endpoint(
     assert "sensorsim" not in network
     assert "video_model" not in network
     assert "extra_services" not in network
+
+
+def _generate_runtime_simulation_config(tmp_path: Path, cfg) -> dict:
+    ConfigurationManager(str(tmp_path))._generate_runtime_config(cfg, [], _context(cfg))
+    user_config = yaml.safe_load(
+        (tmp_path / "generated-user-config-0.yaml").read_text()
+    )
+    return user_config["simulation_config"]
+
+
+def test_runtime_config_renderer_cache_fingerprint(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.runtime = OmegaConf.create(
+        {
+            "nr_workers": 1,
+            "endpoints": {"do_shutdown": True},
+            "simulation_config": {"force_gt_frame_cache": {"enabled": True}},
+        }
+    )
+    cfg.services.renderer = OmegaConf.create(
+        {"image": "nre:26.04", "command": ["serve", "--enable-fixer"]}
+    )
+    key = _generate_runtime_simulation_config(tmp_path, cfg)["force_gt_frame_cache"][
+        "extra_key"
+    ]
+    assert key.startswith("renderer-")
+
+    # A renderer flag change must produce a different fingerprint.
+    cfg.services.renderer = OmegaConf.create(
+        {"image": "nre:26.04", "command": ["serve"]}
+    )
+    changed = _generate_runtime_simulation_config(tmp_path, cfg)[
+        "force_gt_frame_cache"
+    ]["extra_key"]
+    assert changed != key
+
+    # An explicit key is preserved (no auto fingerprint).
+    cfg.runtime.simulation_config.force_gt_frame_cache.extra_key = "manual-key"
+    assert (
+        _generate_runtime_simulation_config(tmp_path, cfg)["force_gt_frame_cache"][
+            "extra_key"
+        ]
+        == "manual-key"
+    )
+
+
+def test_no_fingerprint_when_caching_disabled(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.runtime = OmegaConf.create(
+        {"nr_workers": 1, "endpoints": {"do_shutdown": True}, "simulation_config": {}}
+    )
+    cfg.services.renderer = OmegaConf.create(
+        {"image": "nre:26.04", "command": ["serve"]}
+    )
+    sim_config = _generate_runtime_simulation_config(tmp_path, cfg)
+    assert "extra_key" not in sim_config.get("force_gt_frame_cache", {})
+
+
+def test_caching_requires_local_renderer_for_fingerprint(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.runtime = OmegaConf.create(
+        {
+            "nr_workers": 1,
+            "endpoints": {"do_shutdown": True},
+            "simulation_config": {"force_gt_frame_cache": {"enabled": True}},
+        }
+    )
+    cfg.services.renderer = None
+    with pytest.raises(ValueError, match="external_services"):
+        _generate_runtime_simulation_config(tmp_path, cfg)
 
 
 def test_run_sim_services_rejects_unset_renderer_service() -> None:

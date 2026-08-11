@@ -334,11 +334,17 @@ uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_d
 > :warning: Both models are large (10B parameters). Alpamayo 1 requires ~40 GB VRAM;
 > Alpamayo 1.5 standard inference also requires ~40 GB VRAM.
 
-To enable classifier-free guidance navigation for Alpamayo 1.5 (requires ~60 GB VRAM):
+To strengthen how much Alpamayo 1.5 follows the navigation instruction derived from
+the route, run the classifier-free guidance variant (requires ~60 GB VRAM):
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_dir=$PWD/tutorial_alpamayo driver.model.use_classifier_free_guidance_nav=true
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5_cfg_guidance wizard.log_dir=$PWD/tutorial_alpamayo
 ```
+
+Each planning cycle Alpamayo 1.5 sees the newest four frames of every configured camera, an
+ego pose history covering the previous 1.5 s, and a navigation instruction such as
+`Turn left in 20m` derived from the submitted route. Alpamayo 1 has no navigation
+conditioning and drives on imagery and ego history alone.
 
 To visualize the predicted chain-of-causation reasoning you can change the generated video layout:
 
@@ -412,14 +418,15 @@ instructions.
 
 #### Using Scene Suites
 
-Scene suites provide pre-validated collections of scenes for testing. To use the public sceneset
-with 916 validated scenes (:warning: this will download all the scenes):
+Scene suites provide pre-validated collections of scenes for testing. To use the public
+`public_2601` suite (:warning: this will download every scene in the suite):
 
 ```bash
 uv run alpasim_wizard deploy=local topology=1gpu driver=vavam scenes.test_suite_id=public_2601 wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across all 916 scenes in the `public_2601` suite from the 26.01 release dataset.
+This will run simulations across every scene currently listed for the `public_2601` suite in
+[`data/scenes/sim_suites.csv`](/data/scenes/sim_suites.csv).
 
 ## Custom components
 

@@ -29,6 +29,10 @@ from alpasim_runtime.events.base import (
     SimulationEndEvent,
 )
 from alpasim_runtime.events.controller import ControllerEvent
+from alpasim_runtime.events.force_gt_utils import (
+    FORCE_GT_REFERENCE_HORIZON_US,
+    force_gt_dynamic_trajectory,
+)
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import PolicyEvent
 from alpasim_runtime.events.state import RolloutState, ServiceBundle, StepContext
@@ -38,6 +42,8 @@ from alpasim_runtime.force_gt_blend import (
     force_gt_physics_blend_alpha,
     force_gt_physics_blend_hold_end_us,
 )
+from alpasim_runtime.force_gt_cache_signature import build_force_gt_render_signature
+from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache
 from alpasim_runtime.route_generator import RouteGenerator
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
@@ -103,8 +109,15 @@ class EventBasedRollout:
     camera_catalog: CameraCatalog
     eval_config: EvalConfig
     eval_executor: ProcessPoolExecutor
+    # Globally shared on-disk cache reused across rollouts/runs to skip
+    # re-rendering force-GT frames. ``None`` disables force-GT render caching.
+    force_gt_frame_cache: ForceGtFrameCache | None = None
 
-    # Mutable state (initialized in __post_init__)
+    # Mutable state (initialized in __post_init__). ``scene_uuid`` and
+    # ``render_signature`` are the two force-GT cache directory levels; both are
+    # set together once camera definitions resolve, or both stay ``None``.
+    force_gt_scene_uuid: str | None = field(init=False, default=None)
+    force_gt_render_signature: str | None = field(init=False, default=None)
     ego_trajectory: geometry.DynamicTrajectory = field(init=False)
     ego_trajectory_estimate: geometry.DynamicTrajectory = field(init=False)
     force_gt_ego_trajectory: geometry.Trajectory | None = field(
@@ -250,13 +263,18 @@ class EventBasedRollout:
         return corrected_aabb.transform(aabb_to_ds, is_relative=True)
 
     async def _build_force_gt_physics_blend_trajectory(self) -> geometry.Trajectory:
-        """Build force-GT fallback that eases from recorded GT to physics."""
+        """Build force-GT fallback and the post-handover controller lookahead."""
         unbound = self.unbound
         gt_hold_end_us = force_gt_physics_blend_hold_end_us(unbound)
         configured_blend_end_us = (
             unbound.render_start_timestamp_us + unbound.force_gt_duration_us
         )
         blend_end_us = min(configured_blend_end_us, unbound.end_timestamp_us)
+        reference_end_us = min(
+            blend_end_us + FORCE_GT_REFERENCE_HORIZON_US,
+            unbound.end_timestamp_us,
+            unbound.gt_ego_trajectory.time_range_us.stop - 1,
+        )
 
         if blend_end_us <= gt_hold_end_us:
             return unbound.gt_ego_trajectory.clip(
@@ -267,19 +285,20 @@ class EventBasedRollout:
         dt_us = unbound.control_timestep_us
         clipped_gt_timestamps = unbound.gt_ego_trajectory.clip(
             unbound.egomotion_context_start_us,
-            blend_end_us + 1,
+            reference_end_us + 1,
         ).timestamps_us
         timestamps = list(
-            range(unbound.first_policy_timestamp_us, blend_end_us + 1, dt_us)
+            range(unbound.first_policy_timestamp_us, reference_end_us + 1, dt_us)
         )
-        if not timestamps or timestamps[-1] != blend_end_us:
-            timestamps.append(blend_end_us)
+        if not timestamps or timestamps[-1] != reference_end_us:
+            timestamps.append(reference_end_us)
         timestamps = sorted(
             set(
                 [
                     unbound.egomotion_context_start_us,
                     gt_hold_end_us,
                     blend_end_us,
+                    reference_end_us,
                     *clipped_gt_timestamps.tolist(),
                     *timestamps,
                 ]
@@ -320,14 +339,58 @@ class EventBasedRollout:
 
     def _create_rollout_state(self) -> RolloutState:
         """Create the RolloutState from the current rollout."""
+        force_gt_trajectory = self.force_gt_ego_trajectory
+        if force_gt_trajectory is None:
+            force_gt_trajectory = self.unbound.gt_ego_trajectory
         return RolloutState(
             unbound=self.unbound,
             ego_trajectory=self.ego_trajectory,
             ego_trajectory_estimate=self.ego_trajectory_estimate,
             traffic_objs=self.traffic_objs,
             force_gt_ego_trajectory=self.force_gt_ego_trajectory,
+            force_gt_dynamics=force_gt_dynamic_trajectory(force_gt_trajectory),
+            force_gt_frame_cache=self.force_gt_frame_cache,
+            force_gt_scene_uuid=self.force_gt_scene_uuid,
+            force_gt_render_signature=self.force_gt_render_signature,
             step_context=StepContext(),
             last_egopose_update_us=None,
+        )
+
+    def _resolve_force_gt_cache_coordinates(self) -> None:
+        """Set the per-rollout force-GT cache directory levels on ``self``.
+
+        Leaves both ``None`` when caching is disabled (feature off or no cache
+        configured). When caching is enabled a cache key must be derivable, so a
+        missing USDZ path or empty camera set raises rather than silently
+        disabling the cache.
+        """
+        if (
+            self.force_gt_frame_cache is None
+            or not self.unbound.use_cached_frames_during_force_gt
+        ):
+            return
+
+        camera_definitions = {
+            camera.logical_id: self.camera_catalog.get_camera_definition(
+                self.unbound.scene_id, camera.logical_id
+            )
+            for camera in self.runtime_cameras
+        }
+        # Key the cache by the stable dataset UUID rather than the USDZ
+        # filename: the two are not always the same (e.g. for the public
+        # dataset), while the UUID uniquely identifies the scene contents.
+        scene_uuid = self.unbound.nre_uuid
+        if not scene_uuid or scene_uuid == "None" or not camera_definitions:
+            raise ValueError(
+                "Cannot build a force-GT cache key: "
+                f"scene_uuid={scene_uuid!r}, cameras={sorted(camera_definitions)}"
+            )
+
+        self.force_gt_scene_uuid = scene_uuid
+        self.force_gt_render_signature = build_force_gt_render_signature(
+            unbound=self.unbound,
+            camera_definitions=camera_definitions,
+            smooth_trajectories=getattr(self.data_source, "_smooth_trajectories", None),
         )
 
     def _create_service_bundle(self) -> ServiceBundle:
@@ -497,6 +560,10 @@ class EventBasedRollout:
                 for camera_cfg in self.unbound.camera_configs
             ]
 
+            # Resolve the force-GT cache coordinates now that camera definitions
+            # are available (depends on the resolved intrinsics/extrinsics).
+            self._resolve_force_gt_cache_coordinates()
+
             await async_stack.enter_async_context(
                 self.driver.rollout_session(
                     uuid=str(self.unbound.rollout_uuid),
@@ -619,6 +686,7 @@ def create_event_rollout(
     camera_catalog: CameraCatalog,
     eval_config: EvalConfig,
     eval_executor: ProcessPoolExecutor,
+    force_gt_frame_cache: ForceGtFrameCache | None = None,
 ) -> EventBasedRollout:
     """Construct :class:`EventBasedRollout` with the active renderer service."""
     return EventBasedRollout(
@@ -632,4 +700,5 @@ def create_event_rollout(
         camera_catalog=camera_catalog,
         eval_config=eval_config,
         eval_executor=eval_executor,
+        force_gt_frame_cache=force_gt_frame_cache,
     )

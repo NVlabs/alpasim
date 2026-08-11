@@ -56,6 +56,22 @@ class RuntimeDaemonServicer(runtime_pb2_grpc.RuntimeServiceServicer):
 
         raise RuntimeError("context.abort did not terminate request")
 
+    async def prefetch_scene(
+        self,
+        request: runtime_pb2.ScenePrefetchRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> common_pb2.Empty:
+        """Warm a scene in the rollout cell's NRE cache."""
+        try:
+            await self._engine.prefetch_scene(request.scene_id)
+            return common_pb2.Empty()
+        except ValueError as exc:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except DaemonUnavailableError as exc:
+            await context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
+
+        raise RuntimeError("context.abort did not terminate request")
+
     async def shut_down(
         self,
         request: common_pb2.Empty,

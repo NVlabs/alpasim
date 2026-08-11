@@ -12,12 +12,18 @@ REPO_ROOT="${SCRIPT_DIR}/.."
 # ---------------------------------------------------------------------------
 
 # Each model: label, default state (1=on, 0=off), download command
-model_labels=( "VaVAM-B"  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)"  "A1.5 (HuggingFace, nvidia/Alpamayo-1.5-10B)" )
-model_states=( 1          0                                             0 )
+model_labels=(
+  "VaVAM-B"
+  "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)"
+  "A1.5 (HuggingFace, nvidia/Alpamayo-1.5-10B)"
+  "A2 Super (HuggingFace, nvidia/Alpamayo2-Super)"
+)
+model_states=( 1 0 0 0 )
 model_commands=(
   '"${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b'
   'uv run huggingface-cli download nvidia/Alpamayo-R1-10B'
   'uv run huggingface-cli download nvidia/Alpamayo-1.5-10B && uv run huggingface-cli download nvidia/Cosmos-Reason2-8B'
+  'uv run huggingface-cli download nvidia/Alpamayo2-Super'
 )
 
 # ---------------------------------------------------------------------------

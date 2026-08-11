@@ -275,8 +275,6 @@ class VAMModel(BaseTrajectoryModel):
         for i in range(batch_size):
             trajectory_xy = _format_trajs(trajectories[i : i + 1])
             headings = self._compute_headings_from_trajectory(trajectory_xy)
-            results.append(
-                ModelPrediction(trajectory_xy=trajectory_xy, headings=headings)
-            )
+            results.append(ModelPrediction.from_planar(trajectory_xy, headings))
 
         return results

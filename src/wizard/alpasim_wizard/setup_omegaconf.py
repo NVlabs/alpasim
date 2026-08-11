@@ -10,6 +10,7 @@ Sets up the logger and config schema for the wizard, and provides a main_wrapper
 
 import logging
 import os
+import subprocess
 from typing import Callable
 
 import hydra
@@ -243,10 +244,43 @@ def _read_repo_version() -> str:
     return data["project"]["version"]
 
 
+def _git_output(*args: str) -> str | None:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _read_base_image_tag() -> str:
+    """Return the stable or CI-built base image tag for this checkout."""
+    version = _read_repo_version()
+    branch = _git_output("rev-parse", "--abbrev-ref", "HEAD")
+    if branch in {None, "HEAD", "main"}:
+        return version
+
+    merge_base = _git_output("merge-base", "HEAD", "origin/main")
+    if merge_base is None:
+        return version
+
+    changed_files = _git_output("diff", "--name-only", f"{merge_base}...HEAD")
+    if changed_files is None or "pyproject.toml" not in changed_files.splitlines():
+        return version
+
+    commit_sha = _git_output("rev-parse", "HEAD")
+    return commit_sha[:8] if commit_sha else version
+
+
 OmegaConf.register_new_resolver("repo-relative", lambda path: str(REPO_ROOT / path))
 OmegaConf.register_new_resolver("cmd-line-args", lambda cfg: cmd_line_args(cfg))
 OmegaConf.register_new_resolver("or", lambda a, b: a or b)
 OmegaConf.register_new_resolver("repo-version", _read_repo_version)
+OmegaConf.register_new_resolver("repo-base-image-tag", _read_base_image_tag)
 
 
 def main_wrapper(main: Callable) -> None:

@@ -61,6 +61,12 @@ class ControllerEvent(RecurringEvent):
         step_start_us = ctx.step_start_us
         target_time_us = ctx.target_time_us
         force_gt = ctx.force_gt
+        handoff = (
+            not force_gt
+            and state.unbound.force_gt_duration_us > 0
+            and step_start_us == state.unbound.closed_loop_start_us
+        )
+        coerce_dynamic_state = force_gt or handoff
         reference_trajectory_of_rig_in_local = ctx.driver_trajectory
         assert reference_trajectory_of_rig_in_local is not None
 
@@ -85,14 +91,18 @@ class ControllerEvent(RecurringEvent):
             reference_trajectory_of_rig_in_local = controller_reference_trajectory(
                 state.force_gt_trajectory, step_start_us
             )
+        else:
+            fallback_trajectory_local_to_rig = reference_trajectory_of_rig_in_local
 
-            dt = (target_time_us - step_start_us) / 1e6
-            pose_local_to_rig_t0 = state.force_gt_trajectory.interpolate_pose(
-                step_start_us
-            )
-            pose_local_to_rig_t1 = state.force_gt_trajectory.interpolate_pose(
-                target_time_us
-            )
+        if coerce_dynamic_state:
+            if state.force_gt_dynamics is None:
+                raise RuntimeError("force-GT dynamics were not initialized")
+            gt_dynamics = state.force_gt_dynamics.interpolate_dynamics(
+                np.array([step_start_us], dtype=np.uint64)
+            )[0]
+            rig_linear_velocity_in_rig = gt_dynamics[0:3]
+            rig_angular_velocity_in_rig = gt_dynamics[3:6]
+            rig_linear_acceleration_in_rig = gt_dynamics[6:9]
         else:
             assert len(state.ego_trajectory.timestamps_us) >= 2, (
                 "ego_trajectory must have at least 2 entries by the time the "
@@ -105,7 +115,10 @@ class ControllerEvent(RecurringEvent):
             pose_local_to_rig_t0 = state.ego_trajectory.get_pose(-2)
             pose_local_to_rig_t1 = state.ego_trajectory.last_pose
 
-            fallback_trajectory_local_to_rig = reference_trajectory_of_rig_in_local
+            pose_rig0_to_rig1 = pose_local_to_rig_t0.inverse() @ pose_local_to_rig_t1
+            rig_linear_velocity_in_rig = pose_rig0_to_rig1.vec3 / dt
+            rig_angular_velocity_in_rig = 2.0 * pose_rig0_to_rig1.quat[0:3] / dt
+            rig_linear_acceleration_in_rig = np.zeros(3, dtype=np.float64)
 
         planner_delay_buffer.add(
             reference_trajectory_of_rig_in_local.transform(pose_local_to_rig.inverse()),
@@ -113,18 +126,16 @@ class ControllerEvent(RecurringEvent):
         )
         rig_reference_trajectory = planner_delay_buffer.at(step_start_us)
 
-        pose_rig0_to_rig1 = pose_local_to_rig_t0.inverse() @ pose_local_to_rig_t1
-        rig_linear_velocity_in_rig = pose_rig0_to_rig1.vec3 / dt
-        rig_angular_velocity_in_rig = 2.0 * pose_rig0_to_rig1.quat[0:3] / dt
-
         propagated_states = await controller.run_controller_and_vehicle(
             now_us=step_start_us,
             pose_local_to_rig=pose_local_to_rig,
             rig_linear_velocity_in_rig=rig_linear_velocity_in_rig,
             rig_angular_velocity_in_rig=rig_angular_velocity_in_rig,
+            rig_linear_acceleration_in_rig=rig_linear_acceleration_in_rig,
             rig_reference_trajectory_in_rig=rig_reference_trajectory,
             future_us=target_time_us,
             force_gt=force_gt,
+            coerce_dynamic_state=coerce_dynamic_state,
             fallback_trajectory_local_to_rig=fallback_trajectory_local_to_rig,
             pose_reporting_interval_us=state.unbound.pose_reporting_interval_us
             or state.unbound.control_timestep_us,

@@ -24,7 +24,7 @@ from alpasim_runtime.errors import InvalidSceneError
 from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.sensorsim_service import ImageFormat
 from alpasim_utils.geometry import Pose, Trajectory
-from alpasim_utils.scenario import AABB, TrafficObject, TrafficObjects
+from alpasim_utils.scenario import AABB, Rig, TrafficObject, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
 from trajdata.maps import VectorMap
 
@@ -66,25 +66,33 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
 
 def _build_rollout_timing(
     simulation_config: SimulationConfig,
-    data_source: SceneDataSource,
+    rig: Rig,
     camera_configs: list[RuntimeCameraConfig],
     *,
     renderer_service: RendererService,
 ) -> RolloutTiming:
+    """Derive the rollout timing anchors from the (possibly clipped) rig.
+
+    Anchors the render start on the first camera frame (or the trajectory
+    start when headless), derives the first policy timestamp and force-GT
+    boundary, and clamps ``n_sim_steps`` to however many complete control
+    steps fit before the recording ends. Raises ``ValueError`` when not even
+    one step fits.
+    """
     camera_logical_ids = [camera_cfg.logical_id for camera_cfg in camera_configs]
-    egomotion_context_start_us = data_source.rig.trajectory.time_range_us.start
+    egomotion_context_start_us = rig.trajectory.time_range_us.start
 
     # ``first_camera_frame_end_us`` raises through ``first_camera_frame_ranges_us``
     # when no cameras are configured.  Headless rollouts fall back to the GT
     # trajectory start as the render anchor.
     if camera_logical_ids:
-        first_camera_frame_ranges_us = data_source.rig.first_camera_frame_ranges_us(
+        first_camera_frame_ranges_us = rig.first_camera_frame_ranges_us(
             camera_logical_ids
         )
-        render_start_us = data_source.rig.first_camera_frame_end_us(camera_logical_ids)
+        render_start_us = rig.first_camera_frame_end_us(camera_logical_ids)
     else:
         first_camera_frame_ranges_us = {}
-        render_start_us = data_source.rig.trajectory.time_range_us.start
+        render_start_us = rig.trajectory.time_range_us.start
 
     if simulation_config.assert_zero_decision_delay and camera_configs:
         for camera_cfg in camera_configs:
@@ -98,7 +106,7 @@ def _build_rollout_timing(
     )
 
     closed_loop_start_us = render_start_us + simulation_config.force_gt_duration_us
-    last_valid_gt_timestamp_us = data_source.rig.trajectory.time_range_us.stop - 1
+    last_valid_gt_timestamp_us = rig.trajectory.time_range_us.stop - 1
     n_sim_steps_allowed_by_time = max(
         0,
         (last_valid_gt_timestamp_us - first_policy_timestamp_us)
@@ -171,6 +179,8 @@ class UnboundRollout:
     end_timestamp_us: int
     force_gt_duration_us: int
     skip_driver_during_force_gt: bool
+    use_cached_frames_during_force_gt: bool
+    force_gt_frame_cache_extra_key: str | None
     physics_update_mode: PhysicsUpdateMode
     save_path_root: str
     control_timestep_us: int
@@ -210,17 +220,37 @@ class UnboundRollout:
         rollouts_dir: str,
         renderer_service: RendererService,
         session_uuid: str | None = None,
+        start_time_offset_us: int = 0,
     ) -> UnboundRollout:
-        """Create UnboundRollout from SceneDataSource."""
+        """Create UnboundRollout from SceneDataSource.
+
+        ``start_time_offset_us`` drops the first microseconds of the recording
+        so the rollout begins that far into the clip; the rest of the timing is
+        derived as if the recording were that much shorter.
+        """
         camera_configs = list(simulation_config.cameras)
         renderer_service.validate_timing_alignment(simulation_config)
-        timing = _build_rollout_timing(
-            simulation_config,
-            data_source,
-            camera_configs,
-            renderer_service=renderer_service,
+        rig = (
+            data_source.rig.clip_start(start_time_offset_us)
+            if start_time_offset_us
+            else data_source.rig
         )
-        gt_ego_trajectory = data_source.rig.trajectory
+        # A clip that is too short — natively or after the start offset — cannot
+        # host a rollout. Surface it as a deterministic (non-retryable) scene
+        # error rather than the raw ValueError from timing construction.
+        try:
+            timing = _build_rollout_timing(
+                simulation_config,
+                rig,
+                camera_configs,
+                renderer_service=renderer_service,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if start_time_offset_us:
+                detail = f"{detail} (start_time_offset_us={start_time_offset_us})"
+            raise InvalidSceneError(scene_id, detail) from exc
+        gt_ego_trajectory = rig.trajectory
 
         # Filter out objects that are not in the time window
         all_objs_in_window = data_source.traffic_objects.clip_trajectories(
@@ -264,8 +294,8 @@ class UnboundRollout:
 
         if simulation_config.vehicle is not None:
             vehicle = simulation_config.vehicle
-        elif data_source.rig.vehicle_config is not None:
-            vehicle = data_source.rig.vehicle_config
+        elif rig.vehicle_config is not None:
+            vehicle = rig.vehicle_config
         else:
             raise InvalidSceneError(
                 scene_id, "no vehicle config in simulation config or rig"
@@ -299,6 +329,12 @@ class UnboundRollout:
             end_timestamp_us=timing.end_timestamp_us,
             force_gt_duration_us=simulation_config.force_gt_duration_us,
             skip_driver_during_force_gt=simulation_config.skip_driver_during_force_gt,
+            use_cached_frames_during_force_gt=(
+                simulation_config.force_gt_frame_cache.enabled
+            ),
+            force_gt_frame_cache_extra_key=(
+                simulation_config.force_gt_frame_cache.extra_key
+            ),
             control_timestep_us=simulation_config.control_timestep_us,
             follow_log=None,
             save_path_root=os.path.join(rollouts_dir, scene_id),

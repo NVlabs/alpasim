@@ -29,29 +29,6 @@ inference:
   subsample_factor: 1
   context_length: 1
 
-rectification:
-  # Rectify camera_front_wide_120fov renders back to the NuScenes pinhole model.
-  camera_front_wide_120fov:
-    focal_length: [1545.0, 1545.0]
-    # Note: principal_point uses [x, y] order (width, height coords),
-    # while resolution_hw uses [height, width] order (as the _hw suffix
-    # indicates). So the relative order is flipped!
-    # We're setting the pp to 560 to mimic nuPlans rendering at 1120 and
-    # cropping the bottom 40px.
-    principal_point: [960.0, 560.0]
-    resolution_hw: [1080, 1920]
-    radial: [-0.356123, 0.172545, -0.05231, 0.0, 0.0, 0.0]
-    tangential: [-0.00213, 0.000464]
-    thin_prism: [0.0, 0.0, 0.0, 0.0]
-
-    # We first apply rectification from f-theta to pinhole, then optionally apply
-    # pinhole distortion correction to the pinhole frame.
-    # To make sure the rectified image is large enough to cover the pinhole
-    # camera's (after distortion correction) field of view, we overscan the
-    # rectified image.
-    max_overscan_scale: 2.0
-    safety_margin_px: 10
-
 # Route configuration
 route:
   default_command: 2  # Default command: 0=right, 1=left, 2=straight

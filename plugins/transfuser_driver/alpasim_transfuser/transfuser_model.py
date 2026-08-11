@@ -242,9 +242,8 @@ class TransfuserModel(BaseTrajectoryModel):
         results: list[ModelPrediction] = []
         for i in range(batch_size):
             results.append(
-                ModelPrediction(
-                    trajectory_xy=waypoints_batch[i].copy(),
-                    headings=headings_batch[i].copy(),
+                ModelPrediction.from_planar(
+                    waypoints_batch[i].copy(), headings_batch[i].copy()
                 )
             )
         return results

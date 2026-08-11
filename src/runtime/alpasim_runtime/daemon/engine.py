@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections import defaultdict
@@ -11,8 +12,10 @@ from uuid import uuid4
 
 from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
+from alpasim_runtime.config import RendererKind
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
 from alpasim_runtime.errors import UnknownSceneError
+from alpasim_runtime.nre_introspection import prefetch_scene as prefetch_nre_scene
 from alpasim_runtime.runtime_context import (
     RuntimeContext,
     build_runtime_context,
@@ -203,6 +206,7 @@ def build_pending_jobs_from_request(
                     scene_id=spec.scenario_id,
                     rollout_spec_index=spec_index,
                     session_uuid=session_uuids[rollout_idx] if session_uuids else "",
+                    start_time_offset_us=spec.start_time_offset_us,
                 )
             )
     return jobs
@@ -238,9 +242,12 @@ class DaemonEngine:
         self._version_ids: logging_pb2.RolloutMetadata.VersionIds | None = None
         self._runtime_context: RuntimeContext | None = None
         self._scene_loader: SceneLoader | None = None
+        self._renderer_kind: RendererKind | None = None
         self._scheduler: DaemonScheduler | None = None
         self._worker_runtime: WorkerRuntime | None = None
+        self._scene_prefetch_tasks: dict[str, asyncio.Task[None]] = {}
         self._started = False
+        self._shutting_down = False
 
     @property
     def version_ids(self) -> logging_pb2.RolloutMetadata.VersionIds:
@@ -253,6 +260,12 @@ class DaemonEngine:
         if self._scene_loader is None:
             raise RuntimeError("SceneLoader not initialized")
         return self._scene_loader.has_scene(scene_id)
+
+    def _ensure_accepting_requests(self) -> None:
+        if not self._started:
+            raise DaemonUnavailableError("daemon is not started")
+        if self._shutting_down:
+            raise DaemonUnavailableError("daemon is shutting down")
 
     async def startup(self) -> None:
         """Initialize the runtime context, start workers, and begin scheduling.
@@ -273,6 +286,7 @@ class DaemonEngine:
         )
 
         self._scene_loader = runtime_context.scene_loader
+        self._renderer_kind = runtime_context.config.user.renderer.kind
 
         num_consumers_per_worker = compute_num_consumers_per_worker(
             max_in_flight=runtime_context.max_in_flight,
@@ -319,14 +333,68 @@ class DaemonEngine:
 
     async def get_runtime_info(self) -> runtime_pb2.RuntimeInfo:
         """Return static runtime discovery information for server clients."""
-        if not self._started:
-            raise DaemonUnavailableError("daemon is not started")
+        self._ensure_accepting_requests()
         assert self._runtime_context is not None
 
         return build_runtime_info(
             runtime_context=self._runtime_context,
             version_ids=self.version_ids,
         )
+
+    def _forget_scene_prefetch(
+        self,
+        scene_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Retrieve task failures and remove the completed scene prefetch."""
+        try:
+            task.exception()
+        except asyncio.CancelledError:
+            pass
+        if self._scene_prefetch_tasks.get(scene_id) is task:
+            del self._scene_prefetch_tasks[scene_id]
+
+    async def prefetch_scene(self, scene_id: str) -> None:
+        """Warm one scene in the sole NRE renderer used by a rollout cell."""
+        self._ensure_accepting_requests()
+        if not self._has_scene(scene_id):
+            raise UnknownSceneError(scene_id)
+        assert self._runtime_context is not None
+        if self._runtime_context.config.user.renderer.kind != RendererKind.sensorsim:
+            raise ValueError("scene prefetch requires the sensorsim renderer")
+
+        renderer_pool = self._runtime_context.pools["renderer"]
+        if renderer_pool.skip or len(renderer_pool.address_order) != 1:
+            raise ValueError(
+                "scene prefetch requires exactly one renderer address; "
+                f"got {renderer_pool.address_order!r}"
+            )
+        renderer_address = renderer_pool.address_order[0]
+
+        task = self._scene_prefetch_tasks.get(scene_id)
+        if task is None:
+            logger.info(
+                "Scene prefetch request accepted: scene_id=%s renderer=%s",
+                scene_id,
+                renderer_address,
+            )
+            task = asyncio.create_task(
+                prefetch_nre_scene(renderer_address, scene_id),
+                name=f"scene-prefetch-{scene_id}",
+            )
+            self._scene_prefetch_tasks[scene_id] = task
+            task.add_done_callback(
+                lambda done, requested_scene_id=scene_id: self._forget_scene_prefetch(
+                    requested_scene_id, done
+                )
+            )
+        else:
+            logger.info(
+                "Scene prefetch request coalesced: scene_id=%s renderer=%s",
+                scene_id,
+                renderer_address,
+            )
+        await asyncio.shield(task)
 
     async def simulate(
         self,
@@ -342,8 +410,15 @@ class DaemonEngine:
             DaemonUnavailableError: If the engine has not been started.
             UnknownSceneError: If the request references an unknown scene_id.
         """
-        if not self._started:
-            raise DaemonUnavailableError("daemon is not started")
+        self._ensure_accepting_requests()
+
+        if self._renderer_kind == RendererKind.video_model and any(
+            spec.start_time_offset_us for spec in request.rollout_specs
+        ):
+            raise InvalidRequestError(
+                "video_model renderer does not support start_time_offset_us > 0"
+            )
+
         assert self._scheduler is not None
 
         request_id = uuid4().hex
@@ -390,9 +465,36 @@ class DaemonEngine:
         assert self._scheduler is not None
         assert self._worker_runtime is not None
 
-        await self._scheduler.shutdown(reason="daemon shutting down")
-        await self._worker_runtime.stop()
+        self._shutting_down = True
+        errors: list[Exception] = []
+        try:
+            prefetch_tasks = tuple(self._scene_prefetch_tasks.values())
+            for task in prefetch_tasks:
+                task.cancel()
+            if prefetch_tasks:
+                await asyncio.gather(*prefetch_tasks, return_exceptions=True)
+            self._scene_prefetch_tasks.clear()
 
-        self._scheduler = None
-        self._worker_runtime = None
-        self._started = False
+            try:
+                await self._scheduler.shutdown(reason="daemon shutting down")
+            except Exception as exc:
+                logger.exception("Daemon scheduler shutdown failed")
+                errors.append(exc)
+
+            try:
+                await self._worker_runtime.stop()
+            except Exception as exc:
+                logger.exception("Daemon worker runtime stop failed")
+                errors.append(exc)
+        finally:
+            self._scheduler = None
+            self._worker_runtime = None
+            self._runtime_context = None
+            self._scene_loader = None
+            self._started = False
+            self._shutting_down = False
+
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("daemon shutdown failed", errors)

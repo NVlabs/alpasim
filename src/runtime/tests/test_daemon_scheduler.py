@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from alpasim_grpc.v0 import runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.config import SceneAffineDispatchConfig
 from alpasim_runtime.daemon.scheduler import (
@@ -85,6 +86,7 @@ def _result(
     *,
     success: bool = True,
     error: str | None = None,
+    error_code: int = 0,
 ) -> JobResult:
     return JobResult(
         request_id=request_id,
@@ -94,6 +96,7 @@ def _result(
         error=error,
         error_traceback=None,
         rollout_uuid=f"uuid-{job_id}",
+        error_code=error_code,
     )
 
 
@@ -261,6 +264,38 @@ async def test_scheduler_retries_any_failure_up_to_configured_limit(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_does_not_retry_invalid_scene_failure(tmp_path: Path) -> None:
+    """An INVALID_SCENE failure is returned as-is, without a retry."""
+    runtime = _FakeRuntime()
+    scheduler = DaemonScheduler(
+        pools=_make_pools(capacity_per_service=1),
+        runtime=runtime,
+        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=False),
+        max_rollout_retries=2,
+        rollouts_dir=str(tmp_path),
+    )
+    await scheduler.submit_request("req-invalid", [_pending("j1")])
+
+    scheduler.on_result(
+        _result(
+            "req-invalid",
+            "j1",
+            success=False,
+            error="bad offset",
+            error_code=runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE,
+        )
+    )
+    completion = await scheduler.wait_request("req-invalid")
+
+    # The deterministic failure is returned as-is; no retry job was submitted.
+    assert len(runtime.submitted_jobs) == 1
+    assert len(completion) == 1
+    assert completion[0].error == "bad offset"
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
+@pytest.mark.asyncio
 async def test_scheduler_returns_successful_retry_instead_of_initial_failure() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
@@ -350,31 +385,68 @@ async def test_max_scenes_per_renderer_defers_cold_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_max_scenes_per_renderer_does_not_block_cached_affinity() -> None:
+async def test_max_scenes_per_renderer_blocks_inactive_cached_scene() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
-        pools=_make_pools_multi_gpu(n_concurrent=3, num_renderers=1),
+        pools=_make_pools_multi_gpu(n_concurrent=4, num_renderers=1),
+        runtime=runtime,
+        scene_affine_dispatch=SceneAffineDispatchConfig(
+            enabled=True, max_scenes_per_renderer=2
+        ),
+    )
+    strategy = _affine_strategy(scheduler)
+    strategy.sync_scene_cache("gpu-0:50052", ["scene-A", "scene-B"])
+
+    await scheduler.submit_request(
+        "req-a", [_pending("a1", scene_id="scene-A", request_id="req-a")]
+    )
+    await scheduler.submit_request(
+        "req-b1", [_pending("b1", scene_id="scene-B", request_id="req-b1")]
+    )
+
+    scheduler.on_result(_result("req-b1", "b1"))
+    await scheduler.submit_request(
+        "req-c", [_pending("c1", scene_id="scene-C", request_id="req-c")]
+    )
+    await scheduler.submit_request(
+        "req-b2", [_pending("b2", scene_id="scene-B", request_id="req-b2")]
+    )
+
+    assert [job.job_id for job in runtime.submitted_jobs] == ["a1", "b1", "c1"]
+    assert strategy.pending_count == 1
+
+    scheduler.on_result(_result("req-a", "a1"))
+    await scheduler.dispatch_once()
+
+    assert runtime.submitted_jobs[-1].job_id == "b2"
+    assert runtime.submitted_jobs[-1].dispatch_kind == "cached_affine"
+    assert strategy.pending_count == 0
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
+@pytest.mark.asyncio
+async def test_max_scenes_per_renderer_allows_active_cached_scene() -> None:
+    runtime = _FakeRuntime()
+    scheduler = DaemonScheduler(
+        pools=_make_pools_multi_gpu(n_concurrent=2, num_renderers=1),
         runtime=runtime,
         scene_affine_dispatch=SceneAffineDispatchConfig(
             enabled=True, max_scenes_per_renderer=1
         ),
     )
-    strategy = _affine_strategy(scheduler)
-    strategy.sync_scene_cache("gpu-0:50052", ["scene-A"])
+    _affine_strategy(scheduler).sync_scene_cache("gpu-0:50052", ["scene-A"])
 
     await scheduler.submit_request(
-        "req-1", [_pending("b1", scene_id="scene-B", request_id="req-1")]
-    )
-    await scheduler.submit_request(
-        "req-2", [_pending("a1", scene_id="scene-A", request_id="req-2")]
-    )
-    await scheduler.submit_request(
-        "req-3", [_pending("c1", scene_id="scene-C", request_id="req-3")]
+        "req-a",
+        [
+            _pending("a1", scene_id="scene-A", request_id="req-a"),
+            _pending("a2", scene_id="scene-A", request_id="req-a"),
+        ],
     )
 
-    assert [job.job_id for job in runtime.submitted_jobs] == ["b1", "a1"]
-    assert runtime.submitted_jobs[1].dispatch_kind == "cached_affine"
-    assert scheduler._strategy.pending_count == 1
+    assert [job.job_id for job in runtime.submitted_jobs] == ["a1", "a2"]
+    assert all(job.dispatch_kind == "cached_affine" for job in runtime.submitted_jobs)
 
     await scheduler.shutdown(reason="test cleanup")
 

@@ -9,21 +9,23 @@ import logging
 import os
 import shlex
 import socket
+import subprocess
 import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Iterator, List
 
 from ..context import WizardContext
 from ..schema import RunMode
 from ..services import ContainerDefinition, build_container_set
 from ..utils import ensure_sqsh_path
-from .dispatcher import dispatch_command
+from .dispatcher import dispatch_background, dispatch_command
 
 logger = logging.getLogger(__name__)
 
 
 class SlurmDeployment:
-    """Deployment strategy using SLURM."""
+    """Deploy services as containerized Slurm job steps."""
 
     def __init__(self, context: WizardContext):
         """Initialize with context and build container set.
@@ -42,16 +44,17 @@ class SlurmDeployment:
         )
         containers = list(self.container_set.sim)
         containers.append(self.container_set.prometheus)
-        if self.context.cfg.wizard.enable_mps:
-            self._start_mps_daemon()
-        try:
+        with ExitStack() as stack:
+            self._prepare_deployment(stack)
+            if self.context.cfg.wizard.enable_mps:
+                stack.enter_context(self._mps_daemon())
             self.deploy(
                 containers=containers,
                 containers_to_start_last=containers_to_start_last,
             )
-        finally:
-            if self.context.cfg.wizard.enable_mps:
-                self._stop_mps_daemon()
+
+    def _prepare_deployment(self, stack: ExitStack) -> None:
+        """Register launcher-specific resources with the deployment lifecycle."""
 
     def _mps_pipe_dir(self) -> str:
         """Job-scoped CUDA MPS pipe directory.
@@ -61,6 +64,32 @@ class SlurmDeployment:
         job id so daemons of jobs sharing a node cannot collide.
         """
         return f"/tmp/nvidia-mps-{self.context.cfg.wizard.slurm_job_id}"
+
+    def _service_log_path(self, container: ContainerDefinition) -> str:
+        job_id = container.context.cfg.wizard.slurm_job_id
+        assert job_id is not None, "SLURM environment not detected"
+        restart_count = os.environ.get("SLURM_RESTART_COUNT", "0")
+        return (
+            f"{container.context.cfg.wizard.log_dir}/txt-logs/"
+            f"out-{job_id}-attempt-{restart_count}-{container.uuid}-log.txt"
+        )
+
+    def _mps_enabled(self, container: ContainerDefinition) -> bool:
+        return container.context.cfg.wizard.enable_mps and container.gpu is not None
+
+    def _sqsh_path(self, container: ContainerDefinition) -> str:
+        return ensure_sqsh_path(
+            container.service_config.image,
+            list(container.context.cfg.wizard.sqshcaches),
+        )
+
+    @contextmanager
+    def _mps_daemon(self) -> Iterator[None]:
+        self._start_mps_daemon()
+        try:
+            yield
+        finally:
+            self._stop_mps_daemon()
 
     def _start_mps_daemon(self) -> None:
         """Start the CUDA MPS control daemon on the host for this job."""
@@ -75,7 +104,6 @@ class SlurmDeployment:
             "nvidia-cuda-mps-control -d",
             log_dir=Path(cfg.log_dir),
             dry_run=cfg.dry_run,
-            blocking=True,
         )
 
     def _stop_mps_daemon(self) -> None:
@@ -89,14 +117,12 @@ class SlurmDeployment:
                     "nvidia-cuda-mps-control",
                     log_dir=Path(cfg.log_dir),
                     dry_run=cfg.dry_run,
-                    blocking=True,
                 )
             finally:
                 dispatch_command(
                     f"rm -rf {pipe_dir}",
                     log_dir=Path(cfg.log_dir),
                     dry_run=cfg.dry_run,
-                    blocking=True,
                 )
         except Exception as e:
             logger.warning("Failed to stop MPS daemon: %s", e)
@@ -107,7 +133,11 @@ class SlurmDeployment:
         containers_to_start_last: List[Any] | None = None,
     ) -> None:
         """Deploy containers using SLURM."""
-        launched_containers: list[ContainerDefinition] = []
+        launched: dict[
+            str,
+            tuple[ContainerDefinition, subprocess.Popen[str] | None],
+        ] = {}
+        launch_attempts: dict[str, int] = {}
         if containers_to_start_last:
             assert (
                 self.context.cfg.wizard.timeout is not None
@@ -133,47 +163,99 @@ class SlurmDeployment:
             self.context.cfg.wizard.timeout or -1,
         )
 
-        # Deploy containers with retries
-        for retry in range(nr_retries):
-            missing_containers = self.get_missing_containers(containers)
-            if not missing_containers:
-                break
+        try:
+            # Deploy containers with retries
+            readiness_waits = 0
+            while True:
+                missing_containers = self.get_missing_containers(containers)
+                if not missing_containers:
+                    break
 
-            for c in missing_containers:
-                dispatch_command(
-                    self._get_slurm_dispatch_command(
-                        c,
-                        self.context.cfg.wizard.run_mode.name,
-                    ),
-                    log_dir=Path(self.context.cfg.wizard.log_dir),
-                    dry_run=self.context.cfg.wizard.dry_run,
-                    blocking=False,
-                )
-                launched_containers.append(c)
+                for c in missing_containers:
+                    previous_launch = launched.get(c.uuid)
+                    running_process = (
+                        previous_launch[1] if previous_launch is not None else None
+                    )
+                    if running_process is not None and running_process.poll() is None:
+                        logger.info(
+                            "Service %s is not ready but its launcher is still running",
+                            c.uuid,
+                        )
+                        continue
 
-            # Wait for containers if needed
-            if _wait_for_containers_running():
-                self.wait_for_containers(
-                    containers,
-                    timeout=self.context.cfg.wizard.timeout,
-                    raise_on_timeout=(retry == nr_retries - 1),
-                )
+                    attempts = launch_attempts.get(c.uuid, 0)
+                    if attempts >= nr_retries:
+                        continue
 
-        # Deploy containers that should start last
-        if containers_to_start_last:
-            try:
-                for c in containers_to_start_last:
-                    dispatch_command(
-                        self._get_slurm_dispatch_command(
+                    process = dispatch_background(
+                        self._get_dispatch_command(
                             c,
                             self.context.cfg.wizard.run_mode.name,
                         ),
                         log_dir=Path(self.context.cfg.wizard.log_dir),
                         dry_run=self.context.cfg.wizard.dry_run,
-                        blocking=True,
                     )
-            finally:
-                self._cleanup_launched_service_steps(launched_containers)
+                    launch_attempts[c.uuid] = attempts + 1
+                    launched[c.uuid] = (c, process)
+
+                # Wait for containers if needed
+                if _wait_for_containers_running():
+                    try:
+                        if self.wait_for_containers(
+                            containers,
+                            timeout=self.context.cfg.wizard.timeout,
+                            raise_on_timeout=(readiness_waits >= nr_retries - 1),
+                        ):
+                            break
+                    except TimeoutError:
+                        relaunchable_container_found = False
+                        for c in self.get_missing_containers(containers):
+                            previous_launch = launched.get(c.uuid)
+                            process = (
+                                previous_launch[1]
+                                if previous_launch is not None
+                                else None
+                            )
+                            if (
+                                process is not None
+                                and process.poll() is not None
+                                and launch_attempts.get(c.uuid, 0) < nr_retries
+                            ):
+                                launched.pop(c.uuid)
+                                relaunchable_container_found = True
+                        if not relaunchable_container_found:
+                            raise
+                    else:
+                        readiness_waits += 1
+                else:
+                    break
+
+            # Deploy containers that should start last
+            if containers_to_start_last:
+                for c in containers_to_start_last:
+                    dispatch_command(
+                        self._get_dispatch_command(
+                            c,
+                            self.context.cfg.wizard.run_mode.name,
+                        ),
+                        log_dir=Path(self.context.cfg.wizard.log_dir),
+                        dry_run=self.context.cfg.wizard.dry_run,
+                    )
+        finally:
+            if containers_to_start_last:
+                self._cleanup_launched_services(launched)
+
+    def _cleanup_launched_services(
+        self,
+        launched: dict[
+            str,
+            tuple[ContainerDefinition, subprocess.Popen[str] | None],
+        ],
+    ) -> None:
+        """Stop launched services after the blocking runtime exits."""
+        self._cleanup_launched_service_steps(
+            [container for container, _ in launched.values()]
+        )
 
     def _cleanup_launched_service_steps(
         self, containers: list[ContainerDefinition]
@@ -182,18 +264,12 @@ class SlurmDeployment:
         if self.context.cfg.wizard.dry_run:
             return
 
-        seen_step_names: set[str] = set()
         for container in containers:
-            step_name = self._get_slurm_step_name(container)
-            if step_name in seen_step_names:
-                continue
-            seen_step_names.add(step_name)
             try:
                 dispatch_command(
                     self._get_slurm_cleanup_command(container),
                     log_dir=Path(self.context.cfg.wizard.log_dir),
                     dry_run=False,
-                    blocking=True,
                 )
             except Exception as e:
                 logger.warning(
@@ -224,28 +300,13 @@ class SlurmDeployment:
         Returns:
             SLURM srun command string
         """
-        assert (
-            container.context.cfg.wizard.slurm_job_id is not None
-        ), "SLURM environment not detected"
-        slurm_job_id = container.context.cfg.wizard.slurm_job_id
-
-        restart_count = os.environ.get("SLURM_RESTART_COUNT", "0")
-        s_log = (
-            f"{container.context.cfg.wizard.log_dir}/txt-logs/"
-            f"out-{slurm_job_id}-attempt-{restart_count}-{container.uuid}-log.txt"
-        )
-
-        sqsh = ensure_sqsh_path(
-            container.service_config.image,
-            list(container.context.cfg.wizard.sqshcaches),
-        )
+        s_log = self._service_log_path(container)
+        sqsh = self._sqsh_path(container)
 
         # Note that we cannot use --export=CUDA_VISIBLE_DEVICES=... with srun because SLURM
         # overrides CUDA_VISIBLE_DEVICES even when exported as an environment variable.
         # Instead we set it in the command line. Use export to allow chaining commands with &&.
-        mps_enabled = (
-            container.context.cfg.wizard.enable_mps and container.gpu is not None
-        )
+        mps_enabled = self._mps_enabled(container)
         s_gpu = ""
         if container.gpu is not None:
             s_gpu = f"export CUDA_VISIBLE_DEVICES={container.gpu};"
@@ -312,10 +373,10 @@ class SlurmDeployment:
             raise ValueError(f"Unknown run mode: {mode}")
         return cmd
 
-    def _get_slurm_dispatch_command(
+    def _get_dispatch_command(
         self,
         container: ContainerDefinition,
-        mode: str,
+        mode: str | RunMode,
     ) -> str:
         """Get the full SLURM dispatch command.
 
@@ -329,7 +390,7 @@ class SlurmDeployment:
         # Convert mode string to RunMode enum
         run_mode = RunMode[mode.upper()] if isinstance(mode, str) else mode
 
-        logger.info(f"Launch {container.uuid} in {run_mode.name}")
+        logger.info("Launch %s in %s", container.uuid, run_mode.name)
         return self._to_slurm_run(container, mode=run_mode)
 
     def wait_for_containers(
