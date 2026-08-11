@@ -317,6 +317,22 @@ jobs:
         run: |
           echo "Skipping ${{ matrix.service }} (source=${{ steps.source.outputs.source }})"
 
+      - name: Install uv for host build
+        if: steps.source.outputs.source == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v uv >/dev/null 2>&1; then
+            uv --version
+            exit 0
+          fi
+
+          UV_INSTALL_DIR="${RUNNER_TEMP}/uv-bin"
+          mkdir -p "${UV_INSTALL_DIR}"
+          curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="${UV_INSTALL_DIR}" sh
+          echo "${UV_INSTALL_DIR}" >> "${GITHUB_PATH}"
+          "${UV_INSTALL_DIR}/uv" --version
+
       - name: Build service image via wizard
         if: steps.source.outputs.source == 'build'
         shell: bash
@@ -329,7 +345,6 @@ jobs:
           git lfs pull --include="src/**/*" || true
 
           cd "${GITHUB_WORKSPACE}/src/wizard"
-          python3 -m pip install uv
           uv sync
           uv run alpasim_wizard \
             deploy=docker_build_only \
