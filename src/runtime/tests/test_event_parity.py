@@ -492,6 +492,46 @@ class TestControllerAndEgoPhysicsPipeline:
         assert post_handoff_call["coerce_dynamic_state"] is False
 
     @pytest.mark.asyncio
+    async def test_controller_event_attaches_force_gt_dynamics(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_controller: AsyncMock,
+        simple_trajectory: Trajectory,
+    ) -> None:
+        """Force-GT poses carry their corresponding dynamics."""
+        target_time_us = 100_000
+        propagated_state = mock_controller.run_controller_and_vehicle.return_value[0]
+        propagated_state.timestamp_us = target_time_us
+        propagated_state.pose_local_to_rig = simple_trajectory.interpolate_pose(
+            target_time_us
+        )
+        propagated_state.pose_local_to_rig_estimate = propagated_state.pose_local_to_rig
+
+        rollout_state.step_context = StepContext(
+            step_start_us=0,
+            target_time_us=target_time_us,
+            force_gt=True,
+            driver_trajectory=simple_trajectory,
+        )
+        await ControllerEvent(
+            timestamp_us=0,
+            control_timestep_us=target_time_us,
+            services=service_bundle,
+        ).run(rollout_state, EventQueue())
+
+        assert rollout_state.force_gt_dynamics is not None
+        expected_dynamics = rollout_state.force_gt_dynamics.interpolate_dynamics(
+            np.array([target_time_us], dtype=np.uint64)
+        )[0]
+        ctx = rollout_state.step_context
+        assert ctx is not None
+        assert ctx.ego_true is not None
+        assert ctx.ego_estimated is not None
+        np.testing.assert_allclose(ctx.ego_true.dynamics[-1], expected_dynamics)
+        np.testing.assert_allclose(ctx.ego_estimated.dynamics[-1], expected_dynamics)
+
+    @pytest.mark.asyncio
     async def test_controller_event_rejects_force_gt_trajectory_outside_step(
         self,
         rollout_state: RolloutState,

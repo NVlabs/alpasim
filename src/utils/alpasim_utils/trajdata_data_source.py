@@ -79,7 +79,7 @@ class TrajdataDataSource(SceneDataSource):
     All properties use lazy loading and caching for efficiency.
     """
 
-    OBS_FORMAT: ClassVar[str] = "x,y,z,h"
+    OBS_FORMAT: ClassVar[str] = "x,y,z,xd,yd,xdd,ydd,h"
 
     scene: Scene
     scene_cache: EnvCache
@@ -219,6 +219,43 @@ class TrajdataDataSource(SceneDataSource):
             logger.error(f"Failed to extract trajectory for agent {agent.name}: {e}")
             return None, None, None
 
+    def _extract_recorded_rig_linear_dynamics_in_local(
+        self,
+        ego_agent: AgentMetadata,
+        expected_num_timestamps: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Load source-recorded planar ego dynamics in the local frame.
+
+        The local frame differs from trajdata's world frame only by translation,
+        so the recorded world-frame vectors are unchanged. The source contains
+        planar values only; z is explicitly zero-filled here.
+        """
+        states, _ = self.scene_cache.get_agent_history(
+            ego_agent,
+            ego_agent.last_timestep,
+            history_sec=(None, None),
+        )
+        velocities_xy_in_local = np.asarray(states.velocity, dtype=np.float64)
+        accelerations_xy_in_local = np.asarray(states.acceleration, dtype=np.float64)
+
+        for name, vectors_xy_in_local in (
+            ("velocity", velocities_xy_in_local),
+            ("acceleration", accelerations_xy_in_local),
+        ):
+            if vectors_xy_in_local.shape != (expected_num_timestamps, 2):
+                raise ValueError(
+                    f"Expected {expected_num_timestamps} recorded rig {name} vectors "
+                    f"with two planar components, got {vectors_xy_in_local.shape}."
+                )
+
+        velocities_in_local = np.zeros((expected_num_timestamps, 3), dtype=np.float64)
+        accelerations_in_local = np.zeros(
+            (expected_num_timestamps, 3), dtype=np.float64
+        )
+        velocities_in_local[:, :2] = velocities_xy_in_local
+        accelerations_in_local[:, :2] = accelerations_xy_in_local
+        return velocities_in_local, accelerations_in_local
+
     @property
     def rig(self) -> Rig:
         """Load and return Rig object for ego vehicle"""
@@ -252,6 +289,14 @@ class TrajdataDataSource(SceneDataSource):
                 f"Check if scene_cache is properly initialized and agent data is available."
             )
             raise ValueError("Cannot extract ego trajectory")
+
+        (
+            recorded_rig_linear_velocities_in_local,
+            recorded_rig_linear_accelerations_in_local,
+        ) = self._extract_recorded_rig_linear_dynamics_in_local(
+            ego_agent,
+            len(ego_trajectory),
+        )
 
         # Calculate world_to_nre transformation matrix (use first trajectory point as origin)
         world_to_nre = np.eye(4, dtype=np.float64)
@@ -293,6 +338,8 @@ class TrajdataDataSource(SceneDataSource):
             camera_frame_ranges_us={},
             world_to_nre=world_to_nre,
             vehicle_config=ego_vehicle_config,
+            recorded_rig_linear_velocities_in_local=recorded_rig_linear_velocities_in_local,
+            recorded_rig_linear_accelerations_in_local=recorded_rig_linear_accelerations_in_local,
         )
 
         return self._rig

@@ -123,6 +123,97 @@ class EventBasedRollout:
 
     _runtime_evaluator: RuntimeEvaluator = field(init=False)
 
+    def _initialize_ego_trajectories(self) -> None:
+        """Seed the recorded ego context and its rig-frame dynamics."""
+        context_start_us = self.unbound.egomotion_context_start_us
+        first_policy_timestamp_us = self.unbound.first_policy_timestamp_us
+
+        gt = self.unbound.gt_ego_trajectory
+        ego_traj = gt.clip(context_start_us, first_policy_timestamp_us + 1)
+        context_timestamps = ego_traj.timestamps_us
+
+        # Seed dynamics in the rig frame. Trajdata preserves recorded linear
+        # dynamics in the local frame; sources without them retain the
+        # pose-derivative fallback.
+        rig = self.data_source.rig
+        recorded_rig_linear_velocities_in_local = (
+            rig.recorded_rig_linear_velocities_in_local
+        )
+        recorded_rig_linear_accelerations_in_local = (
+            rig.recorded_rig_linear_accelerations_in_local
+        )
+        if (
+            recorded_rig_linear_velocities_in_local is None
+            and recorded_rig_linear_accelerations_in_local is None
+        ):
+            rig_linear_velocities_in_local = gt.velocities()
+            rig_linear_accelerations_in_local = gt.accelerations()
+        elif (
+            recorded_rig_linear_velocities_in_local is None
+            or recorded_rig_linear_accelerations_in_local is None
+        ):
+            raise ValueError(
+                "Recorded rig velocity and acceleration must be provided together"
+            )
+        else:
+            rig_linear_velocities_in_local = recorded_rig_linear_velocities_in_local
+            rig_linear_accelerations_in_local = (
+                recorded_rig_linear_accelerations_in_local
+            )
+
+        gt_yaw_rates = gt.yaw_rates()
+        gt_ts = gt.timestamps_us
+        expected_dynamics_shape = (len(gt_ts), 3)
+        if rig_linear_velocities_in_local.shape != expected_dynamics_shape:
+            raise ValueError(
+                "Expected rig linear velocities in local frame with shape "
+                f"{expected_dynamics_shape}, got {rig_linear_velocities_in_local.shape}."
+            )
+        if rig_linear_accelerations_in_local.shape != expected_dynamics_shape:
+            raise ValueError(
+                "Expected rig linear accelerations in local frame with shape "
+                f"{expected_dynamics_shape}, got {rig_linear_accelerations_in_local.shape}."
+            )
+
+        n_context = len(context_timestamps)
+        initial_dynamics = np.zeros((n_context, 12), dtype=np.float64)
+        linear_velocities_in_local = np.empty((n_context, 3), dtype=np.float64)
+        linear_accelerations_in_local = np.empty((n_context, 3), dtype=np.float64)
+        for i in range(3):
+            linear_velocities_in_local[:, i] = np.interp(
+                context_timestamps, gt_ts, rig_linear_velocities_in_local[:, i]
+            )
+            linear_accelerations_in_local[:, i] = np.interp(
+                context_timestamps, gt_ts, rig_linear_accelerations_in_local[:, i]
+            )
+
+        cos_yaw = np.cos(ego_traj.yaws)
+        sin_yaw = np.sin(ego_traj.yaws)
+        initial_dynamics[:, 0] = (
+            cos_yaw * linear_velocities_in_local[:, 0]
+            + sin_yaw * linear_velocities_in_local[:, 1]
+        )
+        initial_dynamics[:, 1] = (
+            -sin_yaw * linear_velocities_in_local[:, 0]
+            + cos_yaw * linear_velocities_in_local[:, 1]
+        )
+        initial_dynamics[:, 2] = linear_velocities_in_local[:, 2]
+        initial_dynamics[:, 5] = np.interp(context_timestamps, gt_ts, gt_yaw_rates)
+        initial_dynamics[:, 6] = (
+            cos_yaw * linear_accelerations_in_local[:, 0]
+            + sin_yaw * linear_accelerations_in_local[:, 1]
+        )
+        initial_dynamics[:, 7] = (
+            -sin_yaw * linear_accelerations_in_local[:, 0]
+            + cos_yaw * linear_accelerations_in_local[:, 1]
+        )
+        initial_dynamics[:, 8] = linear_accelerations_in_local[:, 2]
+
+        self.ego_trajectory = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
+            ego_traj, initial_dynamics
+        )
+        self.ego_trajectory_estimate = self.ego_trajectory.clone()
+
     def __post_init__(self) -> None:
         """Initialize mutable state."""
         context_start_us = self.unbound.egomotion_context_start_us
@@ -130,34 +221,12 @@ class EventBasedRollout:
 
         asl_log_writer = LogWriter(file_path=self._asl_log_path())
 
-        # Seed all recorded ego context through the first policy decision.
-        # The first policy call then receives dense egomotion history rather
-        # than a synthetic two-point shortcut.
+        # Seed traffic context through the first policy decision.
         self.traffic_objs = self.unbound.traffic_objs.clip_trajectories(
             context_start_us, first_policy_timestamp_us + 1
         )
 
-        gt = self.unbound.gt_ego_trajectory
-        ego_traj = gt.clip(context_start_us, first_policy_timestamp_us + 1)
-        context_timestamps = ego_traj.timestamps_us
-
-        # Build initial dynamics from GT derivatives at each context timestamp.
-        gt_velocities = gt.velocities()
-        gt_yaw_rates = gt.yaw_rates()
-        gt_ts = gt.timestamps_us
-
-        n_context = len(context_timestamps)
-        initial_dynamics = np.zeros((n_context, 12), dtype=np.float64)
-        for i in range(3):
-            initial_dynamics[:, i] = np.interp(
-                context_timestamps, gt_ts, gt_velocities[:, i]
-            )
-        initial_dynamics[:, 5] = np.interp(context_timestamps, gt_ts, gt_yaw_rates)
-
-        self.ego_trajectory = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
-            ego_traj, initial_dynamics
-        )
-        self.ego_trajectory_estimate = self.ego_trajectory.clone()
+        self._initialize_ego_trajectories()
 
         self.planner_delay_buffer = DelayBuffer(self.unbound.planner_delay_us)
         self.route_generator = RouteGenerator.create(

@@ -40,3 +40,15 @@ def test_managed_flashdreams_uses_local_image_without_pulling() -> None:
 
     assert cfg.services.renderer.external_image is True
     assert cfg.services.renderer.pull_policy == "never"
+
+
+def test_public_deployments_default_to_nre_ga_26_04() -> None:
+    for deploy in ("local", "competition_ec2"):
+        cfg = _compose_config(
+            f"deploy={deploy}",
+            "topology=1gpu",
+            "driver=vavam",
+            "wizard.log_dir=/tmp/alpasim-test",
+        )
+
+        assert cfg.services.renderer.image == "nvcr.io/nvidia/nre/nre-ga:26.04"

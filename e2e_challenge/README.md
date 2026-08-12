@@ -31,6 +31,23 @@ capacity.
 The Physical AI AV track uses an internal set of NuRec-compatible scenes similar to those
 available in the public NuRec dataset.
 
+#### PAI Sensor Contract
+
+Every official PAI rollout sends JPEG observations from `camera_front_wide_120fov`,
+`camera_front_tele_30fov`, `camera_cross_left_120fov`, and
+`camera_cross_right_120fov` at 10 Hz. The renderer preserves the source camera
+aspect ratio. As a result, the configured 1900 x 1080 request does not imply a
+fixed delivered width: the current official evaluation set produces both 1916
+x 1080 and 1920 x 1080 JPEGs (width x height), depending on the scene. Image
+dimensions remain constant within a rollout but can differ between scenes.
+
+Use each image's `logical_id` and the calibration in
+`start_session.rollout_spec.vehicle.available_cameras`; do not hard-code
+calibration values or image dimensions. The supplied calibration describes the
+native camera and its reported resolution can differ from the decoded JPEG.
+Derive delivered dimensions from the JPEG itself and scale the supplied
+intrinsics to those dimensions before using them in pixel-space calculations.
+
 ### NuPlan / MTGS
 
 The NuPlan track uses managed nuPlan scenes and MTGS rendering in the evaluation environment.

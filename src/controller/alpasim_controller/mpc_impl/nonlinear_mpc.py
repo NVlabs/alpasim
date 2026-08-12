@@ -280,7 +280,7 @@ class NonlinearMPC(MPCController):
         self._mpc.bounds["lower", "_x", "yaw_angle"] = -0.78
         self._mpc.bounds["upper", "_x", "yaw_angle"] = 0.78
         self._mpc.bounds["lower", "_x", "v_cg_x"] = 0.0
-        self._mpc.bounds["upper", "_x", "v_cg_x"] = 35
+        self._mpc.bounds["upper", "_x", "v_cg_x"] = 40
         self._mpc.bounds["lower", "_x", "v_cg_y"] = -10
         self._mpc.bounds["upper", "_x", "v_cg_y"] = 10
         self._mpc.bounds["lower", "_x", "yaw_rate"] = -3

@@ -4,6 +4,7 @@
 """Unit tests for NonlinearMPC controller."""
 
 import numpy as np
+import pytest
 from alpasim_controller.mpc_controller import ControllerInput, MPCGains
 from alpasim_controller.mpc_impl import NonlinearMPC
 from alpasim_controller.vehicle_model import VehicleModel
@@ -119,14 +120,15 @@ class TestNonlinearMPCComputeControl:
         # Acceleration command should be bounded
         assert -10.0 <= output.control[1] <= 10.0
 
-    def test_compute_control_on_reference(self):
+    @pytest.mark.parametrize("velocity", [10.0, 36.0])
+    def test_compute_control_on_reference(self, velocity):
         """When on reference, control should be near zero."""
         controller = NonlinearMPC()
-        trajectory = _create_simple_trajectory(velocity=10.0)
+        trajectory = _create_simple_trajectory(velocity=velocity)
 
         # State exactly on reference
         state = np.zeros(8)
-        state[3] = 10.0  # vx matches reference velocity
+        state[3] = velocity  # vx matches reference velocity
 
         input = ControllerInput(
             state=state,

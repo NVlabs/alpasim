@@ -147,12 +147,17 @@ class ControllerEvent(RecurringEvent):
         )
         true_poses = [s.pose_local_to_rig for s in propagated_states]
         est_poses = [s.pose_local_to_rig_estimate for s in propagated_states]
-        true_dynamics = geometry.dynamic_states_to_array(
-            [s.dynamic_state for s in propagated_states]
-        )
-        est_dynamics = geometry.dynamic_states_to_array(
-            [s.dynamic_state_estimated for s in propagated_states]
-        )
+        if force_gt:
+            assert state.force_gt_dynamics is not None
+            true_dynamics = state.force_gt_dynamics.interpolate_dynamics(timestamps)
+            est_dynamics = true_dynamics.copy()
+        else:
+            true_dynamics = geometry.dynamic_states_to_array(
+                [s.dynamic_state for s in propagated_states]
+            )
+            est_dynamics = geometry.dynamic_states_to_array(
+                [s.dynamic_state_estimated for s in propagated_states]
+            )
 
         ego_true = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
             geometry.Trajectory.from_poses(timestamps, true_poses),

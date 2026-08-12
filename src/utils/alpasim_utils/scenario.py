@@ -85,6 +85,10 @@ class Rig:
     vehicle_config: (
         VehicleConfig | None
     )  # ego configuration if available in usdz checkpoint
+    # Timestamp-aligned with ``trajectory``. These preserve the source-recorded
+    # planar values in the local frame; their unrecorded z components are zero.
+    recorded_rig_linear_velocities_in_local: np.ndarray | None = None
+    recorded_rig_linear_accelerations_in_local: np.ndarray | None = None
 
     @staticmethod
     def _parse_camera_frame_ranges(
