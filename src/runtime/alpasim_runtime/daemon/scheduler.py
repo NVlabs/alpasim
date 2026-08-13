@@ -813,6 +813,7 @@ class DaemonScheduler:
                 scheduler_wait_seconds=max(0.0, monotonic() - job.enqueued_at),
                 session_uuid=job.session_uuid,
                 start_time_offset_us=job.start_time_offset_us,
+                session_seed=job.session_seed,
             )
             self._runtime.submit_assigned_job(assigned)
             self._in_flight[assigned.job_id] = _InFlightEntry(

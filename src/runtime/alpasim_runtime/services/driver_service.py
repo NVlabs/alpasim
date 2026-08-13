@@ -72,7 +72,11 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
         request = DriveSessionRequest(
             session_uuid=session_info.uuid,
-            random_seed=random.randint(0, 2**32 - 1),
+            random_seed=(
+                cfg.random_seed
+                if cfg.random_seed is not None
+                else random.randint(0, 2**32 - 1)
+            ),
             debug_info=DriveSessionRequest.DebugInfo(scene_id=scene_id),
             rollout_spec=rollout_spec,
         )

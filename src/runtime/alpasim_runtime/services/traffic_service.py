@@ -91,7 +91,11 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         session_request = TrafficSessionRequest(
             session_uuid=session_info.uuid,
             scene_id=scene_id,
-            random_seed=random.randint(0, 2**32 - 1),
+            random_seed=(
+                cfg.random_seed
+                if cfg.random_seed is not None
+                else random.randint(0, 2**32 - 1)
+            ),
             logged_object_trajectories=logged_object_trajectories,
             handover_time_us=handover_time_us,
         )

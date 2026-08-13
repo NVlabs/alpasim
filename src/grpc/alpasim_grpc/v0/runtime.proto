@@ -25,6 +25,10 @@ message RolloutSpec {
     // Microseconds to skip from the start of the recording; the rollout begins
     // that far into the clip. 0 (default) starts at the clip's first frame.
     fixed64 start_time_offset_us = 4;
+    // Base random seed for this spec's rollouts: rollout k uses random_seed + k as
+    // its session seed, so a specific rollout can be reproduced on its own.
+    // 0 (default) keeps today's behaviour: the runtime picks a random seed per session.
+    fixed64 random_seed = 5;
 }
 
 message SimulationRequest {

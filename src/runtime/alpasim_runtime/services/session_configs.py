@@ -26,6 +26,8 @@ class DriverSessionConfig:
 
     sensorsim_cameras: list[AvailableCamerasReturn.AvailableCamera]
     scene_id: str | None = None
+    # Session seed for the driver session; None ⇒ the service picks a random one.
+    random_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,8 @@ class TrafficSessionConfig:
     start_timestamp_us: int
     force_gt_duration_us: int
     control_timestep_us: int
+    # Session seed for the traffic session; None ⇒ the service picks a random one.
+    random_seed: int | None = None
 
 
 @dataclass(frozen=True)

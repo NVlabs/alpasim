@@ -211,6 +211,10 @@ class UnboundRollout:
 
     render_bundling: RenderBundling = RenderBundling.NONE
 
+    # Session seed shared by this rollout's driver and traffic sessions;
+    # 0 ⇒ each service picks a random one (today's behaviour).
+    session_seed: int = 0
+
     @staticmethod
     def create(
         simulation_config: SimulationConfig,
@@ -221,6 +225,7 @@ class UnboundRollout:
         renderer_service: RendererService,
         session_uuid: str | None = None,
         start_time_offset_us: int = 0,
+        session_seed: int = 0,
     ) -> UnboundRollout:
         """Create UnboundRollout from SceneDataSource.
 
@@ -318,6 +323,7 @@ class UnboundRollout:
 
         return UnboundRollout(
             rollout_uuid=session_uuid or str(uuid.uuid1()),
+            session_seed=session_seed,
             scene_id=scene_id,
             gt_ego_trajectory=gt_ego_trajectory,
             traffic_objs=traffic_objects,

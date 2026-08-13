@@ -207,6 +207,9 @@ def build_pending_jobs_from_request(
                     rollout_spec_index=spec_index,
                     session_uuid=session_uuids[rollout_idx] if session_uuids else "",
                     start_time_offset_us=spec.start_time_offset_us,
+                    session_seed=(
+                        spec.random_seed + rollout_idx if spec.random_seed else 0
+                    ),
                 )
             )
     return jobs

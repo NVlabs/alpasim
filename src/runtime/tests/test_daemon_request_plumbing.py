@@ -96,3 +96,27 @@ def test_adapter_propagates_start_time_offset_to_every_job() -> None:
 
     jobs = build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
     assert [job.start_time_offset_us for job in jobs] == [1_500_000, 1_500_000]
+
+
+def test_adapter_derives_per_rollout_session_seeds_from_spec_seed() -> None:
+    req = runtime_pb2.SimulationRequest(
+        rollout_specs=[
+            runtime_pb2.RolloutSpec(
+                scenario_id="clipgt-a", nr_rollouts=3, random_seed=100
+            )
+        ]
+    )
+
+    jobs = build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
+    assert [job.session_seed for job in jobs] == [100, 101, 102]
+
+
+def test_adapter_leaves_session_seed_unset_when_spec_has_no_seed() -> None:
+    req = runtime_pb2.SimulationRequest(
+        rollout_specs=[
+            runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=2)
+        ]
+    )
+
+    jobs = build_pending_jobs_from_request(req, "req-1", lambda _scene_id: True)
+    assert [job.session_seed for job in jobs] == [0, 0]

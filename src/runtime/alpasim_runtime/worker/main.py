@@ -136,6 +136,7 @@ async def run_single_rollout(
                 rollouts_dir=rollouts_dir,
                 session_uuid=job.session_uuid,
                 start_time_offset_us=job.start_time_offset_us,
+                session_seed=job.session_seed,
                 renderer_service=renderer_service,
             ),
         )

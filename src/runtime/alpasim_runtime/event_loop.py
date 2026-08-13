@@ -571,6 +571,7 @@ class EventBasedRollout:
                     session_config=DriverSessionConfig(
                         sensorsim_cameras=available_camera_protos,
                         scene_id=self.unbound.scene_id,
+                        random_seed=self.unbound.session_seed or None,
                     ),
                 )
             )
@@ -590,6 +591,7 @@ class EventBasedRollout:
                         start_timestamp_us=self.unbound.egomotion_context_start_us,
                         force_gt_duration_us=self.unbound.force_gt_duration_us,
                         control_timestep_us=self.unbound.control_timestep_us,
+                        random_seed=self.unbound.session_seed or None,
                     ),
                 )
             )
