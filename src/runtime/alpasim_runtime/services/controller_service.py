@@ -42,6 +42,46 @@ class PropagatedPosesAtTime:
     dynamic_state_estimated: DynamicState  # The estimated dynamic state
 
 
+# Half-window for differentiating the fallback trajectory. Wide enough to smooth
+# recorded-pose jitter, narrow enough to track speed changes across a force-GT window.
+_FALLBACK_DYNAMICS_WINDOW_US = 100_000
+
+
+def _fallback_dynamic_state(
+    fallback_trajectory_local_to_rig: Trajectory, at_us: int
+) -> DynamicState:
+    """Dynamic state derived from the fallback (ground-truth) trajectory at ``at_us``.
+
+    The fallback paths below (force-GT, skip mode, interpolated intermediates) used
+    to pair real, moving poses with a default-constructed -- all-zero --
+    ``DynamicState``. Downstream, those zeros flow through
+    ``ego_trajectory_estimate`` into the driver's egomotion observations, so for the
+    whole ``force_gt_duration_us`` window the driver saw poses advancing at driving
+    speed while the dynamic state reported a stopped vehicle. Deriving velocity from
+    the same trajectory the poses are interpolated from keeps the two consistent.
+
+    ``interpolate_delta(t0, t1)`` returns ``pose(t0).inverse() @ pose(t1)``, i.e. the
+    motion expressed in the rig frame at ``t0`` -- the frame dynamic states are
+    reported in. Linear velocity and yaw rate are populated; accelerations are left
+    at zero, matching how context dynamics are seeded in ``event_loop.py`` (double-
+    differencing recorded poses would mostly amplify noise).
+    """
+    timestamps_us = fallback_trajectory_local_to_rig.timestamps_us
+    t0 = max(int(timestamps_us[0]), at_us - _FALLBACK_DYNAMICS_WINDOW_US)
+    t1 = min(int(timestamps_us[-1]), at_us + _FALLBACK_DYNAMICS_WINDOW_US)
+    if t1 <= t0:
+        return DynamicState()
+    delta = fallback_trajectory_local_to_rig.interpolate_delta(t0, t1)
+    dt_s = (t1 - t0) * 1e-6
+    velocity = delta.vec3.astype(np.float64) / dt_s
+    return DynamicState(
+        linear_velocity=Vec3(
+            x=float(velocity[0]), y=float(velocity[1]), z=float(velocity[2])
+        ),
+        angular_velocity=Vec3(x=0.0, y=0.0, z=float(delta.yaw()) / dt_s),
+    )
+
+
 class ControllerService(ServiceBase[VDCServiceStub]):
     """
     Controller service implementation that handles both real and skip modes.
@@ -177,8 +217,12 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     timestamp_us=t,
                     pose_local_to_rig=pose,
                     pose_local_to_rig_estimate=pose,
-                    dynamic_state=DynamicState(),
-                    dynamic_state_estimated=DynamicState(),
+                    dynamic_state=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, t
+                    ),
+                    dynamic_state_estimated=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, t
+                    ),
                 )
                 for t, pose in zip(expected_intermediate_timestamps, poses, strict=True)
             ]
@@ -239,8 +283,12 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     timestamp_us=future_us,
                     pose_local_to_rig=fallback_pose_local_to_rig,
                     pose_local_to_rig_estimate=fallback_pose_local_to_rig,
-                    dynamic_state=DynamicState(),
-                    dynamic_state_estimated=DynamicState(),
+                    dynamic_state=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, future_us
+                    ),
+                    dynamic_state_estimated=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, future_us
+                    ),
                 )
             ]
             return self._ensure_intermediates(
@@ -286,8 +334,12 @@ class ControllerService(ServiceBase[VDCServiceStub]):
                     timestamp_us=future_us,
                     pose_local_to_rig=fallback_pose_local_to_rig,
                     pose_local_to_rig_estimate=fallback_pose_local_to_rig,
-                    dynamic_state=DynamicState(),
-                    dynamic_state_estimated=DynamicState(),
+                    dynamic_state=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, future_us
+                    ),
+                    dynamic_state_estimated=_fallback_dynamic_state(
+                        fallback_trajectory_local_to_rig, future_us
+                    ),
                 )
             ]
         elif response.states:

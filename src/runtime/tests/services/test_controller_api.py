@@ -138,3 +138,76 @@ async def test_skip_mode_generates_intermediates(default_args):
         for state in propagated_states[:-1]:
             x = state.pose_local_to_rig.vec3[0]
             assert 1.0 < x < 5.0, f"Intermediate x={x} should be between 1.0 and 5.0"
+
+
+async def test_skip_mode_reports_fallback_dynamics_not_zeros(default_args):
+    """The fallback paths used to pair moving poses with a default-constructed
+    (all-zero) DynamicState, so during the forced-GT window the driver saw poses
+    advancing at driving speed while the dynamic state said the vehicle was
+    stopped. The dynamics must come from the same trajectory as the poses."""
+    mock_broadcaster = AsyncMock(spec=MessageBroadcaster)
+    controller = ControllerService(address="localhost:50051", skip=True)
+
+    async with controller.rollout_session(
+        uuid=default_args["session_uuid"], broadcaster=mock_broadcaster
+    ):
+        args = default_args.copy()
+        del args["session_uuid"]
+        propagated_states = await controller.run_controller_and_vehicle(**args)
+
+    # The fallback trajectory moves x: 1.0 -> 5.0 over 100 ms: 40 m/s, no rotation.
+    for state in propagated_states:
+        for dynamic_state in (state.dynamic_state, state.dynamic_state_estimated):
+            assert dynamic_state.linear_velocity.x == pytest.approx(40.0, rel=1e-3)
+            assert dynamic_state.linear_velocity.y == pytest.approx(0.0, abs=1e-6)
+            assert dynamic_state.angular_velocity.z == pytest.approx(0.0, abs=1e-6)
+
+
+async def test_intermediates_report_fallback_dynamics_not_zeros(default_args):
+    """Interpolated intermediate states must carry fallback-derived dynamics too."""
+    mock_broadcaster = AsyncMock(spec=MessageBroadcaster)
+    controller = ControllerService(address="localhost:50051", skip=True)
+
+    async with controller.rollout_session(
+        uuid=default_args["session_uuid"], broadcaster=mock_broadcaster
+    ):
+        args = default_args.copy()
+        del args["session_uuid"]
+        args["pose_reporting_interval_us"] = 25000
+        propagated_states = await controller.run_controller_and_vehicle(**args)
+
+    assert len(propagated_states) > 1
+    for state in propagated_states:
+        assert state.dynamic_state_estimated.linear_velocity.x == pytest.approx(
+            40.0, rel=1e-3
+        )
+
+
+async def test_force_gt_reports_fallback_dynamics_not_zeros(
+    default_args, monkeypatch
+):
+    """The force-GT branch discards the controller response and substitutes GT
+    poses; the dynamic states it pairs with them must be derived from the same
+    trajectory, not left at zero."""
+    from alpasim_grpc.v0.controller_pb2 import RunControllerAndVehicleModelResponse
+    from alpasim_runtime.services import controller_service as controller_service_module
+
+    async def fake_rpc(*_args, **_kwargs):
+        return RunControllerAndVehicleModelResponse()
+
+    monkeypatch.setattr(controller_service_module, "profiled_rpc_call", fake_rpc)
+    mock_broadcaster = AsyncMock(spec=MessageBroadcaster)
+    controller = ControllerService(address="localhost:50051", skip=False)
+
+    async with controller.rollout_session(
+        uuid=default_args["session_uuid"], broadcaster=mock_broadcaster
+    ):
+        args = default_args.copy()
+        del args["session_uuid"]
+        args["force_gt"] = True
+        propagated_states = await controller.run_controller_and_vehicle(**args)
+
+    final = propagated_states[-1]
+    assert final.pose_local_to_rig.vec3[0] == pytest.approx(5.0, abs=1e-4)
+    for dynamic_state in (final.dynamic_state, final.dynamic_state_estimated):
+        assert dynamic_state.linear_velocity.x == pytest.approx(40.0, rel=1e-3)
