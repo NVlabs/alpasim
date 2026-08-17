@@ -26,6 +26,7 @@ LOGGER = logging.getLogger("alpasim_e2e_starter_driver")
 @dataclass
 class SessionState:
     latest_pose: common_pb2.PoseAtTime | None = None
+    latest_speed_mps: float | None = None
 
 
 def _yaw_from_quaternion(quat: common_pb2.Quat) -> float:
@@ -76,6 +77,31 @@ def build_straight_line_trajectory(
     return trajectory
 
 
+def _speed_mps_from_observation(
+    latest_pose: common_pb2.PoseAtTime,
+    previous_pose: common_pb2.PoseAtTime | None,
+    dynamic_state: common_pb2.DynamicState | None,
+) -> float | None:
+    """Estimate current speed from the most accurate available egomotion input."""
+    if dynamic_state is not None:
+        velocity = dynamic_state.linear_velocity
+        speed_mps = math.hypot(velocity.x, velocity.y)
+        if math.isfinite(speed_mps):
+            return speed_mps
+
+    if previous_pose is None:
+        return None
+
+    dt_s = (latest_pose.timestamp_us - previous_pose.timestamp_us) / 1_000_000.0
+    if dt_s <= 0.0:
+        return None
+
+    dx = latest_pose.pose.vec.x - previous_pose.pose.vec.x
+    dy = latest_pose.pose.vec.y - previous_pose.pose.vec.y
+    speed_mps = math.hypot(dx, dy) / dt_s
+    return speed_mps if math.isfinite(speed_mps) else None
+
+
 class StarterDriver(egodriver_pb2_grpc.EgodriverServiceServicer):
     """Simple gRPC driver service that contestants can copy and modify."""
 
@@ -122,7 +148,23 @@ class StarterDriver(egodriver_pb2_grpc.EgodriverServiceServicer):
         if request.trajectory.poses:
             session = self._get_session(request.session_uuid, context)
             with self._lock:
-                session.latest_pose = request.trajectory.poses[-1]
+                latest_pose = request.trajectory.poses[-1]
+                previous_pose = (
+                    request.trajectory.poses[-2]
+                    if len(request.trajectory.poses) >= 2
+                    else session.latest_pose
+                )
+                dynamic_state = (
+                    request.dynamic_states[-1]
+                    if len(request.dynamic_states) == len(request.trajectory.poses)
+                    else None
+                )
+                speed_mps = _speed_mps_from_observation(
+                    latest_pose, previous_pose, dynamic_state
+                )
+                session.latest_pose = latest_pose
+                if speed_mps is not None:
+                    session.latest_speed_mps = speed_mps
         return common_pb2.Empty()
 
     def submit_route(
@@ -147,10 +189,12 @@ class StarterDriver(egodriver_pb2_grpc.EgodriverServiceServicer):
         session = self._get_session(request.session_uuid, context)
         with self._lock:
             latest_pose = session.latest_pose
+            speed_mps = session.latest_speed_mps
         return egodriver_pb2.DriveResponse(
             trajectory=build_straight_line_trajectory(
                 latest_pose,
                 request.time_now_us,
+                speed_mps=speed_mps if speed_mps is not None else 5.0,
             )
         )
 

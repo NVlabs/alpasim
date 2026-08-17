@@ -3,6 +3,10 @@
 The starter kit provides a minimal Python example of `egodriver.EgodriverService`.
 It can be smoke-tested against either of the two challenge tracks.
 
+Its straight-line fallback continues at the latest observed ego speed (using the
+reported dynamic state, with a pose-delta fallback). This avoids an abrupt
+speed-target change when control transfers from the recorded trajectory.
+
 > Note: run all commands from the repo root.
 
 ## Common: Starter Kit Driver
