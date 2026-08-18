@@ -70,6 +70,7 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.before || '' }}
           AFTER_SHA: ${{ github.sha }}
+          GIT_LFS_SKIP_SMUDGE: "1"
         run: |
           set -euo pipefail
 
