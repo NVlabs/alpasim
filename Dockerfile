@@ -13,6 +13,7 @@ FROM nvcr.io/nvidia/pytorch:25.08-py3 AS base-arm64
 FROM nvcr.io/nvidia/k8s/dcgm-exporter:4.4.1-4.6.0-ubuntu22.04@sha256:b7a4241c608253aa829041cc3575ea57082491251a4a626bcdddc68eaf9a3101 AS dcgm-exporter
 ARG TARGETARCH
 FROM base-${TARGETARCH}
+ARG TARGETARCH
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=dcgm-exporter /usr/bin/dcgm-exporter /usr/bin/dcgm-exporter
@@ -22,6 +23,12 @@ RUN printf '%s\n' \
     >> /etc/dcgm-exporter/default-counters.csv
 
 ARG DEBIAN_FRONTEND=noninteractive
+RUN if [ "${TARGETARCH}" = "arm64" ]; then \
+      . /etc/os-release && \
+      ubuntu_repo="ubuntu$(echo "${VERSION_ID}" | tr -d '.')" && \
+      curl -fsSL -o /tmp/cuda-keyring.deb "https://developer.download.nvidia.com/compute/cuda/repos/${ubuntu_repo}/sbsa/cuda-keyring_1.1-1_all.deb" && \
+      dpkg -i /tmp/cuda-keyring.deb && rm -f /tmp/cuda-keyring.deb; \
+    fi
 RUN apt-get update && apt-get install -y \
     git \
     ffmpeg \
@@ -55,9 +62,26 @@ RUN uv run compile-protos --no-sync
 
 WORKDIR /repo
 
+# The arm64 branch installs its package subset explicitly rather than selecting an
+# extra through `uv sync`: syncing through the project resolution yields a +cpu
+# torch build on aarch64, while the direct install resolves an aarch64 CUDA build
+# (measured on GB10: 2.8.0+cpu via sync vs 2.13.0+cu130 with CUDA available).
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all --extra recipes'
+    sh -c '\
+      if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && \
+      if [ "${TARGETARCH}" = "arm64" ]; then \
+        uv pip install --python /repo/.venv/bin/python \
+          -e /repo/src/plugins \
+          -e /repo/src/grpc \
+          -e /repo/src/utils \
+          -e /repo/src/controller \
+          -e /repo/src/eval \
+          -e /repo/src/runtime \
+          -e /repo/src/physics; \
+      else \
+        uv sync --extra all --extra recipes; \
+      fi'
 
 ARG PYTORCH_VERSION=2.8.0+cu128
 ARG TORCH_CLUSTER_VERSION=1.6.3
@@ -66,12 +90,16 @@ ARG TORCH_SPARSE_VERSION=0.6.18
 
 # Install PyG compiled extensions (torch-cluster, torch-scatter, torch-sparse)
 # from pre-built wheels matching the installed torch + CUDA versions.
-RUN PYG_WHEEL_URL="https://data.pyg.org/whl/torch-${PYTORCH_VERSION}.html" && \
-    uv pip install \
-        "torch-cluster==${TORCH_CLUSTER_VERSION}" \
-        "torch-scatter==${TORCH_SCATTER_VERSION}" \
-        "torch-sparse==${TORCH_SPARSE_VERSION}" \
-        -f "$PYG_WHEEL_URL"
+# Only alpasim-trafficsim needs these, and it is excluded from the arm64 package set
+# above; the wheel index is also pinned to an x86 CUDA build.
+RUN if [ "${TARGETARCH}" != "arm64" ]; then \
+      PYG_WHEEL_URL="https://data.pyg.org/whl/torch-${PYTORCH_VERSION}.html" && \
+      uv pip install \
+          "torch-cluster==${TORCH_CLUSTER_VERSION}" \
+          "torch-scatter==${TORCH_SCATTER_VERSION}" \
+          "torch-sparse==${TORCH_SPARSE_VERSION}" \
+          -f "$PYG_WHEEL_URL"; \
+    fi
 
 ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV UV_NO_SYNC=1
