@@ -70,7 +70,7 @@ FlashDreams publishes `Dockerfile`s but not pre-built images. We need to build t
 
 ```bash
 cd ../flashdreams
-docker build -t flashdreams-base:local -f docker/Dockerfile .
+docker build -t flashdreams:local -f docker/Dockerfile .
 ```
 
 2. Then build the Alpasim-ready FlashDreams image. This bakes the workspace source
