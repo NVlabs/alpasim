@@ -312,6 +312,56 @@ def test_route_generator_map_sanity_fold_back():
         RouteGenerator.sanity_check_waypoints_for_foldback(bad_waypoints)
 
 
+def test_route_generator_map_heading_ignores_stationary_jitter():
+    waypoints = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.01, 0.01, 0.0],
+            [0.99, -0.01, 0.0],
+            [1.01, -0.01, 0.0],
+        ]
+    )
+
+    headings = RouteGeneratorMap._estimate_trajectory_headings(waypoints)
+
+    assert headings == pytest.approx(np.zeros(len(waypoints)))
+
+
+def test_route_generator_map_falls_back_when_map_projection_folds(monkeypatch):
+    recorded = np.zeros((81, 3))
+    recorded[:, 0] = np.linspace(0.0, 20.0, len(recorded))
+    projected = recorded.copy()
+    projected[40] += np.array([0.0, 5.0, 0.0])
+    monkeypatch.setattr(
+        RouteGeneratorMap,
+        "_determine_waypoints",
+        lambda _self, _recorded: projected,
+    )
+
+    route_generator = RouteGeneratorMap(recorded, vector_map=None)
+
+    assert route_generator.route_polyline_in_local.points == pytest.approx(recorded)
+    assert route_generator._current_lane is None
+
+
+def test_route_generator_map_rejects_foldback_extension():
+    original = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    lane = MagicMock()
+    lane.center.points = np.array([[2.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    lane.center.project_onto.return_value = (None, np.array([0]))
+    lane.next_lanes = []
+
+    route_generator = RouteGeneratorMap.__new__(RouteGeneratorMap)
+    route_generator._route_polyline_in_local = Polyline(points=original)
+    route_generator._current_lane = lane
+
+    assert not route_generator._extend_waypoints()
+    assert route_generator.route_polyline_in_local.points == pytest.approx(original)
+    assert route_generator._current_lane is None
+
+
 def test_route_generator_prepare_for_policy():
     """
     Test proper preparation of the polyline for the policy, including padding with NaNs

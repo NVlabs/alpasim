@@ -297,6 +297,7 @@ class RouteGeneratorMap(RouteGenerator):
     """
 
     OFF_MAP_THRESHOLD_M: float = 10.0  # [m] maximum distance to the original trajectory
+    HEADING_MIN_DISPLACEMENT_M: float = 0.5
 
     def __init__(
         self,
@@ -314,32 +315,39 @@ class RouteGeneratorMap(RouteGenerator):
         """
         self._map = vector_map
         self._current_lane = None
-        super().__init__(
-            self._determine_waypoints(recorded_waypoints_in_local),
-            route_start_offset_m=route_start_offset_m,
-        )
+        projected_waypoints = self._determine_waypoints(recorded_waypoints_in_local)
+        try:
+            super().__init__(
+                projected_waypoints,
+                route_start_offset_m=route_start_offset_m,
+            )
+        except ValueError as error:
+            if "route folds back on itself" not in str(error):
+                raise
+            logger.warning(
+                "Map-projected route folds back; using recorded route instead: %s",
+                error,
+            )
+            self._current_lane = None
+            super().__init__(
+                recorded_waypoints_in_local,
+                route_start_offset_m=route_start_offset_m,
+            )
 
     def _determine_waypoints(
         self, recorded_waypoints_in_local: np.ndarray
     ) -> np.ndarray:
         # For each waypoint in the recorded rig trajectory, find the possible lanes
         possible_lane_ids: list[list[str]] = []
-        heading = np.array([0.0])
-        for i in range(len(recorded_waypoints_in_local)):
-            if i != len(recorded_waypoints_in_local) - 1:
-                relative_motion = (
-                    recorded_waypoints_in_local[i + 1] - recorded_waypoints_in_local[i]
-                )[:2]
-                if np.linalg.norm(relative_motion) > 1.0e-2:
-                    heading = np.array(
-                        [math.atan2(relative_motion[1], relative_motion[0])]
-                    )
-
+        headings = self._estimate_trajectory_headings(recorded_waypoints_in_local)
+        for i, heading in enumerate(headings):
             possible_lane_ids.append(
                 [
                     road_lane.id
                     for road_lane in self._map.get_current_lane(
-                        np.concatenate((recorded_waypoints_in_local[i], heading)),
+                        np.concatenate(
+                            (recorded_waypoints_in_local[i], np.array([heading]))
+                        ),
                         max_dist=4.0,
                     )
                 ]
@@ -379,6 +387,23 @@ class RouteGeneratorMap(RouteGenerator):
 
         return rig_waypoints_in_local
 
+    @classmethod
+    def _estimate_trajectory_headings(cls, waypoints: np.ndarray) -> np.ndarray:
+        """Estimate headings without treating stationary localization jitter as motion."""
+        headings = np.zeros(len(waypoints), dtype=np.float64)
+        last_heading = 0.0
+        for i, waypoint in enumerate(waypoints):
+            future_displacements = waypoints[(i + 1) :, :2] - waypoint[:2]
+            future_distances = np.linalg.norm(future_displacements, axis=1)
+            moving_indices = np.flatnonzero(
+                future_distances >= cls.HEADING_MIN_DISPLACEMENT_M
+            )
+            if len(moving_indices) > 0:
+                displacement = future_displacements[moving_indices[0]]
+                last_heading = math.atan2(displacement[1], displacement[0])
+            headings[i] = last_heading
+        return headings
+
     def _extend_waypoints(self) -> bool:
         """Extend waypoints using map data. Returns True if successful, False if cannot extend."""
         # Add waypoints through the end of the current lane and reset the
@@ -400,9 +425,16 @@ class RouteGeneratorMap(RouteGenerator):
         if len(extension_waypoints) > 0:
             # Create a polyline with the extension waypoints and append
             extension_polyline = Polyline(points=extension_waypoints)
-            self._route_polyline_in_local = self._route_polyline_in_local.append(
-                extension_polyline
-            )
+            extended_route = self._route_polyline_in_local.append(extension_polyline)
+            try:
+                RouteGenerator.sanity_check_waypoints_for_foldback(
+                    extended_route.points
+                )
+            except ValueError as error:
+                logger.warning("Map route extension folds back; stopping: %s", error)
+                self._current_lane = None
+                return False
+            self._route_polyline_in_local = extended_route
             extended = True
 
         if len(self._current_lane.next_lanes) == 0:
