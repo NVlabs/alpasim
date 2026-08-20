@@ -96,6 +96,147 @@ def test_mtgs_engine_importable():
         pytest.skip(f"Server dependencies not installed: {e}")
 
 
+def _rigid_model_for_log_pose_tests(*, log_replay: bool = True):
+    import torch
+    from alpasim_mtgs.server.engine.gaussian_model.rigid_object import (
+        RigidPortableSubModel,
+    )
+
+    model = RigidPortableSubModel.__new__(RigidPortableSubModel)
+    torch.nn.Module.__init__(model)
+    model.log_replay = log_replay
+    model.static_in_log = False
+    model.gauss_params = {"means": torch.zeros(1)}
+    model.log_start_time = 1_621_970_015_499_931
+    model.log_timestamps = torch.tensor([0.0, 500_000.0, 1_000_000.0])
+    model.log_quats = torch.nn.Parameter(
+        torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ]
+        )
+    )
+    model.log_trans = torch.nn.Parameter(
+        torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [5.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+            ]
+        )
+    )
+    return model
+
+
+def test_rigid_log_pose_accepts_relative_and_absolute_timestamps():
+    import torch
+
+    model = _rigid_model_for_log_pose_tests()
+    relative_timestamp = 250_000
+    absolute_timestamp = model.log_start_time + relative_timestamp
+
+    _, relative_trans, _ = model._get_log_pose_from_timestamp(relative_timestamp)
+    _, absolute_trans, _ = model._get_log_pose_from_timestamp(absolute_timestamp)
+
+    torch.testing.assert_close(relative_trans, torch.tensor([2.5, 0.0, 0.0]))
+    torch.testing.assert_close(absolute_trans, relative_trans)
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "expected_x"),
+    [
+        (-100_000, 0.0),
+        (1_500_000, 10.0),
+        (1_621_970_015_399_931, 0.0),
+        (1_621_970_016_999_931, 10.0),
+    ],
+)
+def test_rigid_log_pose_clamps_out_of_range_timestamps(timestamp, expected_x):
+    model = _rigid_model_for_log_pose_tests()
+
+    _, trans, _ = model._get_log_pose_from_timestamp(timestamp)
+
+    assert trans[0].item() == expected_x
+
+
+def test_rigid_dynamic_actor_without_pose_requires_log_replay():
+    model = _rigid_model_for_log_pose_tests(log_replay=False)
+
+    assert model._decide_global_pose(timestamp=0) is None
+    assert model.get_global_gaussians(timestamp=0) is None
+
+    model.log_replay = True
+    assert model._decide_global_pose(timestamp=0) is not None
+
+
+def test_rigid_explicit_pose_overrides_static_log_pose():
+    import torch
+
+    model = _rigid_model_for_log_pose_tests(log_replay=False)
+    model.static_in_log = True
+    model.log_quats = torch.nn.Parameter(torch.tensor([1.0, 0.0, 0.0, 0.0]))
+    model.log_trans = torch.nn.Parameter(torch.tensor([0.0, 0.0, 0.0]))
+    requested_quat = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    requested_trans = torch.tensor([5.0, 6.0, 7.0])
+
+    assert model._decide_global_pose(timestamp=0) is None
+    quat, trans, _ = model._decide_global_pose(
+        quat=requested_quat,
+        trans=requested_trans,
+        timestamp=0,
+    )
+
+    torch.testing.assert_close(quat, requested_quat)
+    torch.testing.assert_close(trans, requested_trans)
+
+
+def test_mtgs_rgb_collection_matches_active_geometry():
+    import torch
+    from alpasim_mtgs.server.engine.mtgs import MTGS
+
+    class ActiveModel:
+        def get_global_gaussians(self, **_kwargs):
+            return {
+                "means": torch.zeros((1, 3)),
+                "scales": torch.ones((1, 3)),
+                "quats": torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+                "opacities": torch.ones(1),
+            }
+
+        def get_gaussian_rgbs(self, **_kwargs):
+            return torch.ones((1, 3))
+
+    class InactiveModel:
+        def get_global_gaussians(self, **_kwargs):
+            return None
+
+        def get_gaussian_rgbs(self, **_kwargs):
+            raise AssertionError("inactive model must not contribute RGB features")
+
+    renderer = MTGS.__new__(MTGS)
+    renderer.device = torch.device("cpu")
+    renderer.node_types = {"background": "background", "inactive": "na"}
+    renderer.submodel_names = {
+        "background": "background",
+        "inactive": "inactive",
+    }
+    renderer.gaussian_models = {
+        "background": ActiveModel(),
+        "inactive": InactiveModel(),
+    }
+    renderer._world_cache_key = None
+    renderer._active_asset_tokens = ()
+
+    renderer.update_world(timestamp=0, agent_states={})
+    renderer.update_gaussian_rgbs(torch.eye(4).unsqueeze(0))
+
+    assert renderer._active_asset_tokens == ("background",)
+    assert renderer.collected_gaussians["means"].shape[0] == 1
+    assert renderer.collected_gaussians["rgbs"].shape[1] == 1
+
+
 def test_mtgs_asset_manager_allows_missing_road_height_map(tmp_path, monkeypatch):
     import torch
     from alpasim_mtgs.server.engine.mtgs import MTGSAssetManager

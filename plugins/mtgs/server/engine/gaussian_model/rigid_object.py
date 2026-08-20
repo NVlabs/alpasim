@@ -115,13 +115,29 @@ class RigidPortableSubModel(VanillaPortableGaussianModel):
 
     def _get_log_pose_from_timestamp(self, timestamp):
         self.log_timestamps = self.log_timestamps.to(self.device)
-        relative_timestamp = timestamp - self.log_start_time
+        relative_timestamp = self._to_relative_log_timestamp(timestamp)
+        relative_timestamp = torch.as_tensor(
+            relative_timestamp,
+            dtype=self.log_timestamps.dtype,
+            device=self.device,
+        )
 
+        # Clamp instead of relying on argmin over an all-inf tensor. The old
+        # implementation happened to select frame zero before the log started
+        # and could interpolate between the last and first frames after the log
+        # ended, producing frozen or distorted actors.
+        relative_timestamp = relative_timestamp.clamp(
+            min=self.log_timestamps.min(),
+            max=self.log_timestamps.max(),
+        )
         diffs = relative_timestamp - self.log_timestamps
         prev_frame = torch.argmin(torch.where(diffs >= 0, diffs, float("inf")))
         next_frame = torch.argmin(torch.where(diffs <= 0, -diffs, float("inf")))
 
-        if next_frame == prev_frame:
+        if (
+            next_frame == prev_frame
+            or self.log_timestamps[next_frame] == relative_timestamp
+        ):
             return self.log_quats[next_frame], self.log_trans[next_frame], timestamp
 
         t = (relative_timestamp - self.log_timestamps[prev_frame]) / (
@@ -137,20 +153,57 @@ class RigidPortableSubModel(VanillaPortableGaussianModel):
 
         return quat_interp, trans_interp, timestamp
 
+    def _to_relative_log_timestamp(self, timestamp):
+        """Convert either an absolute or scene-relative timestamp to log time.
+
+        WorldEngine supplies epoch-based microseconds, while AlpaSim render
+        requests use microseconds from the beginning of the simulation. Choose
+        the domain whose valid interval is closest to the supplied timestamp.
+        This also classifies slightly out-of-range timestamps correctly before
+        ``_get_log_pose_from_timestamp`` clamps them to the available log.
+        """
+        timestamp = float(timestamp)
+        relative_start = float(self.log_timestamps.min().item())
+        relative_end = float(self.log_timestamps.max().item())
+        absolute_start = float(self.log_start_time) + relative_start
+        absolute_end = float(self.log_start_time) + relative_end
+
+        def distance_to_interval(value, start, end):
+            if value < start:
+                return start - value
+            if value > end:
+                return value - end
+            return 0.0
+
+        relative_distance = distance_to_interval(
+            timestamp, relative_start, relative_end
+        )
+        absolute_distance = distance_to_interval(
+            timestamp, absolute_start, absolute_end
+        )
+        if absolute_distance < relative_distance:
+            return timestamp - float(self.log_start_time)
+        return timestamp
+
     def _decide_global_pose(self, quat=None, trans=None, timestamp=None):
-        if self.static_in_log:
-            return self.log_quats, self.log_trans, timestamp
         if quat is not None and trans is not None:
             assert quat.shape == (4,) and trans.shape == (3,)
             return quat.float(), trans.float(), timestamp
+        if not self.log_replay:
+            return None
+        if self.static_in_log:
+            return self.log_quats, self.log_trans, timestamp
         return self._get_log_pose_from_timestamp(timestamp)
 
     def get_global_gaussians(self, quat=None, trans=None, timestamp=None, **kwargs):
-        quat, trans, timestamp = self._decide_global_pose(
+        global_pose = self._decide_global_pose(
             quat=quat,
             trans=trans,
             timestamp=timestamp,
         )
+        if global_pose is None:
+            return None
+        quat, trans, timestamp = global_pose
 
         return {
             "means": self.get_means(global_trans=trans, global_quat=quat),
