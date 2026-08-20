@@ -295,6 +295,21 @@ def test_mtgs_scene_loader_requires_asset_base_path(monkeypatch):
         mtgs_main.create_get_scene_function(_mtgs_user_config())
 
 
+def test_build_token_to_asset_folder_infers_road_block_name(tmp_path):
+    from alpasim_mtgs.server import main as mtgs_main
+
+    (tmp_path / "scene.yaml").write_text(
+        "central_log: log-a\n" "central_tokens:\n" "  - token-1\n" "  - token-2\n"
+    )
+
+    mapping = mtgs_main._build_token_to_asset_folder(tmp_path)
+
+    assert mapping == {
+        "token-1": "log-a-token-1",
+        "token-2": "log-a-token-1",
+    }
+
+
 def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     from alpasim_mtgs.server import main as mtgs_main
 
@@ -344,6 +359,11 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     monkeypatch.setattr(mtgs_main, "TRAJDATA_AVAILABLE", True)
     monkeypatch.setattr(mtgs_main, "UnifiedDataset", FakeUnifiedDataset)
     monkeypatch.setattr(mtgs_main, "TrajdataDataSource", fake_trajdata_data_source)
+    monkeypatch.setattr(
+        mtgs_main,
+        "_build_token_to_asset_folder",
+        lambda _configs_dir: {"a": "asset-auto"},
+    )
 
     get_scene, get_available_scene_ids = mtgs_main.create_get_scene_function(
         _mtgs_user_config(
@@ -384,7 +404,7 @@ def test_mtgs_scene_loader_uses_public_trajdata_dataset_api(monkeypatch):
     )
     assert (
         get_unmapped_scene("scene-a").asset_path
-        == "/tmp/mtgs-assets/navtest/assets/scene-a"
+        == "/tmp/mtgs-assets/navtest/assets/asset-auto"
     )
 
 
