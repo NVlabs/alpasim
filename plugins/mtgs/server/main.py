@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 DATASET_NAME_MAPPING = {
     "nuplan_test": "navtest",
     "nuplan_mini": "navtest",
+    "nuplan_private": "private",
 }
 
 
@@ -66,6 +67,59 @@ def _asset_folder_map_from_extra_params(extra_params) -> dict[str, str]:
                 f"asset_folder_map[{scene_id!r}] must be a non-empty string."
             )
         mapping[scene_id] = asset_folder
+
+    return mapping
+
+
+def _build_token_to_asset_folder(configs_dir: Path) -> dict:
+    """Read MTGS config YAMLs to build a central_token → road_block_name mapping.
+
+    Each YAML lists all central_tokens sharing one rendered asset folder
+    (road_block_name = central_log + '-' + central_tokens[0]).  This mapping
+    lets the MTGS server resolve any token to its shared asset folder at
+    runtime, regardless of the trajdata cache state.
+    """
+    import yaml
+
+    class _SafeLoader(yaml.SafeLoader):
+        pass
+
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/object",
+        lambda loader, tag, node: loader.construct_mapping(node, deep=True),
+    )
+    _SafeLoader.add_multi_constructor(
+        "tag:yaml.org,2002:python/tuple",
+        lambda loader, tag, node: loader.construct_sequence(node, deep=True),
+    )
+
+    mapping: dict = {}
+    if not configs_dir.exists():
+        logger.warning("MTGS configs dir not found: %s", configs_dir)
+        return mapping
+
+    for yaml_file in configs_dir.glob("*.yaml"):
+        try:
+            cfg = yaml.load(yaml_file.read_text(), Loader=_SafeLoader)
+            if not isinstance(cfg, dict):
+                continue
+            central_log = cfg.get("central_log", "")
+            central_tokens = cfg.get("central_tokens", [])
+            if not central_tokens:
+                continue
+            road_block_name = cfg.get("road_block_name", "")
+            if not road_block_name and central_log:
+                road_block_name = f"{central_log}-{central_tokens[0]}"
+            if not road_block_name:
+                continue
+            for token in central_tokens:
+                mapping[str(token)] = road_block_name
+        except Exception as exc:
+            logger.warning("Failed to load %s: %s", yaml_file.name, exc)
+
+    logger.info(
+        "Built asset-folder mapping for %d tokens from %s", len(mapping), configs_dir
+    )
     return mapping
 
 
@@ -129,6 +183,26 @@ def create_get_scene_function(
             len(asset_folder_map),
         )
 
+    configs_dir = Path(asset_base_path_config) / mapped_name / "configs"
+    token_to_asset_folder = _build_token_to_asset_folder(configs_dir)
+
+    def _asset_folder_resolver(scene) -> str:
+        explicit_asset_folder = asset_folder_map.get(scene.name)
+        if explicit_asset_folder:
+            return explicit_asset_folder
+
+        token = scene.name.rsplit("-", 1)[-1]
+        inferred_asset_folder = token_to_asset_folder.get(str(token))
+        if inferred_asset_folder:
+            return inferred_asset_folder
+
+        data_access_info = getattr(scene, "data_access_info", None) or {}
+        return data_access_info.get("asset_folder", scene.name)
+
+    asset_folder_resolver: Callable | None = (
+        _asset_folder_resolver if asset_folder_map or token_to_asset_folder else None
+    )
+
     params = trajdata_provider_config_to_params(trajdata_config)
     logger.info("Creating UnifiedDataset from config")
     dataset = UnifiedDataset(**params)
@@ -154,15 +228,7 @@ def create_get_scene_function(
             vector_map_params=dataset.vector_map_params,
             smooth_trajectories=user_config.smooth_trajectories,
             asset_base_path=mtgs_asset_base_path,
-            asset_folder_resolver=(
-                (
-                    lambda resolved_scene: asset_folder_map.get(
-                        resolved_scene.name, resolved_scene.name
-                    )
-                )
-                if asset_folder_map
-                else None
-            ),
+            asset_folder_resolver=asset_folder_resolver,
         )
 
         logger.info(f"Loaded scene {scene_id}, asset_path={data_source.asset_path}")

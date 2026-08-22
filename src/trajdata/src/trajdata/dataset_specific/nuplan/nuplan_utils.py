@@ -225,17 +225,18 @@ class NuPlanObject:
             # Create scene name using the central token format.
             scene_name = f"{logfile_name}-{central_token_hex}"
 
-            scenes.append(
-                {
-                    "name": scene_name,
-                    "location": _NUPLAN_SQL_MAP_FRIENDLY_NAMES_DICT.get(
-                        location, location
-                    ),
-                    "num_timesteps": num_timesteps,
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                }
-            )
+            scene_dict: Dict[str, Any] = {
+                "name": scene_name,
+                "location": _NUPLAN_SQL_MAP_FRIENDLY_NAMES_DICT.get(
+                    location, location
+                ),
+                "num_timesteps": num_timesteps,
+                "start_idx": start_idx,
+                "end_idx": end_idx,
+            }
+            if "asset_folder" in config:
+                scene_dict["asset_folder"] = config["asset_folder"]
+            scenes.append(scene_dict)
 
             self.close_db()
 

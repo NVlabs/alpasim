@@ -108,6 +108,7 @@ class MTGS(BaseRenderer):
         # agent membership (e.g. warmup with empty traffic vs first real frame
         # with full traffic) correctly miss the cache.
         self._world_cache_key = None
+        self._active_asset_tokens = ()
         self.sensor_mapping = {}
 
     def _init_gaussian_models(self):
@@ -330,6 +331,7 @@ class MTGS(BaseRenderer):
             "quats": [],
             "opacities": [],
         }
+        active_asset_tokens = []
         for asset_token in self.node_types.keys():
             gaussian_model = self.gaussian_models[self.submodel_names[asset_token]]
             if asset_token in agent_states.keys():
@@ -346,10 +348,13 @@ class MTGS(BaseRenderer):
                     timestamp=timestamp,
                 )
                 if gs is None:
-                    logger.warning(
-                        f"get_global_gaussians returned None for {asset_token}"
+                    logger.debug(
+                        "Skipping inactive asset actor %s at timestamp %s",
+                        asset_token,
+                        timestamp,
                     )
                     continue
+                active_asset_tokens.append(asset_token)
                 for k in gs_dict.keys():
                     gs_dict[k].append(gs[k].to(self.device))
             except Exception as e:
@@ -375,6 +380,7 @@ class MTGS(BaseRenderer):
                 new_collected_gaussians[key] = torch.cat(value, dim=0)
             self.collected_gaussians = new_collected_gaussians
             self.timestamp = timestamp
+            self._active_asset_tokens = tuple(active_asset_tokens)
             self._world_cache_key = cache_key
         except Exception as e:
             logger.error(f"Failed to merge gaussians: {e}", exc_info=True)
@@ -382,7 +388,7 @@ class MTGS(BaseRenderer):
 
     def update_gaussian_rgbs(self, camera_to_worlds):
         rgb_list = []
-        for asset_token in self.node_types.keys():
+        for asset_token in self._active_asset_tokens:
             gaussian_model = self.gaussian_models[self.submodel_names[asset_token]]
             rgbs = []
             for i in range(camera_to_worlds.shape[0]):
