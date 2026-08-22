@@ -1,0 +1,17 @@
+**
+!src/
+!src/grpc/
+!src/grpc/**
+!e2e_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/requirements.txt
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/gtrs_dense/
+e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/gtrs_dense/*
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/gtrs_dense/navhard_8192.npy
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/gtrs_dense/navsim_16384.npy
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/assets/gtrs_dense/.gtrs-build-*
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/navsim_gtrs_dense_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_gtrs_dense/navsim_gtrs_dense_challenge/**
+**/__pycache__/
+**/*.pyc

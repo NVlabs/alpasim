@@ -1,0 +1,15 @@
+**
+!src/
+!src/grpc/
+!src/grpc/**
+!e2e_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/requirements.txt
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/assets/
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/assets/diffusiondrive/
+e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/assets/diffusiondrive/*
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/assets/diffusiondrive/.diffusiondrive-build-*
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/navsim_diffusiondrive_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_diffusiondrive/navsim_diffusiondrive_challenge/**
+**/__pycache__/
+**/*.pyc

@@ -1,0 +1,9 @@
+dataclasses-json==0.6.7
+grpcio==1.74.0
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+pillow==11.1.0
+protobuf==4.25.8
+setuptools==80.9.0
+timm==1.0.27
+torchvision==0.21.0

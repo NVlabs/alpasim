@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim_grpc"
+version = "0.54.0"
+description = "Runtime-only gRPC API definitions for Alpasim"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "dataclasses-json==0.6.7",
+  "grpcio==1.74.0",
+  "numpy==1.26.4",
+  "protobuf==4.25.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alpasim_grpc*"]
+
+[tool.setuptools.package-data]
+alpasim_grpc = ["py.typed", "v0/*.proto", "v0/*.pyi"]

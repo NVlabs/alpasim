@@ -1,0 +1,14 @@
+**
+!src/
+!src/grpc/
+!src/grpc/**
+!e2e_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/Dockerfile
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/requirements.txt
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/assets/
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/assets/ltf/
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/assets/ltf/ltf_sim_navtest.ckpt
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/assets/ltf/.ltf-build-*
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/navsim_transfuser_challenge/
+!e2e_challenge/sample_submission_simscale_navsim_transfuser/navsim_transfuser_challenge/**
