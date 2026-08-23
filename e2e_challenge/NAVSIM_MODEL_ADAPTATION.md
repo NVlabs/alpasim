@@ -1,7 +1,5 @@
 # Adapting NAVSIM Models for AlpaSim Inference
 
-[Chinese](NAVSIM_MODEL_ADAPTATION.zh-CN.md)
-
 This guide covers only the NuPlan/MTGS E2E track. The model receives
 `1920x1080` RGB images from `CAM_L0`, `CAM_F0`, and `CAM_R0` and returns a
 trajectory in the vehicle rig frame. It does not cover training, PAI camera
