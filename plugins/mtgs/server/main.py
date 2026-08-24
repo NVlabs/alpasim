@@ -16,6 +16,7 @@ from concurrent import futures
 from pathlib import Path
 from typing import Callable
 
+import yaml
 from alpasim_grpc.v0.sensorsim_pb2_grpc import add_SensorsimServiceServicer_to_server
 from alpasim_mtgs.server.servicer import MTGSSensorsimService
 from alpasim_runtime.config import UserSimulatorConfig
@@ -79,7 +80,6 @@ def _build_token_to_asset_folder(configs_dir: Path) -> dict:
     lets the MTGS server resolve any token to its shared asset folder at
     runtime, regardless of the trajdata cache state.
     """
-    import yaml
 
     class _SafeLoader(yaml.SafeLoader):
         pass
@@ -115,7 +115,7 @@ def _build_token_to_asset_folder(configs_dir: Path) -> dict:
             for token in central_tokens:
                 mapping[str(token)] = road_block_name
         except Exception as exc:
-            logger.warning("Failed to load %s: %s", yaml_file.name, exc)
+            raise ValueError(f"Failed to load {yaml_file.name}: {exc}") from exc
 
     logger.info(
         "Built asset-folder mapping for %d tokens from %s", len(mapping), configs_dir
