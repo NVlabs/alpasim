@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import hashlib
@@ -5,12 +8,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+import navsim_diffusiondrive_challenge.policy as policy_module
 import numpy as np
 import pytest
 import torch
-from torch import nn
-
-import navsim_diffusiondrive_challenge.policy as policy_module
 from navsim_diffusiondrive_challenge.policy import (
     ANCHOR_KEY,
     CHECKPOINT_PREFIX,
@@ -20,10 +21,12 @@ from navsim_diffusiondrive_challenge.policy import (
     normalized_checkpoint,
 )
 from navsim_diffusiondrive_challenge.preprocessing import CAMERA_IDS
-
+from torch import nn
 
 REAL_CHECKPOINT_SIZE = 243_596_717
-REAL_CHECKPOINT_SHA256 = "8fdbdb3fdfa7b496e7d7a438efbb5c2022377e59cbfd7095270d89623c5d963f"
+REAL_CHECKPOINT_SHA256 = (
+    "8fdbdb3fdfa7b496e7d7a438efbb5c2022377e59cbfd7095270d89623c5d963f"
+)
 
 
 class TinyReleaseModel(nn.Module):
@@ -67,7 +70,9 @@ def _request(
     noise_index: int | None = None,
 ) -> InferenceInput:
     return InferenceInput(
-        images={camera_id: np.zeros((1, 1, 3), dtype=np.uint8) for camera_id in CAMERA_IDS},
+        images={
+            camera_id: np.zeros((1, 1, 3), dtype=np.uint8) for camera_id in CAMERA_IDS
+        },
         command_one_hot=np.array([0, 1, 0, 0], dtype=np.float32),
         velocity_xy=np.zeros(2, dtype=np.float32),
         acceleration_xy=np.zeros(2, dtype=np.float32),
@@ -101,7 +106,9 @@ def _fake_policy(trajectory: torch.Tensor) -> DiffusionDrivePolicy:
 def _real_checkpoint_path() -> Path:
     checkpoint_path = os.environ.get("DIFFUSIONDRIVE_REAL_CHECKPOINT")
     if not checkpoint_path:
-        pytest.skip("set DIFFUSIONDRIVE_REAL_CHECKPOINT to run released checkpoint tests")
+        pytest.skip(
+            "set DIFFUSIONDRIVE_REAL_CHECKPOINT to run released checkpoint tests"
+        )
     return Path(checkpoint_path)
 
 
@@ -222,7 +229,9 @@ def test_predict_batch_returns_empty_without_initialized_model() -> None:
     assert policy.predict_batch([]) == []
 
 
-def test_predict_batch_returns_independent_samples(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_predict_batch_returns_independent_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     trajectory = torch.arange(48, dtype=torch.float32).reshape(2, 8, 3)
     policy = _fake_policy(trajectory)
     monkeypatch.setattr(

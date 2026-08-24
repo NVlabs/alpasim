@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Minimal DDIM scheduler used by the vendored inference graph."""
 
 from __future__ import annotations
@@ -31,12 +34,15 @@ class DDIMScheduler:
             raise ValueError("only sample prediction is supported")
 
         self.num_train_timesteps = num_train_timesteps
-        self.betas = torch.linspace(
-            0.0001**0.5,
-            0.02**0.5,
-            num_train_timesteps,
-            dtype=torch.float32,
-        ) ** 2
+        self.betas = (
+            torch.linspace(
+                0.0001**0.5,
+                0.02**0.5,
+                num_train_timesteps,
+                dtype=torch.float32,
+            )
+            ** 2
+        )
         self.alphas_cumprod = torch.cumprod(1.0 - self.betas, dim=0)
         self.final_alpha_cumprod = torch.tensor(1.0, dtype=torch.float32)
         self.num_inference_steps: int | None = None
@@ -55,7 +61,9 @@ class DDIMScheduler:
         self.num_inference_steps = num_inference_steps
         step_ratio = self.num_train_timesteps // num_inference_steps
         self.timesteps = (
-            torch.arange(num_inference_steps, dtype=torch.long, device=device).mul(step_ratio).flip(0)
+            torch.arange(num_inference_steps, dtype=torch.long, device=device)
+            .mul(step_ratio)
+            .flip(0)
         )
 
     def add_noise(
@@ -91,10 +99,14 @@ class DDIMScheduler:
         if model_output.shape != sample.shape:
             raise ValueError("model_output and sample must have identical shapes")
 
-        timestep_value = int(timestep.item()) if isinstance(timestep, torch.Tensor) else timestep
+        timestep_value = (
+            int(timestep.item()) if isinstance(timestep, torch.Tensor) else timestep
+        )
         if timestep_value < 0 or timestep_value >= self.num_train_timesteps:
             raise ValueError("timestep is outside the training schedule")
-        prev_timestep = timestep_value - self.num_train_timesteps // self.num_inference_steps
+        prev_timestep = (
+            timestep_value - self.num_train_timesteps // self.num_inference_steps
+        )
 
         alphas_cumprod = self.alphas_cumprod.to(device=sample.device)
         alpha_prod_t = alphas_cumprod[timestep_value]
@@ -106,7 +118,11 @@ class DDIMScheduler:
         beta_prod_t = 1 - alpha_prod_t
 
         pred_original_sample = model_output.clamp(-1, 1)
-        pred_epsilon = (sample - alpha_prod_t.sqrt() * model_output) / beta_prod_t.sqrt()
+        pred_epsilon = (
+            sample - alpha_prod_t.sqrt() * model_output
+        ) / beta_prod_t.sqrt()
         pred_sample_direction = (1 - alpha_prod_t_prev).sqrt() * pred_epsilon
-        prev_sample = alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction
+        prev_sample = (
+            alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction
+        )
         return DDIMSchedulerOutput(prev_sample=prev_sample.to(dtype=sample.dtype))

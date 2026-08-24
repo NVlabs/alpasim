@@ -8,7 +8,6 @@ import math
 import numpy as np
 import pytest
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Vec3
-
 from navsim_diffusiondrive_challenge.trajectory import (
     build_trajectory_from_plan,
     make_cached_plan,

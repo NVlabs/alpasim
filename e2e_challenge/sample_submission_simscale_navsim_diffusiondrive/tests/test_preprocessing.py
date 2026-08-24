@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import cv2
 import numpy as np
 import pytest
 import torch
-
 from navsim_diffusiondrive_challenge.preprocessing import (
     build_status_feature,
     preprocess_images,

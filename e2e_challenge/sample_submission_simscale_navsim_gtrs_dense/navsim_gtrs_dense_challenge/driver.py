@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import logging
@@ -13,29 +16,30 @@ from io import BytesIO
 from numbers import Integral, Real
 from typing import Protocol
 
-import grpc
 import numpy as np
 import torch
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2, egodriver_pb2, egodriver_pb2_grpc
 from PIL import Image
 
+import grpc
+
 from .batch_worker import BatchPolicy, BatchWorker
 from .navigation import DriveCommand, command_from_route, command_one_hot
-from .policy import InferenceInput, GTRSDensePolicy, Prediction
+from .policy import GTRSDensePolicy, InferenceInput, Prediction
 from .preprocessing import CAMERA_IDS
+from .simscale_gtrs_dense.model import (
+    NC_DAC_EP_SCORER,
+    SAFETY_GATE_EP_SCORER,
+    VALID_SCORER_MODES,
+    VALID_SPEED_PROXIES,
+)
 from .trajectory import (
     CachedPlan,
     build_trajectory_from_plan,
     cached_plan_covers_query,
     make_cached_plan,
     yaw_from_quat,
-)
-from .simscale_gtrs_dense.model import (
-    NC_DAC_EP_SCORER,
-    SAFETY_GATE_EP_SCORER,
-    VALID_SCORER_MODES,
-    VALID_SPEED_PROXIES,
 )
 
 LOGGER = logging.getLogger(__name__)

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import hashlib
@@ -13,7 +16,7 @@ from torch import Tensor
 
 from .preprocessing import CAMERA_IDS, build_status_feature, preprocess_images
 from .simscale_gtrs_dense.config import GTRSDenseConfig
-from .simscale_gtrs_dense.model import GTRSDenseModel, RELEASE_SCORER
+from .simscale_gtrs_dense.model import RELEASE_SCORER, GTRSDenseModel
 
 LOGGER = logging.getLogger(__name__)
 

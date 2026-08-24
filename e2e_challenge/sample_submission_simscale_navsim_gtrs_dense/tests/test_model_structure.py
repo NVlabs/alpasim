@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 from unittest import mock
@@ -5,8 +8,6 @@ from unittest import mock
 import pytest
 import timm
 import torch
-from torch import nn
-
 from navsim_gtrs_dense_challenge.simscale_gtrs_dense import backbone as backbone_module
 from navsim_gtrs_dense_challenge.simscale_gtrs_dense.config import GTRSDenseConfig
 from navsim_gtrs_dense_challenge.simscale_gtrs_dense.model import (
@@ -17,6 +18,7 @@ from navsim_gtrs_dense_challenge.simscale_gtrs_dense.model import (
     _speed_reranked_scores,
     _trajectory_scores,
 )
+from torch import nn
 
 
 def _model(vocab_size: int = 8, **config_kwargs: object) -> GTRSDenseModel:

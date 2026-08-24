@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -6,11 +9,7 @@ from typing import Any
 import pytest
 import timm
 import torch
-
-from navsim_transfuser_challenge.simscale_ltf import (
-    TransfuserConfig,
-    TransfuserModel,
-)
+from navsim_transfuser_challenge.simscale_ltf import TransfuserConfig, TransfuserModel
 
 
 @pytest.fixture(scope="module")

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import hashlib
@@ -1166,7 +1169,7 @@ def test_readme_uses_portable_paths_and_device_selection() -> None:
         "SimScale_ckpts/GTRS_Dense/" + ASSET_NAME,
         "hf download",
         "--repo-type dataset",
-            "/path/to/alpasim-nuplan-track",
+        "/path/to/alpasim-nuplan-track",
     ):
         assert required in text
     assert "/high_perf_store4/" not in text

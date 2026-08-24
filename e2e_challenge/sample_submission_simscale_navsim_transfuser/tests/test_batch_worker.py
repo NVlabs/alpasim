@@ -1,12 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 
+import navsim_transfuser_challenge.batch_worker as batch_worker_module
 import numpy as np
 import pytest
-
-import navsim_transfuser_challenge.batch_worker as batch_worker_module
 from navsim_transfuser_challenge.batch_worker import BatchWorker
 from navsim_transfuser_challenge.policy import InferenceInput, Prediction
 from navsim_transfuser_challenge.preprocessing import CAMERA_IDS

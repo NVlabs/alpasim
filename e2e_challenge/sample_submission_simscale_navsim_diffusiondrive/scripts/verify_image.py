@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Verify the standalone DiffusionDrive image after it is built."""
 
 from __future__ import annotations
@@ -10,7 +13,6 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-
 
 CHECKPOINT = Path("/app/assets/diffusiondrive/diffusiondrive_sim_navhard.ckpt")
 FORBIDDEN_PATHS = (

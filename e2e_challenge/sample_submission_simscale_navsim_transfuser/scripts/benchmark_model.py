@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import argparse
@@ -7,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from navsim_transfuser_challenge.policy import InferenceInput, LtfPolicy
 from navsim_transfuser_challenge.preprocessing import CAMERA_IDS
 

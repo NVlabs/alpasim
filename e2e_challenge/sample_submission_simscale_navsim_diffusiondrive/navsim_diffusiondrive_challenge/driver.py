@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import logging
@@ -13,16 +16,17 @@ from io import BytesIO
 from numbers import Integral, Real
 from typing import Protocol
 
-import grpc
 import numpy as np
 import torch
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2, egodriver_pb2, egodriver_pb2_grpc
 from PIL import Image
 
+import grpc
+
 from .batch_worker import BatchPolicy, BatchWorker
 from .navigation import DriveCommand, command_from_route, command_one_hot
-from .policy import InferenceInput, DiffusionDrivePolicy, Prediction
+from .policy import DiffusionDrivePolicy, InferenceInput, Prediction
 from .preprocessing import CAMERA_IDS
 from .trajectory import (
     CachedPlan,

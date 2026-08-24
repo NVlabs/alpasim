@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import argparse
@@ -8,15 +11,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
-import grpc
 from alpasim_grpc import API_VERSION_MESSAGE
-from alpasim_grpc.v0 import (
-    common_pb2,
-    egodriver_pb2,
-    egodriver_pb2_grpc,
-    sensorsim_pb2,
-)
+from alpasim_grpc.v0 import common_pb2, egodriver_pb2, egodriver_pb2_grpc, sensorsim_pb2
 from PIL import Image
+
+import grpc
 
 CAMERAS = (
     "CAM_F0",

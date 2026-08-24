@@ -159,9 +159,7 @@ def cached_plan_covers_query(
 ) -> bool:
     if plan is None or len(plan.times_s) < 2:
         return False
-    plan_end_us = plan.created_time_us + int(
-        round(float(plan.times_s[-1]) * 1_000_000)
-    )
+    plan_end_us = plan.created_time_us + int(round(float(plan.times_s[-1]) * 1_000_000))
     if plan_end_us < time_query_us:
         return False
 

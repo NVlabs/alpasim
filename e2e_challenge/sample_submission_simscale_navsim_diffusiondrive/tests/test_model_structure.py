@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Structure and inference tests for the vendored DiffusionDrive model."""
 
 from __future__ import annotations
@@ -12,11 +15,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from navsim_diffusiondrive_challenge.simscale_diffusiondrive.config import (
+    DiffusionDriveConfig,
+)
+from navsim_diffusiondrive_challenge.simscale_diffusiondrive.model import (
+    DiffusionDriveModel,
+)
 from torch import nn
-
-from navsim_diffusiondrive_challenge.simscale_diffusiondrive.config import DiffusionDriveConfig
-from navsim_diffusiondrive_challenge.simscale_diffusiondrive.model import DiffusionDriveModel
-
 
 MODEL_PACKAGE = (
     Path(__file__).resolve().parents[1]
@@ -44,7 +49,9 @@ def _anchor() -> np.ndarray:
 
 
 def _model() -> DiffusionDriveModel:
-    return DiffusionDriveModel(DiffusionDriveConfig(), _anchor(), backbone=FakeBackbone())
+    return DiffusionDriveModel(
+        DiffusionDriveConfig(), _anchor(), backbone=FakeBackbone()
+    )
 
 
 def test_released_model_structure_is_preserved() -> None:

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import math
@@ -6,14 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
 
-import grpc
+import navsim_transfuser_challenge.driver as driver_module
 import numpy as np
 import pytest
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2, egodriver_pb2, sensorsim_pb2
-from PIL import Image
-
-import navsim_transfuser_challenge.driver as driver_module
 from navsim_transfuser_challenge.driver import (
     NavsimTransfuserDriver,
     PolicyHandle,
@@ -25,6 +25,9 @@ from navsim_transfuser_challenge.driver import (
 from navsim_transfuser_challenge.navigation import DriveCommand, command_one_hot
 from navsim_transfuser_challenge.policy import InferenceInput, Prediction
 from navsim_transfuser_challenge.preprocessing import CAMERA_IDS
+from PIL import Image
+
+import grpc
 
 
 def _pose(

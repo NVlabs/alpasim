@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Release-boundary tests for the standalone DiffusionDrive submission."""
 
 from __future__ import annotations
@@ -87,7 +90,10 @@ def test_dockerfile_is_an_independent_offline_diffusiondrive_image() -> None:
         "pip install -r /tmp/requirements.txt",
         "COPY src/grpc /tmp/alpasim_grpc",
         "grpcio-tools==1.62.2",
-        "COPY ${DIFFUSIONDRIVE_SOURCE_DIR}/navsim_diffusiondrive_challenge/alpasim_grpc_build_only.toml /tmp/alpasim_grpc/pyproject.toml",
+        (
+            "COPY ${DIFFUSIONDRIVE_SOURCE_DIR}/navsim_diffusiondrive_challenge/"
+            "alpasim_grpc_build_only.toml /tmp/alpasim_grpc/pyproject.toml"
+        ),
         "compile_protos",
         "pip install --no-deps --no-build-isolation /tmp/alpasim_grpc",
         "USER root",
@@ -573,9 +579,7 @@ def test_readme_documents_reproducible_workflow_and_acceptance() -> None:
 
 def test_readme_documents_independent_image_build() -> None:
     text = (SUBMISSION_ROOT / "README.md").read_text()
-    build_section = text.split("## Build", 1)[1].split(
-        "## Local Smoke And Probe", 1
-    )[0]
+    build_section = text.split("## Build", 1)[1].split("## Local Smoke And Probe", 1)[0]
     for required in (
         "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime",
         "requirements.txt",
@@ -604,7 +608,7 @@ def test_readme_uses_portable_paths_and_device_selection() -> None:
         "SimScale_ckpts/DiffusionDrive/" + ASSET_NAME,
         "hf download",
         "--repo-type dataset",
-            "/path/to/alpasim-nuplan-track",
+        "/path/to/alpasim-nuplan-track",
     ):
         assert required in text
     assert "/high_perf_store4/" not in text

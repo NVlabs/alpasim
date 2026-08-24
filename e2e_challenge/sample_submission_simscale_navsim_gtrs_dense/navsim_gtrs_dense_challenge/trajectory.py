@@ -88,8 +88,12 @@ def make_cached_plan(
         source_offsets = np.vstack((np.zeros((1, 2), dtype=np.float64), poses[:, :2]))
         source_yaws = np.concatenate(([0.0], np.unwrap(poses[:, 2])))
         warped_poses = poses.copy()
-        warped_poses[:, 0] = np.interp(source_times_s[1:], times_s, source_offsets[:, 0])
-        warped_poses[:, 1] = np.interp(source_times_s[1:], times_s, source_offsets[:, 1])
+        warped_poses[:, 0] = np.interp(
+            source_times_s[1:], times_s, source_offsets[:, 0]
+        )
+        warped_poses[:, 1] = np.interp(
+            source_times_s[1:], times_s, source_offsets[:, 1]
+        )
         warped_poses[:, 2] = np.interp(source_times_s[1:], times_s, source_yaws)
         poses = warped_poses
     anchor_xy = np.array(
@@ -171,9 +175,7 @@ def cached_plan_covers_query(
 ) -> bool:
     if plan is None or len(plan.times_s) < 2:
         return False
-    plan_end_us = plan.created_time_us + int(
-        round(float(plan.times_s[-1]) * 1_000_000)
-    )
+    plan_end_us = plan.created_time_us + int(round(float(plan.times_s[-1]) * 1_000_000))
     if plan_end_us < time_query_us:
         return False
 

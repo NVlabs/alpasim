@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 from alpasim_grpc.v0 import common_pb2, egodriver_pb2
-
 from navsim_diffusiondrive_challenge.navigation import (
     DriveCommand,
     command_from_route,

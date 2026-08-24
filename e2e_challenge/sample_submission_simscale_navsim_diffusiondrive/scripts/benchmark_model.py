@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import argparse
@@ -7,14 +10,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from navsim_diffusiondrive_challenge.policy import (
     DiffusionDrivePolicy,
     InferenceInput,
     Prediction,
 )
 from navsim_diffusiondrive_challenge.preprocessing import CAMERA_IDS
-
 
 DEFAULT_CHECKPOINT = (
     Path(__file__).resolve().parents[1]

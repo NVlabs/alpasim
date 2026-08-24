@@ -8,7 +8,6 @@ import math
 import numpy as np
 import pytest
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Vec3
-
 from navsim_gtrs_dense_challenge.trajectory import (
     build_trajectory_from_plan,
     make_cached_plan,
@@ -70,7 +69,9 @@ def test_make_cached_plan_time_scale_is_exact_noop_at_one() -> None:
     np.testing.assert_array_equal(explicit.yaws, default.yaws)
 
 
-def test_make_cached_plan_time_scale_advances_near_term_and_preserves_endpoint() -> None:
+def test_make_cached_plan_time_scale_advances_near_term_and_preserves_endpoint() -> (
+    None
+):
     anchor = _pose_at(1_000_000)
     prediction = _forward_prediction()
 

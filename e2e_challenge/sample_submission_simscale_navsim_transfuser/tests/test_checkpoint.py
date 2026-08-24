@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import hashlib
@@ -5,12 +8,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+import navsim_transfuser_challenge.policy as policy_module
 import numpy as np
 import pytest
 import torch
-from torch import nn
-
-import navsim_transfuser_challenge.policy as policy_module
 from navsim_transfuser_challenge.policy import (
     CHECKPOINT_PREFIX,
     InferenceInput,
@@ -19,6 +20,7 @@ from navsim_transfuser_challenge.policy import (
     normalized_state_dict,
 )
 from navsim_transfuser_challenge.preprocessing import CAMERA_IDS
+from torch import nn
 
 REAL_CHECKPOINT_SIZE = 224560669
 REAL_CHECKPOINT_SHA256 = (

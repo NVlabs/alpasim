@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import hashlib
@@ -6,12 +9,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+import navsim_gtrs_dense_challenge.policy as policy_module
 import numpy as np
 import pytest
 import torch
-from torch import nn
-
-import navsim_gtrs_dense_challenge.policy as policy_module
 from navsim_gtrs_dense_challenge.policy import (
     CHECKPOINT_PREFIX,
     VOCABULARY_KEY,
@@ -22,6 +23,7 @@ from navsim_gtrs_dense_challenge.policy import (
 from navsim_gtrs_dense_challenge.preprocessing import CAMERA_IDS
 from navsim_gtrs_dense_challenge.simscale_gtrs_dense.config import GTRSDenseConfig
 from navsim_gtrs_dense_challenge.simscale_gtrs_dense.model import GTRSDenseModel
+from torch import nn
 
 REAL_CHECKPOINT_SIZE = 269_095_388
 REAL_CHECKPOINT_SHA256 = (
@@ -263,6 +265,31 @@ def test_policy_strictly_loads_synthetic_checkpoint(
 
     checkpoint_vocabulary = torch.zeros(16384, 40, 3)
     source = TinyModel(checkpoint_vocabulary)
+
+    def create_tiny_model(
+        config: object,
+        *,
+        vocab: torch.Tensor,
+        scorer_mode: str = "release",
+        ep_exponent: float = 1.0,
+        speed_top_k: int = 0,
+        speed_weight: float = 0.0,
+        speed_proxy: str = "longitudinal",
+        curvature_weight: float = 0.0,
+        heading_change_weight: float = 0.0,
+    ) -> TinyModel:
+        del (
+            config,
+            scorer_mode,
+            ep_exponent,
+            speed_top_k,
+            speed_weight,
+            speed_proxy,
+            curvature_weight,
+            heading_change_weight,
+        )
+        return TinyModel(vocab)
+
     checkpoint_path = tmp_path / "checkpoint.pt"
     torch.save(
         {
@@ -276,9 +303,7 @@ def test_policy_strictly_loads_synthetic_checkpoint(
     monkeypatch.setattr(
         policy_module,
         "GTRSDenseModel",
-        lambda config, *, vocab, scorer_mode="release", ep_exponent=1.0, speed_top_k=0, speed_weight=0.0, speed_proxy="longitudinal", curvature_weight=0.0, heading_change_weight=0.0: TinyModel(
-            vocab
-        ),
+        create_tiny_model,
     )
 
     policy = GTRSDensePolicy(

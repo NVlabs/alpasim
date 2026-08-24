@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import argparse
@@ -7,8 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
-from navsim_gtrs_dense_challenge.policy import InferenceInput, GTRSDensePolicy
+from navsim_gtrs_dense_challenge.policy import GTRSDensePolicy, InferenceInput
 from navsim_gtrs_dense_challenge.preprocessing import CAMERA_IDS
 
 DEFAULT_CHECKPOINT = (

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import math
@@ -5,15 +8,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 
-import grpc
+import navsim_gtrs_dense_challenge.driver as driver_module
 import numpy as np
 import pytest
 from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0 import common_pb2, egodriver_pb2, sensorsim_pb2
-from PIL import Image
-
-import navsim_gtrs_dense_challenge.driver as driver_module
 from navsim_gtrs_dense_challenge.driver import (
     NavsimGTRSDenseDriver,
     PolicyHandle,
@@ -25,6 +26,9 @@ from navsim_gtrs_dense_challenge.driver import (
 from navsim_gtrs_dense_challenge.navigation import DriveCommand, command_one_hot
 from navsim_gtrs_dense_challenge.policy import InferenceInput, Prediction
 from navsim_gtrs_dense_challenge.preprocessing import CAMERA_IDS
+from PIL import Image
+
+import grpc
 
 
 def _pose(
@@ -1675,10 +1679,21 @@ def _install_main_fakes(
         "signal",
         lambda signum, handler: captures.setdefault(f"signal_{signum}", handler),
     )
-    monkeypatch.setattr(
-        driver_module,
-        "GTRSDensePolicy",
-        lambda checkpoint_path, vocabulary_path, device, scorer_mode="release", ep_exponent=1.0, speed_top_k=0, speed_weight=0.0, speed_proxy="longitudinal", curvature_weight=0.0, heading_change_weight=0.0, backbone_type="resnet": (
+
+    def create_policy(
+        checkpoint_path: Path,
+        vocabulary_path: Path,
+        device: str,
+        scorer_mode: str = "release",
+        ep_exponent: float = 1.0,
+        speed_top_k: int = 0,
+        speed_weight: float = 0.0,
+        speed_proxy: str = "longitudinal",
+        curvature_weight: float = 0.0,
+        heading_change_weight: float = 0.0,
+        backbone_type: str = "resnet",
+    ) -> tuple[object, ...]:
+        return (
             checkpoint_path,
             vocabulary_path,
             device,
@@ -1690,7 +1705,12 @@ def _install_main_fakes(
             curvature_weight,
             heading_change_weight,
             backbone_type,
-        ),
+        )
+
+    monkeypatch.setattr(
+        driver_module,
+        "GTRSDensePolicy",
+        create_policy,
     )
     return server, captures.get("handle"), events, captures
 

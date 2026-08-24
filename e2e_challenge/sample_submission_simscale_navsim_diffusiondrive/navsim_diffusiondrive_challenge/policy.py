@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 from __future__ import annotations
 
 import logging
@@ -14,7 +17,6 @@ from torch import Tensor
 from .preprocessing import CAMERA_IDS, build_status_feature, preprocess_images
 from .simscale_diffusiondrive.config import DiffusionDriveConfig
 from .simscale_diffusiondrive.model import DiffusionDriveModel
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ class InferenceInput:
     noise_index: int | None = None
 
     def __post_init__(self) -> None:
-        missing = [camera_id for camera_id in CAMERA_IDS if camera_id not in self.images]
+        missing = [
+            camera_id for camera_id in CAMERA_IDS if camera_id not in self.images
+        ]
         if missing:
             raise ValueError(f"missing required cameras: {', '.join(missing)}")
         if (self.noise_seed is None) != (self.noise_index is None):
@@ -59,7 +63,9 @@ class Prediction:
 def normalized_checkpoint(payload: object) -> tuple[dict[str, Tensor], np.ndarray]:
     """Validate and normalize the exact released checkpoint wrapper."""
     if not isinstance(payload, dict) or set(payload) != {"state_dict"}:
-        raise ValueError("checkpoint payload must be a dict containing only 'state_dict'")
+        raise ValueError(
+            "checkpoint payload must be a dict containing only 'state_dict'"
+        )
     state_dict = payload["state_dict"]
     if not isinstance(state_dict, dict):
         raise ValueError("checkpoint state_dict must be a dict")
@@ -149,7 +155,10 @@ class DiffusionDrivePolicy:
             return []
 
         camera_feature = torch.stack(
-            [preprocess_images(request.images, dtype=torch.float32) for request in requests]
+            [
+                preprocess_images(request.images, dtype=torch.float32)
+                for request in requests
+            ]
         ).to(device=self.device, dtype=self.dtype)
         status_feature = torch.stack(
             [

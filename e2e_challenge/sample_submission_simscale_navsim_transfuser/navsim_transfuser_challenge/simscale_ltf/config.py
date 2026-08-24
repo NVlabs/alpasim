@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Configuration for the inference-only SimScale LTF model."""
 
 from dataclasses import dataclass

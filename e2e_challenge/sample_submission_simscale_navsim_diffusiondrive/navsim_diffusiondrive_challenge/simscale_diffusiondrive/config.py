@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 """Dependency-free inference configuration for SimScale DiffusionDrive."""
 
 from __future__ import annotations
