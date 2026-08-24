@@ -89,6 +89,7 @@ def main() -> int:
         print_json(client.get(path_with_query("/leaderboard", track=args.track)))
         return 0
     if args.command == "submit":
+        ensure_image_exists(args.image_uri)
         print_json(
             client.post(
                 "/submissions",
@@ -187,6 +188,41 @@ def ecr_login(client: ChallengeClient) -> None:
     print(f"    {auth['image_uri_prefix']}:<version>")
     print()
     print("Submissions are limited. Only submit images you want evaluated.")
+
+
+def ensure_image_exists(image_uri: str) -> None:
+    """Confirm Docker can resolve an image manifest before submitting it."""
+    if image_uri.rsplit("@", 1)[0].endswith(":latest"):
+        raise SystemExit(
+            "The latest tag is not allowed for submissions. "
+            "Use a specific image tag or digest instead."
+        )
+
+    try:
+        process = subprocess.run(
+            ["docker", "manifest", "inspect", image_uri],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            "Docker is required to validate the submitted image. "
+            "Install Docker, then run `ecr-login` and retry."
+        ) from exc
+
+    if process.returncode == 0:
+        return
+
+    detail = process.stderr.strip() or process.stdout.strip()
+    message = (
+        f"Could not find or access Docker image {image_uri!r}. "
+        "Check the image URI and tag, ensure the image has been pushed, "
+        "then run `ecr-login` and retry."
+    )
+    if detail:
+        message = f"{message}\nDocker reported: {detail}"
+    raise SystemExit(message)
 
 
 def print_limits(client: ChallengeClient) -> None:

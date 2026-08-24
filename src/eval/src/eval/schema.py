@@ -173,6 +173,11 @@ class EvalConfig:
     enabled: bool = True
     # Whether to aggregate evaluation results when one or more rollouts failed.
     allow_aggregation_with_failed_rollouts: bool = False
+    # Whether a contestant's DriveResponse.terminate_session should be treated
+    # as a terminal rollout failure.  Challenge configurations enable this so
+    # every requested scene receives a score; other users may retain the
+    # protocol's ordinary early-termination behavior.
+    fail_on_driver_termination: bool = False
     # Whether to parse DriveResponse.debug_info.unstructured_debug_info.
     # This field is currently pickle-encoded by some internal drivers and should
     # be disabled for untrusted driver images.

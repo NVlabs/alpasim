@@ -14,6 +14,7 @@ import logging
 
 import numpy as np
 from alpasim_runtime.events.base import (
+    DriverRequestedTerminationError,
     EndSimulationException,
     EventPriority,
     EventQueue,
@@ -45,6 +46,7 @@ class PolicyEvent(RecurringEvent):
         camera_ids: list[str],
         route_generator: RouteGenerator | None,
         send_recording_ground_truth: bool,
+        fail_on_driver_termination: bool = False,
     ):
         super().__init__(timestamp_us=timestamp_us)
         self.interval_us = policy_timestep_us
@@ -52,6 +54,7 @@ class PolicyEvent(RecurringEvent):
         self.camera_ids = camera_ids
         self.route_generator = route_generator
         self.send_recording_ground_truth = send_recording_ground_truth
+        self.fail_on_driver_termination = fail_on_driver_termination
 
     async def run(self, state: RolloutState, queue: EventQueue) -> None:
         step_start_us = self.timestamp_us
@@ -138,10 +141,18 @@ class PolicyEvent(RecurringEvent):
         state.data_sensorsim_to_driver = None  # Consumed
 
         if terminate_session:
-            logger.info(
-                "Driver requested session termination at sim_time=%d us", step_start_us
+            if not self.fail_on_driver_termination:
+                logger.info(
+                    "Driver requested session termination at sim_time=%d us",
+                    step_start_us,
+                )
+                raise EndSimulationException()
+            message = (
+                "Driver requested session termination at "
+                f"sim_time={step_start_us} us"
             )
-            raise EndSimulationException()
+            logger.warning(message)
+            raise DriverRequestedTerminationError(message)
 
         # --- Transform from noisy to true local frame ---
         drive_trajectory = transform_trajectory_from_noisy_to_true_local_frame(

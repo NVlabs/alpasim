@@ -48,6 +48,7 @@ runtime:
 
 eval:
   allow_aggregation_with_failed_rollouts: true
+  fail_on_driver_termination: true
   parse_unstructured_debug_info: false
   aggregation_modifiers:
     max_dist_to_gt_trajectory: 4.0

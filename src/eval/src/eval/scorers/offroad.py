@@ -83,6 +83,66 @@ def _get_lane_polygon(
         )
 
 
+# Road-edge polylines are compared against the ego footprint in 2D, so any
+# structure stacked above or below the roadway (an overpass deck, a ramp) is
+# flattened onto it and reads as a road edge the ego is touching. Candidate
+# edges are therefore restricted to those at a comparable elevation to the ego.
+# Observed on clipgt-0509bba5 / clipgt-321982bf, where a deck +8.05 m / +6.19 m
+# overhead produced a single-frame offroad flag while the ego was exactly on the
+# recorded human trajectory (the nearest ground-level edge was 4.6 m away).
+MAX_ROAD_EDGE_ELEVATION_DELTA_M = 3.0
+ROAD_EDGE_QUERY_DIST_M = 30.0
+
+
+def _closest_road_edge_distance_2d(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    ego_polygon: BaseGeometry,
+) -> float:
+    """2D distance from the ego footprint to the nearest same-level road edge.
+
+    Mirrors the previous ``get_closest_road_edge`` behaviour -- pick the single
+    3D-nearest edge, then measure in 2D -- but restricts the candidates to
+    edges at the ego's own elevation. Elevation is taken from the edge vertex
+    closest to the ego in plan view, so edges that climb (ramps) are judged by
+    the part beside the ego rather than by their overall height.
+
+    Taking the minimum over *all* same-level edges instead was measured on the
+    966-rollout force-GT run: it cleared the same 6 scenes but newly failed 2,
+    so the single-nearest-edge semantics are kept deliberately.
+
+    Returns ``inf`` when no road edge within ``ROAD_EDGE_QUERY_DIST_M`` lies
+    within ``MAX_ROAD_EDGE_ELEVATION_DELTA_M`` of the ego, i.e. there is no
+    kerb at the ego's level for it to be touching.
+    """
+    ego_xyz = np.asarray(ego_xyzh[..., :3], dtype=float).reshape(3)
+    ego_xy, ego_z = ego_xyz[:2], float(ego_xyz[2])
+
+    closest_distance = float("inf")
+    closest_3d = float("inf")
+    for road_edge in simulation_result.vec_map.get_road_edges_within(
+        ego_xyz, ROAD_EDGE_QUERY_DIST_M
+    ):
+        points = np.asarray(road_edge.polyline.points)
+        nearest_vertex = int(
+            np.argmin(np.linalg.norm(points[..., :2] - ego_xy, axis=-1))
+        )
+        if (
+            abs(float(points[nearest_vertex, 2]) - ego_z)
+            > MAX_ROAD_EDGE_ELEVATION_DELTA_M
+        ):
+            continue
+        distance_3d = float(
+            np.linalg.norm(points[nearest_vertex, :3].astype(float) - ego_xyz)
+        )
+        if distance_3d < closest_3d:
+            closest_3d = distance_3d
+            closest_distance = shapely.geometry.LineString(
+                points[..., :2]
+            ).distance(ego_polygon)
+    return closest_distance
+
+
 def _has_map_element_kdtree(
     simulation_result: SimulationResult,
     elem_type: vec_map_elements.MapElementType,
@@ -276,12 +336,10 @@ class OffRoadScorer(Scorer):
                 # Check if we're too close to the road edge. This will still miss
                 # offroad cases when we're far outside the road - but then either
                 # we started offroad or we had to go offroad at some point.
-                closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
-                    xyz=res["ego_xyzh"][..., :3]
-                ).polyline.xy
-
-                distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
-                    ego_polygon
+                # Only edges at the ego's own elevation count; see
+                # _closest_road_edge_distance_2d.
+                distance = _closest_road_edge_distance_2d(
+                    simulation_result, res["ego_xyzh"], ego_polygon
                 )
                 offroad.append(distance < 1e-3)
         return [

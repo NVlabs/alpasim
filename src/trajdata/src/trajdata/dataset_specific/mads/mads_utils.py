@@ -2,6 +2,7 @@
 # Copyright (c) 2026 NVIDIA Corporation
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Final, List, Optional, Tuple, Type
@@ -20,6 +21,8 @@ from trajdata.maps.vec_map_elements import (
     TrafficSign,
     WaitLine,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_POLYLINE_POINT_DIST = 2.0
 
@@ -304,9 +307,28 @@ def populate_vector_map(vector_map: VectorMap, map_root) -> None:
         pd.read_parquet(os.path.join(map_root, "wait_line.parquet"))
     )
     # wait_line id is formatted as {wait_line_id}-{lane_id}
-    df_wait_line["lane.map_id"] = df_wait_line["key.map_id"].map(
-        lambda x: x.split("-")[1]
-    )
+    #
+    # A clip with no wait lines still ships a single placeholder row whose
+    # map_id is null and whose location array is empty. Splitting that null
+    # raises AttributeError, which Artifact._load_clipgt_map catches and turns
+    # into "no clipgt map"; with no XODR fallback in mads-no-xodr artifacts the
+    # scene then loads with map=None and route generation dies on it. Drop the
+    # unusable rows first so one empty table cannot discard a whole HD map.
+    if "key.map_id" in df_wait_line.columns:
+        usable = df_wait_line["key.map_id"].map(
+            lambda x: isinstance(x, str) and "-" in x
+        )
+        if not usable.all():
+            logger.warning(
+                "Dropping %d wait_line row(s) with an unparseable map_id",
+                int((~usable).sum()),
+            )
+        df_wait_line = df_wait_line[usable].reset_index(drop=True)
+        df_wait_line["lane.map_id"] = df_wait_line["key.map_id"].map(
+            lambda x: x.split("-")[1]
+        )
+    else:
+        df_wait_line["lane.map_id"] = pd.Series(dtype=object)
     clip_id = df_meta["key.clip_id"][0]
     all_lanes_dict = find_lane_polylines_parquet(
         df_lane, df_lane_relation, clip_id, df_wait_line

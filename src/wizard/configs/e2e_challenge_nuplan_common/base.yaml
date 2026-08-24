@@ -158,6 +158,7 @@ runtime:
 eval:
   num_processes: 1
   allow_aggregation_with_failed_rollouts: true
+  fail_on_driver_termination: true
   parse_unstructured_debug_info: false
   scene_score:
     enabled: true

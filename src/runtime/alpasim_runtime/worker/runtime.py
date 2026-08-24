@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing as mp
 import os
 from collections.abc import Callable, Coroutine
-from multiprocessing import Process, Queue
+from multiprocessing import Queue
+from multiprocessing.process import BaseProcess
 from queue import Empty as QueueEmpty
 from typing import Any
 
@@ -27,6 +29,7 @@ from eval.schema import EvalConfig
 logger = logging.getLogger(__name__)
 
 _RESULT_POLL_TIMEOUT_S = 30.0
+_SPAWN_CONTEXT = mp.get_context("spawn")
 
 
 class WorkerRuntime:
@@ -43,14 +46,14 @@ class WorkerRuntime:
         self._job_queue = job_queue
         self._result_queue = result_queue
         self._inline_main = inline_main
-        self._workers: list[Process] = []
+        self._workers: list[BaseProcess] = []
         self._inline_task: asyncio.Task[None] | None = None
 
         if inline_main is not None:
             self._inline_task = asyncio.create_task(inline_main())
         else:
             for args in worker_args:
-                proc = Process(target=worker_main, args=(args,))
+                proc = _SPAWN_CONTEXT.Process(target=worker_main, args=(args,))
                 proc.start()
                 self._workers.append(proc)
 
@@ -140,8 +143,8 @@ def start_worker_runtime(
     For ``nr_workers>1``, spawns subprocess workers with shared RPC tracking.
     """
     nr_workers = config.user.nr_workers
-    job_queue: Queue = Queue()
-    result_queue: Queue = Queue()
+    job_queue: Queue = _SPAWN_CONTEXT.Queue()
+    result_queue: Queue = _SPAWN_CONTEXT.Queue()
 
     if nr_workers == 1:
         args = WorkerArgs(
@@ -164,7 +167,7 @@ def start_worker_runtime(
         )
     else:
         parent_pid = os.getpid()
-        shared_rpc_tracking = init_shared_rpc_tracking()
+        shared_rpc_tracking = init_shared_rpc_tracking(_SPAWN_CONTEXT)
         all_args = [
             WorkerArgs(
                 worker_id=worker_id,

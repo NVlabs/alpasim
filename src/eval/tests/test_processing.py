@@ -117,6 +117,7 @@ def unified_metrics_df() -> pl.DataFrame:
         ("dist_traveled_m", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("gt_dist_traveled_m", "last", [10.0, 10.0, 10.0]),
         ("dist_to_gt_trajectory", "max", [0.0, 0.0, 0.0]),
+        ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
         ("progress", "last", [0.1, 0.5, 0.8]),
         ("progress_rel_to_total", "last", [0.1, 0.5, 0.8]),
         ("progress_rel", "min", [0.9, 0.8, 0.8]),
@@ -956,6 +957,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             ("img_is_black", "max", [0.0, 0.0, 0.0]),
             ("dist_traveled_m", "last", [0.0, 10.0, 100.0]),
             ("dist_to_gt_trajectory", "max", [0.0, 11.0, 11.0]),
+            ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
             ("progress", "last", [0.0, 0.0, 1.0]),
             ("progress_rel_to_total", "last", [0.0, 0.0, 1.0]),
             ("progress_rel", "min", [1.0, 0.0, 1.0]),
@@ -1077,6 +1079,8 @@ class TestAggregateAndWriteMetricsResultsTxt:
             "collision_at_fault": None,
             "offroad": None,
             "dist_to_gt_trajectory": None,
+            "lateral_dist_to_gt_trajectory": None,
+            "left_corridor_laterally": None,
             "gt_dist_traveled_m": None,
         }
 
@@ -1183,3 +1187,132 @@ class TestProcessedMetricDFs:
         assert rollouts_dict[("test_run_1", "clip2")] == 2
         assert rollouts_dict[("test_run_2", "clip1")] == 2
         assert rollouts_dict[("test_run_2", "clip2")] == 2
+
+
+class TestCorridorExcursionScoring:
+    """The corridor rule: sideways exit fails, driving past the end does not.
+
+    Timesteps are 1000/2000/3000 and the corridor cutoff keeps the timestep that
+    trips it, dropping later ones -- so anything happening after the ego leaves
+    the corridor is out of scope for scoring.
+    """
+
+    TARGET = (
+        (pl.col("run_name") == "test_run_1")
+        & (pl.col("clipgt_id") == "clip1")
+        & (pl.col("rollout_id") == "rollout1")
+    )
+
+    def _rollout(self, metrics_df, temp_directory):
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            additional_modifiers=[
+                RemoveTimestepsAfterEvent(pl.col("dist_to_gt_trajectory") >= 4.0)
+            ],
+        )
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        return [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["clipgt_id"] == "clip1"
+            and row["rollout_id"] == "rollout1"
+        ][0]
+
+    def _set(self, df, name, expr):
+        return df.with_columns(
+            pl.when(self.TARGET & (pl.col("name") == name))
+            .then(expr)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+    def _leaves_corridor_at_2000(self, df):
+        """Ego is >= 4 m from the recording from t=2000 onward."""
+        return self._set(
+            df,
+            "dist_to_gt_trajectory",
+            pl.when(pl.col("timestamps_us") >= 2000).then(6.0).otherwise(0.0),
+        )
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_lateral_exit_fails(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "collision_any", pl.lit(0.0))
+        df = self._set(df, "collision_front", pl.lit(0.0))
+        df = self._set(df, "offroad", pl.lit(0.0))
+        df = self._set(
+            df,
+            "left_corridor_laterally",
+            pl.when(pl.col("timestamps_us") >= 2000).then(1.0).otherwise(0.0),
+        )
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] == "left_corridor_laterally"
+        assert rollout["passed"] is False
+        assert rollout["score"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_forward_exit_does_not_fail(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "collision_any", pl.lit(0.0))
+        df = self._set(df, "collision_front", pl.lit(0.0))
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # left_corridor_laterally stays 0: the ego drove past the end of the GT.
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] is None
+        assert rollout["passed"] is True
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_collision_after_forward_exit_does_not_fail(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # Collision strictly after the corridor was left: t=3000 is dropped.
+        after = pl.when(pl.col("timestamps_us") > 2000).then(1.0).otherwise(0.0)
+        df = self._set(df, "collision_any", after)
+        df = self._set(df, "collision_front", after)
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] is None
+        assert rollout["passed"] is True
+        assert rollout["score_metrics"]["collision_at_fault"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_collision_before_forward_exit_still_fails(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # Collision before the ego left the corridor: must still count.
+        before = pl.when(pl.col("timestamps_us") < 2000).then(1.0).otherwise(0.0)
+        df = self._set(df, "collision_any", before)
+        df = self._set(df, "collision_front", before)
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] == "collision_at_fault"
+        assert rollout["passed"] is False
+        assert rollout["score"] == 0.0

@@ -26,7 +26,6 @@ from eval.accumulator import EvalDataAccumulator
 from eval.data import ScenarioEvalInput
 from eval.scenario_evaluator import ScenarioEvalResult, ScenarioEvaluator
 from eval.schema import EvalConfig
-from eval.video import render_video_from_eval_result
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -54,6 +53,11 @@ def _evaluate_in_subprocess(
         eval_result.metrics_df.write_parquet(metrics_path)
 
     if render_video:
+        # Video dependencies are optional for score-only evaluation.  Import
+        # them only when rendering was requested so they cannot prevent the
+        # evaluator from recording a scene result.
+        from eval.video import render_video_from_eval_result
+
         render_video_from_eval_result(
             scenario_input=scenario_input,
             metrics_df=eval_result.metrics_df,
@@ -227,7 +231,9 @@ class RuntimeEvaluator:
         CPU-bound scorer computation, parquet writing, and optional video
         rendering to the provided executor.
 
-        Eval failures are caught and logged; they do not fail the rollout.
+        Evaluation failures are recorded as failed rollouts by propagating
+        them to the worker.  The aggregation path then emits a terminal
+        zero-score row rather than silently omitting the scene.
 
         Args:
             executor: ProcessPoolExecutor to run evaluation in.
@@ -267,12 +273,14 @@ class RuntimeEvaluator:
                     rollout_uuid=self.rollout_uuid,
                 ),
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Evaluation failed in subprocess for session %s",
                 self.rollout_uuid,
             )
-            return None
+            raise RuntimeError(
+                f"Evaluation failed for session {self.rollout_uuid}"
+            ) from exc
 
         # Log results in the main process
         if eval_result.metrics_df is not None and len(eval_result.metrics_df) > 0:

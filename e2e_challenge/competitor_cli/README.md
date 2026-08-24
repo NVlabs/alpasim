@@ -51,6 +51,11 @@ uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track pai \
   696254625193.dkr.ecr.us-east-1.amazonaws.com/teams/<team_id>:<tag>
 ```
 
+Before sending the submission request, the CLI verifies that Docker can resolve
+the exact image manifest and rejects the `latest` tag. If this check fails,
+confirm the image URI and tag, push the image, and rerun `ecr-login` before
+trying again.
+
 `submit` requires an explicit track. Use `--track pai` for the Physical AI AV
 track or `--track nuplan` for the nuPlan track.
 

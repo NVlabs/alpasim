@@ -52,6 +52,9 @@ from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
 
+# nuPlan quotes the ego extent from the rear axle: 4.049 m forward, 1.127 m back.
+NUPLAN_EGO_REAR_LENGTH_M = 1.127
+
 
 def _localize_positions(
     positions_world: np.ndarray, position_origin_world: np.ndarray
@@ -204,11 +207,19 @@ class TrajdataDataSource(SceneDataSource):
                 quaternions=quaternions_agent_world.astype(np.float32),
             )
 
+            # Detected agents are recorded at their box center, so the box is
+            # centered on the pose. nuPlan's ego is recorded at the rear axle
+            # instead, with its extent quoted from there, so centring it would
+            # push the box ~1.46 m behind the real vehicle.
+            distance_to_rear_m = agent.extent.length / 2
+            if agent.name == "ego" and self.scene.env_name.startswith("nuplan"):
+                distance_to_rear_m = NUPLAN_EGO_REAR_LENGTH_M
+
             vehicle_config = VehicleConfig(
                 aabb_x_m=agent.extent.length,
                 aabb_y_m=agent.extent.width,
                 aabb_z_m=agent.extent.height,
-                aabb_x_offset_m=-agent.extent.length / 2,
+                aabb_x_offset_m=-distance_to_rear_m,
                 aabb_y_offset_m=0.0,
                 aabb_z_offset_m=-agent.extent.height / 2,
             )

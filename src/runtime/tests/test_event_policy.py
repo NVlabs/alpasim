@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from alpasim_runtime.config import PhysicsUpdateMode
-from alpasim_runtime.events.base import EndSimulationException, EventQueue
+from alpasim_runtime.events.base import DriverRequestedTerminationError, EventQueue
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import (
     PolicyEvent,
@@ -37,6 +37,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            fail_on_driver_termination=True,
         )
 
     def test_priority(self, policy_event: PolicyEvent):
@@ -148,18 +149,21 @@ class TestPolicyEvent:
         assert rollout_state.data_sensorsim_to_driver is None
 
     @pytest.mark.asyncio
-    async def test_run_raises_end_simulation_on_terminate(
+    async def test_run_raises_terminal_failure_on_terminate(
         self,
         policy_event: PolicyEvent,
         rollout_state: RolloutState,
         mock_driver: AsyncMock,
         simple_trajectory: Trajectory,
     ):
-        """When driver returns terminate_session=True, PolicyEvent raises EndSimulationException."""
+        """A driver-requested termination is a scored terminal failure."""
         drive_traj = simple_trajectory.clip(200_000, 300_001)
         mock_driver.drive.return_value = (drive_traj, True)
 
-        with pytest.raises(EndSimulationException):
+        with pytest.raises(
+            DriverRequestedTerminationError,
+            match="Driver requested session termination at sim_time=200000 us",
+        ):
             await policy_event.run(rollout_state, EventQueue())
 
     @pytest.mark.asyncio
@@ -175,7 +179,7 @@ class TestPolicyEvent:
         mock_driver.drive.return_value = (drive_traj, True)
 
         queue = EventQueue()
-        with pytest.raises(EndSimulationException):
+        with pytest.raises(DriverRequestedTerminationError):
             await policy_event.handle(rollout_state, queue)
 
         assert len(queue) == 0  # Not rescheduled

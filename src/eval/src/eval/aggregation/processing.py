@@ -316,6 +316,10 @@ def write_results_summary_json(
                         "collision_at_fault": row.get("collision_at_fault"),
                         "offroad": row.get("offroad"),
                         "dist_to_gt_trajectory": row.get("dist_to_gt_trajectory"),
+                        "lateral_dist_to_gt_trajectory": row.get(
+                            "lateral_dist_to_gt_trajectory"
+                        ),
+                        "left_corridor_laterally": row.get("left_corridor_laterally"),
                         "gt_dist_traveled_m": row.get("gt_dist_traveled_m"),
                     },
                 }
@@ -357,6 +361,10 @@ def write_results_summary_json(
             ),
             "collision_at_fault": "== 0",
             "offroad": "== 0",
+            "left_corridor_laterally": (
+                "== 0 (lateral corridor exit fails; passing the end of the "
+                "recording does not)"
+            ),
         }
     if telemetry_summary:
         payload["telemetry"] = telemetry_summary

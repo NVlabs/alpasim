@@ -11,6 +11,7 @@ REQUIRED_SCENE_SCORE_METRICS = (
     "gt_dist_traveled_m",
     "collision_at_fault",
     "offroad",
+    "left_corridor_laterally",
 )
 
 
@@ -69,6 +70,10 @@ def _hard_failure_reason(
         return "collision_at_fault"
     if values["offroad"] != 0.0:
         return "offroad"
+    # Leaving the corridor sideways is a failure; leaving it by driving past the
+    # end of the recording is not, and is handled by timestep truncation alone.
+    if values["left_corridor_laterally"] != 0.0:
+        return "left_corridor_laterally"
     return None
 
 

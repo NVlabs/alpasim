@@ -21,9 +21,9 @@ from eval.aggregation.modifiers import (
 )
 from eval.aggregation.processing import ProcessedMetricDFs
 from eval.schema import EvalConfig, SceneScoreConfig
-from eval.video import VIDEO_FILE_NAME_FORMAT
 
 WIZARD_FILE = "wizard-config.yaml"
+VIDEO_FILE_NAME_FORMAT = "{clipgt_id}_{rollout_id}_{camera_id}_{layout_id}.mp4"
 
 # Configure the root logger first to affect all modules
 root_logger = logging.getLogger()
@@ -73,7 +73,7 @@ def _aggregate_metrics(
     modifiers: list[MetricAggregationModifiers],
     failed_rollouts: list[FailedRolloutInput] | None = None,
     scene_score_config: SceneScoreConfig | None = None,
-) -> ProcessedMetricDFs:
+) -> ProcessedMetricDFs | None:
     """
     Aggregate metrics from job directories.
 
@@ -89,6 +89,22 @@ def _aggregate_metrics(
             all_dfs.append(df)
 
     if not all_dfs:
+        if failed_rollouts:
+            telemetry_summary = telemetry.collect_driver_drive_rpc_latency(job_dirs)
+            processing.write_results_summary_json(
+                pl.DataFrame(),
+                pl.DataFrame(),
+                str(aggregate_dir),
+                failed_rollouts=failed_rollouts,
+                telemetry_summary=telemetry_summary,
+                scene_score_config=scene_score_config,
+            )
+            logger.warning(
+                "No metrics files were written; recorded %d failed rollout(s) "
+                "as zero-score terminal failures",
+                len(failed_rollouts),
+            )
+            return None
         raise ValueError(
             "No metrics files found in any job directory. Ensure either post-eval "
             "or in-runtime evaluation has completed successfully."
@@ -119,7 +135,7 @@ def _run_aggregation_core(
     aggregate_dir: pathlib.Path,
     cfg: EvalConfig,
     failed_rollouts: list[FailedRolloutInput] | None = None,
-) -> ProcessedMetricDFs:
+) -> ProcessedMetricDFs | None:
     """
     Core aggregation logic shared between runtime and CLI entry points.
 
@@ -150,6 +166,11 @@ def _run_aggregation_core(
         failed_rollouts=failed_rollouts,
         scene_score_config=cfg.scene_score,
     )
+    if processed_dfs is None:
+        logger.info(
+            "Aggregation complete with only failed rollout rows: %s", aggregate_dir
+        )
+        return None
     processed_dfs.save_to(aggregate_dir)
 
     logger.info("Aggregation complete. Results saved to %s", aggregate_dir)

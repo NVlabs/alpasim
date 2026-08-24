@@ -54,6 +54,15 @@ class EndSimulationException(Exception):
     """Raised by SimulationEndEvent to terminate the event loop."""
 
 
+class DriverRequestedTerminationError(EndSimulationException):
+    """A contestant requested early termination of a competition rollout.
+
+    This lets challenge runs distinguish a contestant-requested termination
+    from the runtime reaching its configured end timestamp.  The event loop
+    propagates it as a failed rollout when the challenge policy is enabled.
+    """
+
+
 @dataclass
 class EventQueue:
     """Min-heap of events, ordered by (timestamp_us, priority)."""

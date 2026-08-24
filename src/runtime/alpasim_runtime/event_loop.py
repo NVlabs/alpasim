@@ -24,6 +24,7 @@ from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.delay_buffer import DelayBuffer
 from alpasim_runtime.events.base import (
+    DriverRequestedTerminationError,
     EndSimulationException,
     EventQueue,
     SimulationEndEvent,
@@ -472,6 +473,9 @@ class EventBasedRollout:
                 camera_ids=camera_ids,
                 route_generator=self.route_generator,
                 send_recording_ground_truth=unbound.send_recording_ground_truth,
+                fail_on_driver_termination=getattr(
+                    self.eval_config, "fail_on_driver_termination", False
+                ),
             )
         )
         queue.submit(
@@ -637,6 +641,12 @@ class EventBasedRollout:
                         f"sim_time {event.timestamp_us:_}us: {event.description()}"
                     )
                     await event.handle(state, event_queue)
+            except DriverRequestedTerminationError:
+                # A challenge contestant ended the scene themselves instead of
+                # producing a decision for the configured horizon.  Propagate
+                # this to the worker so aggregation records a zero-score
+                # terminal-failure row for the rollout.
+                raise
             except EndSimulationException:
                 logger.info("Simulation ended via SimulationEndEvent")
             except Exception:

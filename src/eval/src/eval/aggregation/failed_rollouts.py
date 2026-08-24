@@ -73,6 +73,8 @@ def failed_rollout_summary_rows(
                         "collision_at_fault": None,
                         "offroad": None,
                         "dist_to_gt_trajectory": None,
+                        "lateral_dist_to_gt_trajectory": None,
+                        "left_corridor_laterally": None,
                         "gt_dist_traveled_m": None,
                     },
                 }
