@@ -189,10 +189,10 @@ class RigidPortableSubModel(VanillaPortableGaussianModel):
         if quat is not None and trans is not None:
             assert quat.shape == (4,) and trans.shape == (3,)
             return quat.float(), trans.float(), timestamp
-        if not self.log_replay:
-            return None
         if self.static_in_log:
             return self.log_quats, self.log_trans, timestamp
+        if not self.log_replay:
+            return None
         return self._get_log_pose_from_timestamp(timestamp)
 
     def get_global_gaussians(self, quat=None, trans=None, timestamp=None, **kwargs):
