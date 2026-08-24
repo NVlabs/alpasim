@@ -171,6 +171,21 @@ def test_rigid_dynamic_actor_without_pose_requires_log_replay():
     assert model._decide_global_pose(timestamp=0) is not None
 
 
+def test_rigid_static_actor_uses_log_pose_without_log_replay():
+    import torch
+
+    model = _rigid_model_for_log_pose_tests(log_replay=False)
+    model.static_in_log = True
+    model.log_quats = torch.nn.Parameter(torch.tensor([1.0, 0.0, 0.0, 0.0]))
+    model.log_trans = torch.nn.Parameter(torch.tensor([0.0, 0.0, 0.0]))
+
+    quat, trans, timestamp = model._decide_global_pose(timestamp=0)
+
+    torch.testing.assert_close(quat, model.log_quats)
+    torch.testing.assert_close(trans, model.log_trans)
+    assert timestamp == 0
+
+
 def test_rigid_explicit_pose_overrides_static_log_pose():
     import torch
 
@@ -181,7 +196,6 @@ def test_rigid_explicit_pose_overrides_static_log_pose():
     requested_quat = torch.tensor([1.0, 0.0, 0.0, 0.0])
     requested_trans = torch.tensor([5.0, 6.0, 7.0])
 
-    assert model._decide_global_pose(timestamp=0) is None
     quat, trans, _ = model._decide_global_pose(
         quat=requested_quat,
         trans=requested_trans,
