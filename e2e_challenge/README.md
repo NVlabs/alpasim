@@ -13,6 +13,7 @@ and wait for approval.
 
 - [Starter kit](starter_kit/README.md): build and locally test a minimal driver container
 - [VAVAM sample submission](sample_submission_vavam/README.md): build and locally test a VAVAM-backed driver container
+- [SimScale/NAVSIM sample submissions](NAVSIM_MODEL_ADAPTATION.md): build and locally test SimScale/NAVSIM-style driver containers, including LTF, DiffusionDrive, and GTRS.
 - [Challenge CLI](competitor_cli/README.md): authenticate, log in to ECR, submit images, check status, view the leaderboard
 
 ## Tracks

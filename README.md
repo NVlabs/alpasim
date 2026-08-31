@@ -53,6 +53,7 @@ AlpaSim currently supports the following driver policies:
 - [Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
   \- Latent TransFuser v6 ([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) policy developed
   for [NAVSIM](https://github.com/autonomousvision/navsim) (provisional)
+- [SimScale](https://github.com/OpenDriveLab/SimScale) - a series of [NAVSIM](https://github.com/autonomousvision/navsim)-style policies co-trained on simulation and real-world data; see the [adaptation guide](e2e_challenge/NAVSIM_MODEL_ADAPTATION.md).
 
 Stay tuned for additional model support. [Contributions](#contributing) from the community are
 appreciated.
@@ -163,6 +164,7 @@ Watson
 - Physics: Riccardo de Lutio
 - Trafficsim: Maximilian Igl, Boris Ivanovic
 - MTGS integration: Caojun Wang
+- SimScale/NAVSIM integration: Haochen Tian
 
 **Senior Mgmt:** Sanja Fidler, Zan Gojcic, Boris Ivanovic, Marco Pavone
 
