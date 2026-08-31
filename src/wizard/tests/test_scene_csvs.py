@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from alpasim_wizard.scenes.csv_utils import CSVValidationError, validate_csvs
+from alpasim_wizard.schema import ScenesConfig
+from alpasim_wizard.scenes.sceneset import USDZManager
 
 
 def get_repo_root() -> Path:
@@ -39,6 +41,51 @@ def test_scene_csvs_are_valid():
         validate_csvs(str(SCENES_CSV), str(SUITES_CSV))
     except CSVValidationError as e:
         pytest.fail(f"Scene CSV validation failed:\n{e}")
+
+
+def test_curated_config_group_catalogs(tmp_path):
+    """
+    Validate the catalogs `+nurec_scenes=curated_*` declares.
+    """
+    scenes_dir = REPO_ROOT / "data" / "scenes"
+    scenes_csv = [scenes_dir / "sim_scenes.csv", scenes_dir / "sim_scenes_2604.csv"]
+    suites_csv = [scenes_dir / "sim_suites.csv", scenes_dir / "sim_suites_curated.csv"]
+    for path in scenes_csv + suites_csv:
+        assert path.exists(), f"catalog declared by the config group is missing: {path}"
+
+    cache = tmp_path / "cache"
+    cache.mkdir()  # from_cfg requires an existing scene cache directory
+    cfg = ScenesConfig(
+        test_suite_id="nurec_curated_val",
+        scene_cache=str(cache),
+        scenes_csv=[str(p) for p in scenes_csv],
+        suites_csv=[str(p) for p in suites_csv],
+    )
+    try:
+        manager = USDZManager.from_cfg(cfg)
+    except ValueError as e:
+        pytest.fail(f"curated config group catalogs do not merge:\n{e}")
+
+    dupes = manager.sim_scenes.height - manager.sim_scenes["scene_id"].n_unique()
+    assert dupes == 0, (
+        f"{dupes} scene_ids appear in more than one catalog; suite resolution "
+        "would depend on last_modified order."
+    )
+
+    for suite_id, expected in (("nurec_curated_train", 1761), ("nurec_curated_val", 441)):
+        resolved = manager.query_by_suite_id(suite_id)
+        assert len(resolved) == expected, (
+            f"{suite_id} resolved to {len(resolved)} scenes, expected {expected}"
+        )
+
+    merged_scenes = tmp_path / "merged_scenes.csv"
+    merged_suites = tmp_path / "merged_suites.csv"
+    manager.sim_scenes.write_csv(merged_scenes)
+    manager.sim_suites.write_csv(merged_suites)
+    try:
+        validate_csvs(str(merged_scenes), str(merged_suites))
+    except CSVValidationError as e:
+        pytest.fail(f"curated catalogs failed validation:\n{e}")
 
 
 def test_validate_csvs_catches_duplicate_uuids(tmp_path):

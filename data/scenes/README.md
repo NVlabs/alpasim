@@ -9,6 +9,8 @@ This directory contains public scene and test suite definitions for Alpasim.
 - `sim_suites.csv` - Current public suite-to-scene mappings
 - `sim_scenes_2505.csv` - Legacy public 25.07/25.05 scene artifact metadata
 - `sim_suites_2505.csv` - Legacy public 25.07/25.05 suite-to-scene mappings
+- `sim_scenes_2604.csv` - Public 26.04 release scene artifact metadata minus scenes already existing in `sim_scenes.csv` (Release 26.01)
+- `sim_suites_curated.csv` - Curated train/val suite-to-scene mappings spanning 26.01 and 26.04 releases
 
 ### Artifact Repositories
 
@@ -22,6 +24,8 @@ are stored:
 |----------|--------|-------------|
 | `public_2601` | 916 | All public NRE scenes from the 26.01 release. Requires sensorsim NRE-GA 26.02 or later. |
 | `public_2507` | 910 | Legacy public NRE scenes from the 25.07 release, hosted on the 25.05 Hugging Face revision. |
+| `nurec_curated_train` | 1761 | See [e2e_challenge/local_evaluation](../../e2e_challenge/local_evaluation/README.md). |
+| `nurec_curated_val` | 441 | See [e2e_challenge/local_evaluation](../../e2e_challenge/local_evaluation/README.md). |
 
 ## Managing Scenes
 

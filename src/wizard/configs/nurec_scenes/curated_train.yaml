@@ -1,0 +1,14 @@
+# @package _global_
+# Curated NuRec training split: 1761 scenes.
+
+scenes:
+  test_suite_id: nurec_curated_train
+
+  scene_ids: null
+
+  scenes_csv:
+    - "${repo-relative:'data/scenes/sim_scenes.csv'}"
+    - "${repo-relative:'data/scenes/sim_scenes_2604.csv'}"
+  suites_csv:
+    - "${repo-relative:'data/scenes/sim_suites.csv'}"
+    - "${repo-relative:'data/scenes/sim_suites_curated.csv'}"
