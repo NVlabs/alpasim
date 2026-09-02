@@ -1,0 +1,52 @@
+# @package _global_
+
+# 6-camera configuration: the 4-camera competition set plus the rear pair.
+# The PAI usdz artifacts carry all six camera ids, so no artifact change is
+# needed -- this only requests two more of them.
+
+runtime:
+  simulation_config:
+    cameras:
+    - # Front wide camera
+      # NRE preserves the source camera aspect ratio. The decoded width is
+      # scene-dependent (currently 1916 or 1920 at 1080 px height).
+      logical_id: camera_front_wide_120fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000  # 10 Hz
+      shutter_duration_us: 30_000
+
+    - # Front tele camera
+      logical_id: camera_front_tele_30fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+
+    - # Left cross camera
+      logical_id: camera_cross_left_120fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+
+    - # Right cross camera
+      logical_id: camera_cross_right_120fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+
+    - # Rear left camera
+      logical_id: camera_rear_left_70fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000
+
+    - # Rear right camera
+      logical_id: camera_rear_right_70fov
+      height: 1080
+      width: 1900  # Request width; decoded width can differ.
+      frame_interval_us: 100_000
+      shutter_duration_us: 30_000

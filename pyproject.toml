@@ -38,6 +38,9 @@ all = [
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
 mtgs = ["alpasim-mtgs[server]"]
+local-evaluation = [
+    "drive-irt",
+]
 
 [tool.uv.workspace]
 members = [
@@ -70,6 +73,7 @@ alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
 alpasim-mtgs = { workspace = true }
 trajdata-alpasim = { workspace = true }
+drive-irt = { url = "https://github.com/kesai-labs/drive-irt/archive/82ddd5a42333cacf94c3b652d531101484567f47.tar.gz" }
 
 [tool.uv]
 python-preference = "only-managed"

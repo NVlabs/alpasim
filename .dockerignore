@@ -36,3 +36,8 @@ src/runtime/test_output
 **/.mypy_cache
 **/runs
 **/outputs
+
+# Local sample-driver model assets are not needed by the trusted simulation image.
+e2e_challenge/sample_submission_vavam/assets/vavam/VAM_width_1024_pretrained_139k.pt
+e2e_challenge/sample_submission_vavam/assets/vavam/VQ_ds16_16384_llamagen_encoder.jit
+e2e_challenge/sample_submission_simscale_navsim_transfuser/assets/ltf/ltf_sim_navtest.ckpt

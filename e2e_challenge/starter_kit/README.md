@@ -76,6 +76,9 @@ and the first MTGS asset shard from the
 [OpenDriveLab challenge dataset](https://huggingface.co/datasets/OpenDriveLab/AlpasimChallenge2026_nuplan_track).
 The first asset shard is enough for the `dev` smoke test.
 
+> ⚠️ If you downloaded the public cache files before August 26, 2026, re-download
+> them from this Hugging Face location.
+
 ```bash
 export ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track
 export ALPASIM_NUPLAN_HF=/path/to/alpasim-nuplan-track-hf
@@ -145,3 +148,32 @@ The local smoke tests use the official container restrictions except outbound
 network blocking. See the [challenge README](../README.md) for the submission
 contract and the [Challenge CLI README](../competitor_cli/README.md) for upload
 and submission commands.
+
+### Optional Nonlinear-Controller Gains
+
+Official evaluation uses the nonlinear MPC controller. You may submit a
+modified gain set for that controller without changing your driver image. Start
+from [controller_gains.example.json](controller_gains.example.json), then pass
+the file to the challenge CLI with `--controller-gains`. The evaluator applies
+only the listed gain values; all controller structure, dynamics, and limits
+remain fixed.
+
+To try a gain set locally, append the corresponding overrides to either
+existing smoke-test command. For example, add the following arguments before
+the existing `wizard.log_dir=...` argument to test the default gain set:
+
+```bash
+controller.mpc_implementation=nonlinear \
+controller.gains.long_position_weight=2.0 \
+controller.gains.lat_position_weight=1.0 \
+controller.gains.heading_weight=1.0 \
+controller.gains.acceleration_weight=0.1 \
+controller.gains.rel_front_steering_angle_weight=5.0 \
+controller.gains.rel_acceleration_weight=1.0 \
+controller.gains.idx_start_penalty=10
+```
+
+You may include only the fields you want to change. The submission limits are:
+all six weights are finite values from 0 to 10, and `idx_start_penalty` is an
+integer from 0 to 19. These are the only controller settings accepted by the
+submission CLI and evaluator.
