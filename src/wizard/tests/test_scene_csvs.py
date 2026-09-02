@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from alpasim_wizard.scenes.csv_utils import CSVValidationError, validate_csvs
-from alpasim_wizard.schema import ScenesConfig
 from alpasim_wizard.scenes.sceneset import USDZManager
+from alpasim_wizard.schema import ScenesConfig
 
 
 def get_repo_root() -> Path:
@@ -72,11 +72,14 @@ def test_curated_config_group_catalogs(tmp_path):
         "would depend on last_modified order."
     )
 
-    for suite_id, expected in (("nurec_curated_train", 1761), ("nurec_curated_val", 441)):
+    for suite_id, expected in (
+        ("nurec_curated_train", 1761),
+        ("nurec_curated_val", 441),
+    ):
         resolved = manager.query_by_suite_id(suite_id)
-        assert len(resolved) == expected, (
-            f"{suite_id} resolved to {len(resolved)} scenes, expected {expected}"
-        )
+        assert (
+            len(resolved) == expected
+        ), f"{suite_id} resolved to {len(resolved)} scenes, expected {expected}"
 
     merged_scenes = tmp_path / "merged_scenes.csv"
     merged_suites = tmp_path / "merged_suites.csv"

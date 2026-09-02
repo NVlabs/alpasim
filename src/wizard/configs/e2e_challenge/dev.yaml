@@ -8,7 +8,7 @@
 defaults:
   # Keep the local topology lightweight, but match the PAI evaluation sensor
   # contract (four 10 Hz cameras at 1080 px vertical resolution).
-  - /cameras: 4cam_1080
+  - /cameras: 6cam_1080
   - override /deploy: local
   - override /topology: 1gpu
   - override /driver_source: external_static

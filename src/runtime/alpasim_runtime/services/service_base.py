@@ -18,6 +18,16 @@ from alpasim_runtime.broadcaster import MessageBroadcaster
 
 import grpc
 
+# gRPC defaults the receive limit to 4 MiB. A bundled batch_render_rgb response
+# carrying several 1080p cameras exceeds that -- 6 cameras overflowed it by
+# ~30 KB and failed rollouts with RESOURCE_EXHAUSTED -- so raise it for every
+# service channel rather than per service.
+MAX_GRPC_MESSAGE_BYTES = 64 * 1024 * 1024
+GRPC_CHANNEL_OPTIONS = [
+    ("grpc.max_receive_message_length", MAX_GRPC_MESSAGE_BYTES),
+    ("grpc.max_send_message_length", MAX_GRPC_MESSAGE_BYTES),
+]
+
 logger = logging.getLogger(__name__)
 
 StubType = TypeVar("StubType")
@@ -68,7 +78,9 @@ class ServiceBase(ABC, Generic[StubType]):
     async def _open_connection(self) -> None:
         """Open gRPC connection."""
         if not self.skip:
-            self.channel = grpc.aio.insecure_channel(self.address)
+            self.channel = grpc.aio.insecure_channel(
+                self.address, options=GRPC_CHANNEL_OPTIONS
+            )
             self.stub = self.stub_class(self.channel)
 
     async def _close_connection(self) -> None:

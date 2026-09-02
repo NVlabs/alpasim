@@ -28,10 +28,8 @@ from alpasim_runtime.types import Clock, RuntimeCamera
 
 @pytest.mark.asyncio
 async def test_video_model_service_uses_large_grpc_message_limits(monkeypatch) -> None:
-    from alpasim_runtime.services.video_model_service import (
-        MAX_GRPC_MESSAGE_BYTES,
-        VideoModelService,
-    )
+    from alpasim_runtime.services.service_base import MAX_GRPC_MESSAGE_BYTES
+    from alpasim_runtime.services.video_model_service import VideoModelService
 
     captured: dict[str, object] = {}
     fake_channel = object()

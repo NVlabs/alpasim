@@ -65,6 +65,7 @@ For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 
 ## Documentation & Resources
 
+- **[AlpaSim E2E Challenge](e2e_challenge/README.md)**: competition rules, starter driver, and submission workflow
 - **[Onboarding Guide](docs/ONBOARDING.md)**: Initial setup and access instructions
 - **[Tutorial](docs/TUTORIAL.md)**: Step-by-step usage guide
 - **[Manual Driver](docs/MANUAL_DRIVER.md)**: Interactive keyboard control of the ego vehicle

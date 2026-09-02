@@ -14,7 +14,10 @@ and wait for approval.
 - [Starter kit](starter_kit/README.md): build and locally test a minimal driver container
 - [VAVAM sample submission](sample_submission_vavam/README.md): build and locally test a VAVAM-backed driver container
 - [SimScale/NAVSIM sample submissions](NAVSIM_MODEL_ADAPTATION.md): build and locally test SimScale/NAVSIM-style driver containers, including LTF, DiffusionDrive, and GTRS.
-- [Challenge CLI](competitor_cli/README.md): authenticate, log in to ECR, submit images, check status, view the leaderboard
+- [Challenge CLI](competitor_cli/README.md): authenticate, privately review and
+  accept the competition terms, log in to ECR, submit images, check status, and
+  view the leaderboard
+- [Local evaluation](local_evaluation/README.md): run curated validation suites and compare completed runs against the published reference set
 
 ## Tracks
 
@@ -35,8 +38,10 @@ available in the public NuRec dataset.
 #### PAI Sensor Contract
 
 Every official PAI rollout sends JPEG observations from `camera_front_wide_120fov`,
-`camera_front_tele_30fov`, `camera_cross_left_120fov`, and
-`camera_cross_right_120fov` at 10 Hz. The renderer preserves the source camera
+`camera_front_tele_30fov`, `camera_cross_left_120fov`,
+`camera_cross_right_120fov`, `camera_rear_left_70fov`, and
+`camera_rear_right_70fov` at 10 Hz. Drivers are not required to consume all six.
+The renderer preserves the source camera
 aspect ratio. As a result, the configured 1900 x 1080 request does not imply a
 fixed delivered width: the current official evaluation set produces both 1916
 x 1080 and 1920 x 1080 JPEGs (width x height), depending on the scene. Image
@@ -52,6 +57,7 @@ intrinsics to those dimensions before using them in pixel-space calculations.
 ### NuPlan / MTGS
 
 The NuPlan track uses managed nuPlan scenes and MTGS rendering in the evaluation environment.
+Traffic on this track consists of vehicles only; pedestrians and cyclists are not simulated.
 
 
 ## Submission Image Requirements and Constraints
@@ -90,3 +96,11 @@ Some additional constraints of the environment:
 
 See the [Challenge CLI README](competitor_cli/README.md) for authentication, ECR upload, submission,
 status, and leaderboard commands.
+
+### Optional Controller Gain Set
+
+The vehicle model is controlled using the nonlinear MPC controller. A submission may include
+an optional JSON gain set through the challenge CLI's `--controller-gains`
+option if there is a desire to deviate from the default selection. See the
+[starter-kit example](starter_kit/controller_gains.example.json) and the
+[CLI instructions](competitor_cli/README.md#optional-nonlinear-controller-gains).

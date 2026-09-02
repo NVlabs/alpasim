@@ -6,6 +6,10 @@
 # Compose itself is run on the EC2 host, not inside the generator container.
 
 defaults:
+  # The camera list otherwise comes from driver/alpamayo_configs, which is
+  # shared with the other Alpamayo drivers and is 4-cam. Selected here so the
+  # competition contract owns it; Hydra requires overrides after plain entries.
+  - /cameras: 6cam_1080
   - override /deploy: competition_ec2
   - override /topology: 8gpu_32rollouts
   - override /driver: alpamayo1
@@ -25,6 +29,24 @@ wizard:
       - "${oc.env:ALPASIM_DRIVER_HOST,localhost}:${oc.env:ALPASIM_DRIVER_PORT,6789}"
 
 services:
+  # The developer base config enables the NRE Harmonizer for general local
+  # experimentation.  The public competition evaluates the unharmonized
+  # renderer until the separately announced final reruns, so replace only the
+  # renderer command for this EC2-only preset.  Keep the base default intact.
+  renderer:
+    command:
+      - "${defines.renderer_entrypoint}"
+      - "serve-grpc"
+      - "--port={port}"
+      - "--host=0.0.0.0"
+      - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
+      - "--egocar-hood-dir=/mnt/ego-hoods"
+      - "--no-enable-nrend"
+      - "--download-cache-dir /tmp/nre-cache-dir"
+      - "--cache-size=${defines.nre_cache_size}"
+      - "--max-workers=${defines.nre_max_workers}"
+      - "--enable-editing-actors"
+
   driver:
     image: ${oc.env:CONTESTANT_IMAGE,???}
     external_image: true
