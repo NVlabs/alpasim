@@ -63,6 +63,14 @@ appreciated.
 To run simulations locally (Docker Compose, single machine), see the [Tutorial](docs/TUTORIAL.md).
 For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 
+AlpaSim also supports local closed-loop development for both tracks of the
+[AlpaSim E2E Challenge](e2e_challenge/README.md):
+
+- **Physical AI AV (PAI)** uses public NuRec scenes and the NRE renderer.
+- **nuPlan** uses the NAVSIM-aligned `navtest` scenes and the MTGS renderer. A
+  lightweight smoke test and the standard full local evaluation are documented
+  in the [challenge guide](e2e_challenge/README.md#local-closed-loop-evaluation).
+
 ## Documentation & Resources
 
 - **[AlpaSim E2E Challenge](e2e_challenge/README.md)**: competition rules, starter driver, and submission workflow
@@ -81,8 +89,10 @@ For cluster or SLURM deployment, see `src/tools/run-on-slurm`.
 
 ### **Sample Data**
 
-- **Hugging Face Dataset**:
+- **Physical AI AV / NuRec**:
   [PhysicalAI-Autonomous-Vehicles-NuRec](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec)
+- **nuPlan / MTGS**:
+  [AlpasimChallenge2026_nuplan_track](https://huggingface.co/datasets/OpenDriveLab/AlpasimChallenge2026_nuplan_track)
 - **Sample Artifacts**: Included in the repository via Git LFS
 
 ## Contributing
