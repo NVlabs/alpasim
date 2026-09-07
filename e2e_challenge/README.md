@@ -58,6 +58,68 @@ intrinsics to those dimensions before using them in pixel-space calculations.
 
 The NuPlan track uses managed nuPlan scenes and MTGS rendering in the evaluation environment.
 Traffic on this track consists of vehicles only; pedestrians and cyclists are not simulated.
+Local closed-loop evaluation is supported using the same driver API as the PAI
+track. The standard public evaluation uses the NAVSIM-aligned `navtest` scene
+set; use the `full` preset to select the complete set without a scene limit.
+
+#### Adapting a NAVSIM-Style Model
+
+Models developed with NAVSIM do not need to bring the NAVSIM or nuPlan training
+stack into the submission container. Follow the
+[NAVSIM model adaptation guide](NAVSIM_MODEL_ADAPTATION.md) to extract the
+inference network, implement the AlpaSim driver boundary, package an offline
+image, and validate it with a NuPlan/MTGS closed-loop run.
+
+Start from the complete sample closest to the model's output contract:
+
+- [Latent TransFuser](sample_submission_simscale_navsim_transfuser/) for direct
+  trajectory regression
+- [DiffusionDrive](sample_submission_simscale_navsim_diffusiondrive/) for a
+  diffusion trajectory decoder
+- [GTRS-Dense](sample_submission_simscale_navsim_gtrs_dense/) for
+  vocabulary-based trajectory selection
+
+The guide covers inference adaptation for the NuPlan/MTGS track. It does not
+describe model training or adaptation to the PAI camera contract.
+
+## Local Closed-Loop Evaluation
+
+Both challenge tracks can be run locally against an already-running contestant
+driver. Start with the [starter kit](starter_kit/README.md) to build and launch
+the example driver.
+
+For a lightweight PAI smoke test:
+
+```bash
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+uv run alpasim_wizard +e2e_challenge=dev \
+  wizard.log_dir=./runs/e2e_challenge_pai_smoke
+```
+
+For a one-scene nuPlan/MTGS smoke test:
+
+```bash
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track \
+uv run alpasim_wizard +e2e_challenge_nuplan=dev \
+  wizard.log_dir=./runs/e2e_challenge_nuplan_smoke
+```
+
+For the standard full nuPlan `navtest` closed-loop evaluation:
+
+```bash
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track \
+uv run alpasim_wizard +e2e_challenge_nuplan=full \
+  wizard.log_dir=./runs/e2e_challenge_nuplan_navtest
+```
+
+The nuPlan commands require the trajdata cache and MTGS assets described in the
+[starter-kit data setup](starter_kit/README.md#data-setup). The full preset runs
+all public `navtest` scenes, so all `MTGS_asset/navtest/assets/part*.tar.gz`
+shards must be installed. Completed runs write
+`aggregate/results-summary.json`; see [Local evaluation](local_evaluation/README.md)
+to compare a run with the published reference results.
 
 
 ## Submission Image Requirements and Constraints
@@ -81,7 +143,8 @@ reports the observed throughput wall time and the applicable limit.
 Both tracks use the `ec2` preset (see `src/wizard/configs/{e2e_challenge,e2e_challenge_nuplan}`).
 The EC2 configs start 16 replicas of the submitted image across GPUs 4-7 with 2 concurrent rollouts per replica.
 
-Local smoke tests use `+e2e_challenge=dev` and a 1-GPU topology.
+Local smoke tests use `+e2e_challenge=dev` for PAI and
+`+e2e_challenge_nuplan=dev` for nuPlan. Both use a 1-GPU topology.
 
 Some additional constraints of the environment:
 

@@ -129,17 +129,35 @@ Result:
 ./runs/e2e_challenge_nuplan_smoke/aggregate/results-summary.json
 ```
 
-The dev preset runs one scene. To smoke-test the full NuPlan scene set,
-download and extract all `MTGS_asset/navtest/assets/part*.tar.gz` shards, then
-override the scene group and remove the dev scene limit:
+The dev preset runs one scene. The standard local NuPlan evaluation uses the
+complete NAVSIM-aligned `navtest` set. Download all navtest asset shards:
+
+```bash
+uv run --with huggingface-hub hf download \
+  OpenDriveLab/AlpasimChallenge2026_nuplan_track \
+  --repo-type dataset \
+  --local-dir "$ALPASIM_NUPLAN_HF" \
+  --include 'MTGS_asset/navtest/assets/part*.tar.gz'
+
+for shard in "$ALPASIM_NUPLAN_HF"/MTGS_asset/navtest/assets/part*.tar.gz; do
+  tar -xzf "$shard" -C "$ALPASIM_NUPLAN_ROOT"
+done
+```
+
+Then select the `full` preset:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
 ALPASIM_NUPLAN_ROOT=/path/to/alpasim-nuplan-track \
-uv run alpasim_wizard +e2e_challenge_nuplan=dev \
-  nuplan_scenes=navtest_full \
-  scenes.limit_to_first_n=0 \
-  wizard.log_dir=./runs/e2e_challenge_nuplan_full_smoke
+uv run alpasim_wizard +e2e_challenge_nuplan=full \
+  wizard.log_dir=./runs/e2e_challenge_nuplan_navtest
+```
+
+The full preset runs all 1,485 public navtest scenes and disables per-scene
+video generation. Its aggregate result is written to:
+
+```text
+./runs/e2e_challenge_nuplan_navtest/aggregate/results-summary.json
 ```
 
 ## Notes

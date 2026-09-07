@@ -1,9 +1,10 @@
 # Local Evaluation
 
-Local evaluation has two complementary pieces: the curated public NuRec
-train/validation splits for the Physical AI AV (PAI) track, and the Drive-IRT
-aggregation tool for comparing completed runs to organizer-published reference
-results. Both run entirely from a local AlpaSim checkout.
+Local evaluation has two complementary pieces: public scene selections for
+closed-loop runs, and the Drive-IRT aggregation tool for analyzing completed
+runs. When an organizer-published reference bundle is installed, the tool can
+also compare a run with those reference results. Everything runs from a local
+AlpaSim checkout.
 
 ## Curated NuRec train/validation splits
 
@@ -79,9 +80,15 @@ uv run alpasim_wizard +e2e_challenge=dev +nurec_scenes=curated_val \
 uv run --extra local-evaluation \
   python e2e_challenge/local_evaluation/evaluate.py \
   --track pai \
+  --without-references --algorithm average \
   --run my-pai-model=./runs/my-pai-model-val \
   --output-dir ./runs/my-pai-model-val/local-evaluation
 ```
+
+The command above works without a reference bundle and reports the model's
+average scene score. After installing a published PAI reference bundle, remove
+`--without-references --algorithm average` to run the reference-based Drive-IRT
+comparison.
 
 `curated_val` is the 441-scene holdout defined in
 `src/wizard/configs/nurec_scenes/curated_val.yaml`. Do not mix this output with
@@ -90,23 +97,27 @@ scene IDs.
 
 #### NuPlan / MTGS
 
-First run the same local NuPlan suite as the corresponding published reference
-bundle. For example, the existing public full smoke suite is:
+First run the standard full `navtest` suite used by the corresponding published
+reference bundle:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
 ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
-uv run alpasim_wizard +e2e_challenge_nuplan=dev \
-  nuplan_scenes=navtest_full \
-  scenes.limit_to_first_n=0 \
+uv run alpasim_wizard +e2e_challenge_nuplan=full \
   wizard.log_dir=./runs/my-nuplan-model
 
 uv run --extra local-evaluation \
   python e2e_challenge/local_evaluation/evaluate.py \
   --track nuplan \
+  --without-references --algorithm average \
   --run my-nuplan-model=./runs/my-nuplan-model \
   --output-dir ./runs/my-nuplan-model/local-evaluation
 ```
+
+The command above works without a reference bundle and reports the model's
+average navtest scene score. After installing a published nuPlan reference
+bundle, remove `--without-references --algorithm average` to run the
+reference-based Drive-IRT comparison.
 
 The PAI curated NuRec split and the NuPlan/MTGS scene suites are different;
 their reference data is intentionally kept separate.
