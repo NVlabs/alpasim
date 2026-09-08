@@ -1,9 +1,10 @@
 # Local Evaluation
 
-Local evaluation has two complementary pieces: the curated public NuRec
-train/validation splits for the Physical AI AV (PAI) track, and the Drive-IRT
-aggregation tool for comparing completed runs to organizer-published reference
-results. Both run entirely from a local AlpaSim checkout.
+Local evaluation has two complementary pieces: public scene selections for
+closed-loop runs, and the Drive-IRT aggregation tool for analyzing completed
+runs. When an organizer-published reference bundle is installed, the tool can
+also compare a run with those reference results. Everything runs from a local
+AlpaSim checkout.
 
 ## Curated NuRec train/validation splits
 
@@ -53,6 +54,10 @@ scene and creates a
 capability ranking, posterior rank interval, rank spread, and average scene
 score.
 
+It does not copy a model's results. Give the run directory directly with
+`--run MODEL_ID=PATH`. A pre-populated PAI reference bundle is included and
+loaded automatically; nuPlan does not yet have a reference bundle.
+
 ### Install and run
 
 Run from the AlpaSim repository root. The `local-evaluation` optional extra
@@ -79,6 +84,8 @@ uv run --extra local-evaluation \
   --output-dir ./runs/my-pai-model-val/local-evaluation
 ```
 
+The bundled PAI references are included automatically.
+
 `curated_val` is the 441-scene holdout defined in
 `src/wizard/configs/nurec_scenes/curated_val.yaml`. Do not mix this output with
 another scene suite: every run included in a fit must have the same scored
@@ -86,23 +93,26 @@ scene IDs.
 
 #### NuPlan / MTGS
 
-First run the same local NuPlan suite as the corresponding published reference
-bundle. For example, the existing public full smoke suite is:
+Run the full public `navtest` suite:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
 ALPASIM_NUPLAN_ROOT=/path/to/worldengine-root \
-uv run alpasim_wizard +e2e_challenge_nuplan=dev \
-  nuplan_scenes=navtest_full \
-  scenes.limit_to_first_n=0 \
+uv run alpasim_wizard +e2e_challenge_nuplan=full \
   wizard.log_dir=./runs/my-nuplan-model
 
 uv run --extra local-evaluation \
   python e2e_challenge/local_evaluation/evaluate.py \
   --track nuplan \
+  --without-references --algorithm zoib \
   --run my-nuplan-model=./runs/my-nuplan-model \
   --output-dir ./runs/my-nuplan-model/local-evaluation
 ```
+
+No nuPlan reference bundle is included yet. The evaluator requests the
+competition's `zoib` algorithm; with insufficient observations it records a
+warning in `manifest.json` and falls back to `average`. Pass `--algorithm average`
+to request that directly.
 
 The PAI curated NuRec split and the NuPlan/MTGS scene suites are different;
 their reference data is intentionally kept separate.
@@ -111,7 +121,8 @@ their reference data is intentionally kept separate.
 
 `data/pai/` ships with precomputed PAI reference runs on the 441-scene
 `nurec_curated_val` split; see "How the PAI reference runs were produced" below
-for what each subject is. The bundle layout is:
+for what each subject is. `data/nuplan/` remains empty until organizer-published
+precomputed reference results are added. The bundle layout is:
 
 ```text
 data/
@@ -121,7 +132,7 @@ data/
   nuplan/<reference run>/aggregate/results-summary.json
 ```
 
-Each manifest identifies its track and reference subject IDs. Once present,
+Each manifest identifies its track and reference subject IDs. When present,
 the evaluator includes those runs automatically. You may point at a separately
 downloaded bundle with `--reference-manifest /path/to/reference_manifest.json`.
 It also supplies the two named anchor subjects and their target scores used to
