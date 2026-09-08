@@ -1,0 +1,44 @@
+{
+  "track": "pai",
+  "test_suite_id": "nurec_curated_val",
+  "runs": [
+    {
+      "subject_id": "alpamayo1",
+      "summary_path": "alpamayo1/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "vavam-nonlinear",
+      "summary_path": "vavam-nonlinear/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "vavam-linear",
+      "summary_path": "vavam-linear/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "alternative_1",
+      "summary_path": "alternative_1/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "alternative_2",
+      "summary_path": "alternative_2/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "alternative_3",
+      "summary_path": "alternative_3/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "alternative_4",
+      "summary_path": "alternative_4/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "alternative_5",
+      "summary_path": "alternative_5/aggregate/results-summary.json"
+    }
+  ],
+  "score_scale": {
+    "low_subject_id": "alternative_2",
+    "low_target_score": 600,
+    "high_subject_id": "alpamayo1",
+    "high_target_score": 2000
+  }
+}

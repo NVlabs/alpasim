@@ -49,13 +49,9 @@ roads or driving directions at the same location may occur across splits.
 This tool fits the same pinned [Drive-IRT](https://github.com/kesai-labs/drive-irt)
 algorithm used for the challenge leaderboard to local
 `aggregate/results-summary.json` files. It averages repeated rollouts for each
-scene, accepts a score of `0.0` as a valid driving result, and creates a
+scene and creates a
 capability ranking, posterior rank interval, rank spread, and average scene
 score.
-
-It does not copy a model's results. Give the run directory directly with
-`--run MODEL_ID=PATH`; when the published reference bundle is present, its
-precomputed runs are added automatically for the selected track.
 
 ### Install and run
 
@@ -113,8 +109,9 @@ their reference data is intentionally kept separate.
 
 ### Published reference data
 
-`data/` is intentionally empty until organizer-published precomputed reference
-results are added. The future bundle layout is:
+`data/pai/` ships with precomputed PAI reference runs on the 441-scene
+`nurec_curated_val` split; see "How the PAI reference runs were produced" below
+for what each subject is. The bundle layout is:
 
 ```text
 data/
@@ -127,8 +124,8 @@ data/
 Each manifest identifies its track and reference subject IDs. Once present,
 the evaluator includes those runs automatically. You may point at a separately
 downloaded bundle with `--reference-manifest /path/to/reference_manifest.json`.
-It also supplies the two named anchor subjects and their target scores, so the
-reported Policy Capability Score uses the same affine scale as the leaderboard.
+It also supplies the two named anchor subjects and their target scores used to
+scale the reported Policy Capability Score (see "Anchor scale").
 
 The required manifest interface is intentionally small:
 
@@ -149,8 +146,8 @@ The required manifest interface is intentionally small:
 }
 ```
 
-Until then, `--without-references` allows an experimental comparison of two or
-more local runs, but it is not leaderboard-like:
+For a track with no installed reference bundle, `--without-references` allows an
+experimental comparison of two or more local runs:
 
 ```bash
 uv run --extra local-evaluation \
@@ -165,17 +162,93 @@ For `zoib`, the tool uses the same sufficiency guard as the service: at least
 it records a warning in `manifest.json` and uses the arithmetic-average
 fallback. That fallback has no posterior rank spread.
 
-### Outputs and ranking
+### How the PAI reference runs were produced
 
-- `scene_score_matrix.csv`: one canonical per-scene score per subject.
-- `capability_ranking.csv`: policy capability score, average scene score,
-  posterior rank interval, and `rank_spread = rank_hi - rank_lo` when
-  available.
-- `manifest.json`: inputs, exclusions, algorithm, fallback, and fixed ranking
-  settings.
-- `fit/`: serialized Drive-IRT fit output.
+Every PAI reference subject is a full `nurec_curated_val` run (441 scenes x 3
+rollouts) under the competition simulation contract, so a locally produced run
+is directly comparable. Reproduce one with:
 
-The default is zero-one-inflated beta IRT (`zoib`) with fixed seed and 100,000
-posterior rank samples. Rankings use lower `rank_hi` first, then higher
-`avg_dist_between_incidents_at_fault`, then point-estimate rank and model ID.
-Use `--algorithm average` only for a quick baseline.
+```bash
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+uv run alpasim_wizard +e2e_challenge=dev +nurec_scenes=curated_val \
+  runtime.simulation_config.n_rollouts=3 \
+  wizard.log_dir=./runs/my-subject
+```
+
+`+e2e_challenge=dev` is what pins the contract: the competition sensor list at
+10 Hz, 200 simulation steps and 1.7 s of force-GT. Selecting a driver alone is
+not enough, because a driver config can carry its own camera and timing
+overrides (`driver/vavam_configs.yaml` replaces them with a 1-camera 2 Hz
+shape). `n_rollouts=3` matches the references.
+
+The controller is a deliberate axis here, not an incidental setting. The base
+config selects `controller: nonlinear`; `controller=default` is the linear MPC.
+Be aware that this option is not available in the actual competition, but the
+linear MPC does not have as strong coupling between the lateral and longitudinal
+axes, which allows for better robustness to some of the infeasible trajectories
+that VaVAM produces.
+
+| subject | driver | controller | provenance |
+|---|---|---|---|
+| `alpamayo1` | in-repo Alpamayo 1 | nonlinear | reproducible with the command above |
+| `vavam-nonlinear` | VAVAM submission image | nonlinear | reproducible with the command above |
+| `vavam-linear` | VAVAM submission image | linear (`controller=default`) | reproducible with the command above |
+| `alternative_<n>` | not recorded | not recorded | generated with other policies; no further details available |
+
+### Anchor scale
+
+`data/pai/reference_manifest.json` maps the Policy Capability Score (PCS, the
+`policy_capability_score` column) onto a fixed affine scale defined by two
+anchor subjects:
+
+| role | subject | target |
+|---|---:|---:|
+| low | `alternative_2` | 600 |
+| high | `alpamayo1` | 2000 |
+
+The two anchors reproduce their targets exactly; every other subject, including
+a locally supplied one, is placed on the line through them. A subject weaker
+than the low anchor extrapolates below 1000.
+
+**These numbers are an arbitrary local scale.** The anchor subjects and their
+targets were chosen for this bundle alone, so a local PCS is not comparable to
+the competition leaderboard and is not expected to match it.
+
+### Subject count and the zoib sufficiency guard
+
+The `zoib` algorithm needs `S + 5N` observations for `S` subjects and `N`
+scenes. On the 441-scene split each subject contributes 441 canonical scores,
+so `441S >= S + 2205`, which means **six subjects minimum**. Below that the tool
+records a warning in `manifest.json` and silently falls back to an arithmetic
+average, which produces no posterior rank interval and no `rank_spread`.
+
+### Build the local leaderboard end to end
+
+```bash
+# 1. run your driver on the same split as the references
+ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
+uv run alpasim_wizard +e2e_challenge=dev +nurec_scenes=curated_val \
+  runtime.simulation_config.n_rollouts=3 \
+  wizard.log_dir=./runs/my-model
+
+# 2. copy it into the bundle and add a "runs" entry for it in
+#    data/pai/reference_manifest.json:
+#      {"subject_id": "my-model",
+#       "summary_path": "my-model/aggregate/results-summary.json"}
+mkdir -p e2e_challenge/local_evaluation/data/pai/my-model/aggregate
+cp ./runs/my-model/aggregate/results-summary.json \
+   e2e_challenge/local_evaluation/data/pai/my-model/aggregate/
+
+# 3. rank every subject in the bundle
+uv run --extra local-evaluation \
+  python e2e_challenge/local_evaluation/evaluate.py \
+  --track pai --output-dir ./runs/my-model/local-evaluation
+
+# 4. confirm the fit was not the fallback
+python -c "import json;print(json.load(open('./runs/my-model/local-evaluation/manifest.json')).get('warnings') or 'zoib fit used')"
+```
+
+Subjects listed in the manifest are picked up automatically, so no `--run` is
+needed. Use `--run MODEL_ID=PATH` only for a run you want to keep outside the
+bundle. `--track` is required because the challenge aggregator is likewise
+invoked per track.

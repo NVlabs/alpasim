@@ -17,6 +17,9 @@ and wait for approval.
 - [Challenge CLI](competitor_cli/README.md): authenticate, privately review and
   accept the competition terms, log in to ECR, submit images, check status, and
   view the leaderboard
+- [Controller tuning and trajectory validity](CONTROLLER_TUNING.md): understand
+  why controller gains are part of the closed-loop system and what trajectories
+  the official nonlinear MPC is designed to track
 - [Local evaluation](local_evaluation/README.md): run curated validation suites and compare completed runs against the published reference set
 
 ## Tracks

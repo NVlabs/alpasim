@@ -38,6 +38,16 @@ message DriveSessionRequest {
     message RolloutSpec {
         message VehicleDefinition {
             repeated nre.grpc.protos.sensorsim.AvailableCamerasReturn.AvailableCamera available_cameras = 3;
+
+            // Full vehicle bounding-box dimensions in metres along the box's
+            // x, y, and z axes. This is the nominal AABB used by simulation and
+            // supplied to evaluation before metric-specific shrink/rounding.
+            common.AABB bounding_box = 4;
+
+            // Pose of the bounding-box center relative to the ego rig. This is
+            // an active rig->bounding-box transform and uses the same rig frame
+            // as each available camera's rig_to_camera transform.
+            common.Pose rig_to_bounding_box = 5;
         }
 
         VehicleDefinition vehicle = 1;
