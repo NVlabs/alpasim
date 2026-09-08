@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from alpasim_grpc.v0.sensorsim_pb2 import AvailableCamerasReturn
-from alpasim_utils.geometry import Trajectory
+from alpasim_utils.geometry import Pose, Trajectory
 from alpasim_utils.scenario import AABB, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
 
@@ -25,6 +25,8 @@ class DriverSessionConfig:
     """Typed session configuration for the driver service."""
 
     sensorsim_cameras: list[AvailableCamerasReturn.AvailableCamera]
+    ego_aabb: AABB
+    rig_to_ego_aabb: Pose
     scene_id: str | None = None
 
 

@@ -32,6 +32,7 @@ from alpasim_utils.geometry import (
     Pose,
     Trajectory,
     polyline_to_grpc_route,
+    pose_to_grpc,
     trajectory_from_grpc,
     trajectory_to_grpc,
 )
@@ -67,6 +68,8 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         rollout_spec = DriveSessionRequest.RolloutSpec(
             vehicle=DriveSessionRequest.RolloutSpec.VehicleDefinition(
                 available_cameras=sensorsim_cameras,
+                bounding_box=cfg.ego_aabb.to_grpc(),
+                rig_to_bounding_box=pose_to_grpc(cfg.rig_to_ego_aabb),
             ),
         )
 

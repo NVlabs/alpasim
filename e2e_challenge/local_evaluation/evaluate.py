@@ -41,9 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run",
         action="append",
-        required=True,
         metavar="MODEL_ID=PATH",
-        help="Completed run directory, aggregate directory, or results-summary.json. May be repeated.",
+        help=(
+            "Completed run directory, aggregate directory, or results-summary.json. "
+            "May be repeated. Optional when every subject is already listed in the "
+            "reference manifest."
+        ),
     )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument(
@@ -460,7 +463,7 @@ def main() -> int:
     if args.epochs < 1:
         raise SystemExit("--epochs must be >= 1")
     try:
-        contestant_inputs = [parse_run_spec(value) for value in args.run]
+        contestant_inputs = [parse_run_spec(value) for value in args.run or []]
         reference_inputs: list[RunInput] = []
         reference_manifest: dict[str, Any] | None = None
         if not args.without_references:

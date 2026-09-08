@@ -590,6 +590,8 @@ class EventBasedRollout:
                     broadcaster=self.broadcaster,
                     session_config=DriverSessionConfig(
                         sensorsim_cameras=available_camera_protos,
+                        ego_aabb=self.unbound.ego_aabb,
+                        rig_to_ego_aabb=(self.unbound.transform_ego_coords_ds_to_aabb),
                         scene_id=self.unbound.scene_id,
                     ),
                 )

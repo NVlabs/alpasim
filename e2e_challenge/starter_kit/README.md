@@ -158,6 +158,10 @@ the file to the challenge CLI with `--controller-gains`. The evaluator applies
 only the listed gain values; all controller structure, dynamics, and limits
 remain fixed.
 
+See [Controller Tuning and Trajectory Validity](../CONTROLLER_TUNING.md) for the
+design rationale, closed-loop tuning considerations, and the expected domain of
+reference trajectories.
+
 To try a gain set locally, append the corresponding overrides to either
 existing smoke-test command. For example, add the following arguments before
 the existing `wizard.log_dir=...` argument to test the default gain set:

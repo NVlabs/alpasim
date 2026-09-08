@@ -1188,7 +1188,9 @@ class CameraProjector:
 
     def __post_init__(self) -> None:
         self._param_kind = self.calibration.intrinsics.WhichOneof("camera_param")
-        # In logs, rig_to_camera is effectively camera->rig; use inverse only.
+        # rig_to_camera is the active pose of the camera in the rig. Its SE(3)
+        # matrix maps camera coordinates into rig coordinates, so invert it to
+        # express rig-frame points in camera coordinates.
         self._rig_to_cam = self.calibration.rig_to_camera.as_se3()  # (4,4)
         self._cam_to_rig = np.linalg.inv(self._rig_to_cam)
         if self._param_kind in ["opencv_pinhole_param", "opencv_fisheye_param"]:
