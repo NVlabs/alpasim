@@ -54,6 +54,10 @@ scene and creates a
 capability ranking, posterior rank interval, rank spread, and average scene
 score.
 
+It does not copy a model's results. Give the run directory directly with
+`--run MODEL_ID=PATH`. A pre-populated PAI reference bundle is included and
+loaded automatically; nuPlan does not yet have a reference bundle.
+
 ### Install and run
 
 Run from the AlpaSim repository root. The `local-evaluation` optional extra
@@ -76,15 +80,11 @@ uv run alpasim_wizard +e2e_challenge=dev +nurec_scenes=curated_val \
 uv run --extra local-evaluation \
   python e2e_challenge/local_evaluation/evaluate.py \
   --track pai \
-  --without-references --algorithm average \
   --run my-pai-model=./runs/my-pai-model-val \
   --output-dir ./runs/my-pai-model-val/local-evaluation
 ```
 
-The command above works without a reference bundle and reports the model's
-average scene score. After installing a published PAI reference bundle, remove
-`--without-references --algorithm average` to run the reference-based Drive-IRT
-comparison.
+The bundled PAI references are included automatically.
 
 `curated_val` is the 441-scene holdout defined in
 `src/wizard/configs/nurec_scenes/curated_val.yaml`. Do not mix this output with
@@ -93,8 +93,7 @@ scene IDs.
 
 #### NuPlan / MTGS
 
-First run the standard full `navtest` suite used by the corresponding published
-reference bundle:
+Run the full public `navtest` suite:
 
 ```bash
 ALPASIM_DRIVER_HOST=localhost ALPASIM_DRIVER_PORT=6789 \
@@ -105,15 +104,15 @@ uv run alpasim_wizard +e2e_challenge_nuplan=full \
 uv run --extra local-evaluation \
   python e2e_challenge/local_evaluation/evaluate.py \
   --track nuplan \
-  --without-references --algorithm average \
+  --without-references --algorithm zoib \
   --run my-nuplan-model=./runs/my-nuplan-model \
   --output-dir ./runs/my-nuplan-model/local-evaluation
 ```
 
-The command above works without a reference bundle and reports the model's
-average navtest scene score. After installing a published nuPlan reference
-bundle, remove `--without-references --algorithm average` to run the
-reference-based Drive-IRT comparison.
+No nuPlan reference bundle is included yet. The evaluator requests the
+competition's `zoib` algorithm; with insufficient observations it records a
+warning in `manifest.json` and falls back to `average`. Pass `--algorithm average`
+to request that directly.
 
 The PAI curated NuRec split and the NuPlan/MTGS scene suites are different;
 their reference data is intentionally kept separate.
@@ -122,7 +121,8 @@ their reference data is intentionally kept separate.
 
 `data/pai/` ships with precomputed PAI reference runs on the 441-scene
 `nurec_curated_val` split; see "How the PAI reference runs were produced" below
-for what each subject is. The bundle layout is:
+for what each subject is. `data/nuplan/` remains empty until organizer-published
+precomputed reference results are added. The bundle layout is:
 
 ```text
 data/
@@ -132,7 +132,7 @@ data/
   nuplan/<reference run>/aggregate/results-summary.json
 ```
 
-Each manifest identifies its track and reference subject IDs. Once present,
+Each manifest identifies its track and reference subject IDs. When present,
 the evaluator includes those runs automatically. You may point at a separately
 downloaded bundle with `--reference-manifest /path/to/reference_manifest.json`.
 It also supplies the two named anchor subjects and their target scores used to

@@ -62,7 +62,7 @@ intrinsics to those dimensions before using them in pixel-space calculations.
 The NuPlan track uses managed nuPlan scenes and MTGS rendering in the evaluation environment.
 Traffic on this track consists of vehicles only; pedestrians and cyclists are not simulated.
 Local closed-loop evaluation is supported using the same driver API as the PAI
-track. The standard public evaluation uses the NAVSIM-aligned `navtest` scene
+track. For local public evaluation, use the NAVSIM-aligned `navtest` scene
 set; use the `full` preset to select the complete set without a scene limit.
 
 #### Adapting a NAVSIM-Style Model
