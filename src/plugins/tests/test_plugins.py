@@ -40,6 +40,7 @@ def test_get_plugin_info_returns_all_groups() -> None:
         "alpasim.scorers",
         "alpasim.tools",
         "alpasim.configs",
+        "alpasim.route_generators",
     ]
     for group in expected_groups:
         assert group in info

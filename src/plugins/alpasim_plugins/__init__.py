@@ -9,6 +9,7 @@ from alpasim_plugins.plugins import (
     get_plugin_info,
     models,
     mpc_controllers,
+    route_generators,
     scorers,
     tools,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "get_plugin_info",
     "models",
     "mpc_controllers",
+    "route_generators",
     "scorers",
     "tools",
 ]
