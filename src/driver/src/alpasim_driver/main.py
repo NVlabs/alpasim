@@ -60,6 +60,7 @@ from .frame_cache import FrameCache
 from .models import DriveCommand
 from .models.base import (
     BaseTrajectoryModel,
+    CameraFrame,
     CameraImages,
     ModelInputValidationError,
     ModelPrediction,
@@ -672,7 +673,9 @@ class EgoDriverService(EgodriverServiceServicer):
         for cam_id in self._model.camera_ids:
             frame_cache = session.frame_caches[cam_id]
             entries = frame_cache.latest_frame_entries(self._context_length)
-            camera_images[cam_id] = [(e.timestamp_us, e.image) for e in entries]
+            camera_images[cam_id] = [
+                CameraFrame(timestamp_us=e.timestamp_us, image=e.image) for e in entries
+            ]
 
         return camera_images
 
