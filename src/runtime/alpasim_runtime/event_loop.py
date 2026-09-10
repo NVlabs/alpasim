@@ -174,6 +174,7 @@ class EventBasedRollout:
             vector_map=self.unbound.vector_map,
             route_generator_type=self.unbound.route_generator_type,
             route_start_offset_m=self.unbound.route_start_offset_m,
+            route_generator_plugin=self.unbound.route_generator_plugin,
         )
 
         self._runtime_evaluator = RuntimeEvaluator(

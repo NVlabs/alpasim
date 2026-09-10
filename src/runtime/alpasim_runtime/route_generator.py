@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import final
 
 import numpy as np
+from alpasim_plugins.plugins import route_generators as route_generator_registry
 from alpasim_runtime.config import RouteGeneratorType
 from alpasim_utils.geometry import Polyline, Pose
 from trajdata.maps import VectorMap
@@ -41,6 +42,7 @@ class RouteGenerator(ABC):
         vector_map: VectorMap,
         route_generator_type: RouteGeneratorType,
         route_start_offset_m: float = 0.0,
+        route_generator_plugin: str | None = None,
     ) -> "RouteGenerator | None":
         """
         Factory method to create a RouteGenerator
@@ -52,6 +54,13 @@ class RouteGenerator(ABC):
         Returns:
           A route generator of the specified type, or None if route generation is disabled
         """
+        if route_generator_plugin is not None:
+            plugin_cls = route_generator_registry.get(route_generator_plugin)
+            return plugin_cls.from_context(
+                recorded_waypoints_in_local,
+                vector_map,
+                route_start_offset_m=route_start_offset_m,
+            )
         if route_generator_type == RouteGeneratorType.NONE:
             return None
         elif route_generator_type == RouteGeneratorType.RECORDED:

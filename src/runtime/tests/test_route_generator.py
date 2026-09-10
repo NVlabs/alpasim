@@ -12,6 +12,7 @@ from alpasim_runtime.route_generator import (
     RouteGeneratorMap,
     RouteGeneratorRecorded,
 )
+import alpasim_plugins.plugins as plugin_module
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.geometry import Polyline, Pose
 from tests.fixtures import sample_artifact  # noqa: F401
@@ -25,6 +26,26 @@ IDENTITY_QUAT = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 def _make_pose(vec3: np.ndarray) -> Pose:
     """Create a Pose with identity rotation from a 3D position."""
     return Pose(np.asarray(vec3, dtype=np.float32), IDENTITY_QUAT)
+
+
+def test_route_generator_plugin_takes_precedence(monkeypatch):
+    class CustomRouteGenerator:
+        @classmethod
+        def from_context(cls, recorded_waypoints_in_local, vector_map, *, route_start_offset_m):
+            return (recorded_waypoints_in_local, vector_map, route_start_offset_m)
+
+    monkeypatch.setattr(plugin_module.route_generators, "get", lambda name: CustomRouteGenerator)
+    waypoints = np.zeros((2, 3), dtype=np.float32)
+    result = RouteGenerator.create(
+        waypoints,
+        None,
+        object(),
+        route_start_offset_m=3.0,
+        route_generator_plugin="custom",
+    )
+    assert result[0] is waypoints
+    assert result[1] is None
+    assert result[2] == 3.0
 
 
 @pytest.fixture
