@@ -2,6 +2,9 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import math
+import subprocess
+import sys
+import textwrap
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -25,6 +28,102 @@ IDENTITY_QUAT = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 def _make_pose(vec3: np.ndarray) -> Pose:
     """Create a Pose with identity rotation from a 3D position."""
     return Pose(np.asarray(vec3, dtype=np.float32), IDENTITY_QUAT)
+
+
+class CustomRouteGenerator(RouteGeneratorRecorded):
+    @classmethod
+    def from_context(
+        cls, recorded_waypoints_in_local, vector_map, *, route_start_offset_m=0.0
+    ):
+        generator = cls(recorded_waypoints_in_local, route_start_offset_m)
+        generator.vector_map = vector_map
+        return generator
+
+
+@pytest.fixture
+def route_plugin_package(tmp_path, monkeypatch):
+    plugins = pytest.importorskip("alpasim_plugins")
+    metadata = tmp_path / "test_route_plugin-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: test-route-plugin\nVersion: 1.0\n"
+    )
+    (metadata / "entry_points.txt").write_text(
+        f"[alpasim.route_generators]\ncustom = {__name__}:CustomRouteGenerator\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(plugins.route_generators, "_cache", None)
+    return plugins
+
+
+@pytest.mark.parametrize("vector_map", [None, object()])
+def test_route_generator_plugin_takes_precedence(
+    route_plugin_package, rig_waypoints_in_local, vector_map
+):
+    assert "custom" in route_plugin_package.route_generators.get_names()
+    generator = RouteGenerator.create(
+        rig_waypoints_in_local,
+        vector_map,
+        RouteGeneratorType.NONE,
+        route_start_offset_m=40.0,
+        route_generator_plugin="custom",
+    )
+    assert isinstance(generator, CustomRouteGenerator)
+    assert generator.vector_map is vector_map
+    pose = _make_pose(np.zeros(3))
+    route = generator.generate_route(0, pose)
+    expected = RouteGeneratorRecorded(
+        rig_waypoints_in_local, route_start_offset_m=40.0
+    ).generate_route(0, pose)
+    np.testing.assert_allclose(route.waypoints, expected.waypoints)
+    assert np.linalg.norm(route.waypoints[0]) >= 40.0
+
+
+def test_unknown_route_generator_plugin_does_not_fall_back(
+    route_plugin_package, rig_waypoints_in_local
+):
+    with pytest.raises(
+        route_plugin_package.PluginNotFoundError,
+        match="Plugin 'missing-route-plugin' not found in alpasim.route_generators",
+    ):
+        RouteGenerator.create(
+            rig_waypoints_in_local,
+            None,
+            RouteGeneratorType.RECORDED,
+            route_generator_plugin="missing-route-plugin",
+        )
+
+
+def test_builtin_routes_without_plugin_package():
+    # A fresh interpreter catches eager imports as well as factory-time imports.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """\
+                import sys
+                sys.modules["alpasim_plugins"] = None
+                import numpy as np
+                from alpasim_runtime.config import RouteGeneratorType
+                from alpasim_runtime.route_generator import RouteGenerator, RouteGeneratorRecorded
+                from alpasim_utils.geometry import Pose
+
+                waypoints = np.array([[0., 0., 0.], [100., 0., 0.]])
+                assert RouteGenerator.create(waypoints, None, RouteGeneratorType.NONE) is None
+                generator = RouteGenerator.create(waypoints, None, RouteGeneratorType.RECORDED)
+                assert isinstance(generator, RouteGeneratorRecorded)
+                pose = Pose(np.zeros(3), np.array([0., 0., 0., 1.]))
+                route = generator.generate_route(0, pose)
+                np.testing.assert_allclose(route.waypoints[-1], [80., 0., 0.])
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.fixture

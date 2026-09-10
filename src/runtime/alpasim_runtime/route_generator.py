@@ -38,20 +38,34 @@ class RouteGenerator(ABC):
     def create(
         cls,
         recorded_waypoints_in_local: np.ndarray,
-        vector_map: VectorMap,
+        vector_map: VectorMap | None,
         route_generator_type: RouteGeneratorType,
         route_start_offset_m: float = 0.0,
+        route_generator_plugin: str | None = None,
     ) -> "RouteGenerator | None":
         """
         Factory method to create a RouteGenerator
         Args:
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
-          vector_map: the map data
+          vector_map: the map data, or None when the scene has no map
           route_generator_type: the type of route generator to create
           route_start_offset_m: approximate distance ahead of the ego projection where routes start
+          route_generator_plugin: name of an alpasim.route_generators entry point.
+            When set, overrides route_generator_type (including NONE). The plugin
+            must expose from_context(recorded_waypoints_in_local, vector_map,
+            *, route_start_offset_m=0.0), returning a RouteGenerator instance.
         Returns:
           A route generator of the specified type, or None if route generation is disabled
         """
+        if route_generator_plugin is not None:
+            from alpasim_plugins import route_generators
+
+            plugin_cls = route_generators.get(route_generator_plugin)
+            return plugin_cls.from_context(
+                recorded_waypoints_in_local,
+                vector_map,
+                route_start_offset_m=route_start_offset_m,
+            )
         if route_generator_type == RouteGeneratorType.NONE:
             return None
         elif route_generator_type == RouteGeneratorType.RECORDED:

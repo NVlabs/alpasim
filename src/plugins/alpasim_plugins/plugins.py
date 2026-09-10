@@ -107,6 +107,7 @@ models = PluginRegistry("alpasim.models")
 mpc_controllers = PluginRegistry("alpasim.mpc")
 scorers = PluginRegistry("alpasim.scorers")
 tools = PluginRegistry("alpasim.tools")
+route_generators = PluginRegistry("alpasim.route_generators")
 
 
 def get_plugin_info() -> dict[str, list[str]]:
@@ -121,5 +122,6 @@ def get_plugin_info() -> dict[str, list[str]]:
         "alpasim.scorers",
         "alpasim.tools",
         "alpasim.configs",
+        "alpasim.route_generators",
     ]
     return {group: PluginRegistry(group).get_names() for group in groups}
