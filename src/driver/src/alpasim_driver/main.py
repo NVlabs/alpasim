@@ -635,10 +635,15 @@ class EgoDriverService(EgodriverServiceServicer):
             leftover.result.cancel()
 
     def _get_speed_and_acceleration(self, session: Session) -> tuple[float, float]:
-        """Extract speed and acceleration from session's dynamic state.
+        """Extract speed and acceleration from the most recent dynamic state.
 
-        Falls back to finite differences from ego positions if dynamic state
-        reports zero speed and acceleration.
+        Values are used as the runtime reports them; there is no local
+        finite-difference fallback here. (An earlier version of this docstring
+        promised one that was never implemented. The main source of zero
+        readings while the vehicle was moving -- the forced-GT window, where the
+        controller service substituted ground-truth poses paired with all-zero
+        dynamic states -- is fixed in the controller service by deriving the
+        fallback dynamics from the same trajectory as the poses.)
 
         Args:
             session: Session containing dynamic state history.
