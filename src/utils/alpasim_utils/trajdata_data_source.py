@@ -49,6 +49,7 @@ from trajdata.caching import EnvCache
 from trajdata.data_structures.agent import AgentMetadata
 from trajdata.data_structures.scene_metadata import Scene
 from trajdata.maps import VectorMap
+from trajdata.maps.vec_map_elements import MapElementType
 
 logger = logging.getLogger(__name__)
 
@@ -602,30 +603,45 @@ class TrajdataDataSource(SceneDataSource):
             f"first_traj_z={first_traj_z:.2f}m"
         )
 
-        # Transform all lane points
-        if vec_map.lanes is None:
-            return
-
-        for lane in vec_map.lanes:
-            # Transform center (always exists)
-            lane.center.points = self._transform_map_points(
-                lane.center.points,
-                translation_xy,
-                first_traj_z,
-            )
-
-            # Transform left_edge (optional)
-            if lane.left_edge is not None and lane.left_edge.points is not None:
-                lane.left_edge.points = self._transform_map_points(
-                    lane.left_edge.points,
+        # Transform all lane points.
+        if vec_map.lanes is not None:
+            for lane in vec_map.lanes:
+                # Transform center (always exists)
+                lane.center.points = self._transform_map_points(
+                    lane.center.points,
                     translation_xy,
                     first_traj_z,
                 )
 
-            # Transform right_edge (optional)
-            if lane.right_edge is not None and lane.right_edge.points is not None:
-                lane.right_edge.points = self._transform_map_points(
-                    lane.right_edge.points,
+                # Transform left_edge (optional)
+                if lane.left_edge is not None and lane.left_edge.points is not None:
+                    lane.left_edge.points = self._transform_map_points(
+                        lane.left_edge.points,
+                        translation_xy,
+                        first_traj_z,
+                    )
+
+                # Transform right_edge (optional)
+                if lane.right_edge is not None and lane.right_edge.points is not None:
+                    lane.right_edge.points = self._transform_map_points(
+                        lane.right_edge.points,
+                        translation_xy,
+                        first_traj_z,
+                    )
+
+        # nuPlan does not provide road-edge polylines, so off-road evaluation
+        # falls back to drivable-area polygons. Keep their exterior and hole
+        # rings in the same local frame as the ego trajectory and lane map.
+        road_areas = vec_map.elements.get(MapElementType.ROAD_AREA, {})
+        for road_area in road_areas.values():
+            road_area.exterior_polygon.points = self._transform_map_points(
+                road_area.exterior_polygon.points,
+                translation_xy,
+                first_traj_z,
+            )
+            for interior_hole in road_area.interior_holes:
+                interior_hole.points = self._transform_map_points(
+                    interior_hole.points,
                     translation_xy,
                     first_traj_z,
                 )

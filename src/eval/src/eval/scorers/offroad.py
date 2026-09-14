@@ -16,6 +16,18 @@ from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
 from trajdata.maps import vec_map_elements
 
+# nuPlan road-area polygons that should share a boundary can have tiny gaps from
+# floating-point map geometry. Close seams narrower than 2 mm before checking
+# whether the ego footprint is covered.
+ROAD_AREA_SEAM_CLOSURE_M = 0.001
+
+# The road-area KD-tree indexes existing polygon boundary vertices rather than
+# polygon interiors or densified edges. The private nuPlan competition maps
+# contain long boundary segments whose nearest vertex can be just over 19 m
+# from an ego that is still inside the area. Keep enough margin for the 4 m
+# evaluation corridor while retaining the existing 3D/elevation-aware query.
+ROAD_AREA_QUERY_DIST_M = 25.0
+
 
 def _get_center_line_yaw_at_projection(
     center_line: shapely.LineString, point: shapely.Point, eps: float = 0.01
@@ -34,7 +46,7 @@ def _get_center_line_yaw_at_projection(
 
 
 def _repair_polygonal_geometry(geom: BaseGeometry) -> BaseGeometry:
-    """Return valid polygonal geometry for map lanes.
+    """Return valid polygonal geometry for map elements.
 
     Some lane boundaries produce slightly self-intersecting rings. GEOS
     operations such as unary_union can throw TopologyException on those
@@ -137,9 +149,9 @@ def _closest_road_edge_distance_2d(
         )
         if distance_3d < closest_3d:
             closest_3d = distance_3d
-            closest_distance = shapely.geometry.LineString(
-                points[..., :2]
-            ).distance(ego_polygon)
+            closest_distance = shapely.geometry.LineString(points[..., :2]).distance(
+                ego_polygon
+            )
     return closest_distance
 
 
@@ -154,7 +166,7 @@ def _has_map_element_kdtree(
 def _road_areas_near_ego(
     simulation_result: SimulationResult,
     ego_xyzh: np.ndarray,
-    query_dist_m: float = 15.0,
+    query_dist_m: float = ROAD_AREA_QUERY_DIST_M,
 ) -> list[vec_map_elements.RoadArea] | None:
     if not _has_map_element_kdtree(
         simulation_result, vec_map_elements.MapElementType.ROAD_AREA
@@ -171,10 +183,15 @@ def _road_area_union(
     road_areas: list[vec_map_elements.RoadArea],
 ) -> BaseGeometry:
     polygons = [
-        simulation_result.vec_map.get_road_area_polygon_2d(area.id)
+        _repair_polygonal_geometry(
+            simulation_result.vec_map.get_road_area_polygon_2d(area.id)
+        )
         for area in road_areas
     ]
-    return _repair_polygonal_geometry(shapely.ops.unary_union(polygons))
+    road_area_union = _repair_polygonal_geometry(shapely.ops.unary_union(polygons))
+    return road_area_union.buffer(ROAD_AREA_SEAM_CLOSURE_M).buffer(
+        -ROAD_AREA_SEAM_CLOSURE_M
+    )
 
 
 def _is_offroad_using_road_area(
