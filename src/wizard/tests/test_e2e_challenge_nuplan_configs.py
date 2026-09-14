@@ -26,6 +26,7 @@ def test_full_preset_is_the_standard_navtest_evaluation(monkeypatch) -> None:
 
     assert cfg.runtime.scene_provider.kind == "trajdata"
     assert cfg.runtime.scene_provider.trajdata.dataset.name == "nuplan_test"
+    assert cfg.runtime.scene_provider.trajdata.vector_map_params.incl_road_areas is True
     assert cfg.runtime.endpoints.renderer.skip is False
     assert cfg.scenes.test_suite_id is None
     assert cfg.scenes.limit_to_first_n == 0

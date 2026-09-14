@@ -60,6 +60,7 @@ runtime:
       load_vector_map: true
       vector_map_params:
         incl_road_lanes: true
+        incl_road_areas: true
         incl_road_edges: true
         incl_traffic_signs: true
         incl_wait_lines: true
