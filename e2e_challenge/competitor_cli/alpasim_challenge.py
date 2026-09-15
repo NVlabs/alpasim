@@ -72,7 +72,11 @@ def main() -> int:
 
     submit = subparsers.add_parser("submit", help="Submit an already-pushed image URI.")
     submit.add_argument("image_uri")
-    submit.add_argument("--track", required=True, choices=("pai", "nuplan"))
+    submit.add_argument(
+        "--track",
+        required=True,
+        choices=("pai", "nuplan", "pai-warmup", "nuplan-warmup"),
+    )
     submit.add_argument(
         "--controller-gains",
         type=Path,
@@ -84,7 +88,9 @@ def main() -> int:
         "submissions", help="List your team's recent submissions."
     )
     submissions.add_argument(
-        "--track", choices=("pai", "nuplan"), help="Filter by track."
+        "--track",
+        choices=("pai", "nuplan", "pai-warmup", "nuplan-warmup"),
+        help="Filter by track.",
     )
 
     status = subparsers.add_parser("status", help="Get one submission status.")
@@ -225,7 +231,8 @@ def ecr_login(client: ChallengeClient) -> None:
     print(f"  docker push {auth['image_uri_prefix']}:<version>")
     print()
     print(
-        "  uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track <pai|nuplan> \\"
+        "  uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit "
+        "--track <pai|nuplan|pai-warmup|nuplan-warmup> \\"
     )
     print(f"    {auth['image_uri_prefix']}:<version>")
     print()

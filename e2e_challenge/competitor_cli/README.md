@@ -75,7 +75,14 @@ confirm the image URI and tag, push the image, and rerun `ecr-login` before
 trying again.
 
 `submit` requires an explicit track. Use `--track pai` for the Physical AI AV
-track or `--track nuplan` for the nuPlan track.
+track or `--track nuplan` for the nuPlan track. `--track pai-warmup` and
+`--track nuplan-warmup` run an unscored server-side smoke test instead: one
+32-scene wave (16 driver replicas × 2 simultaneous scenes), with a 45-minute
+simulation limit. Warmups do not appear on leaderboards and have an independent
+limit of three submissions per warmup track in a rolling 30-day window.
+Completing a warmup validates only the image/driver form factor; it does not
+show that the submission meets an official track's timing, throughput, or
+full-workload requirements.
 
 ### Optional Nonlinear-Controller Gains
 
