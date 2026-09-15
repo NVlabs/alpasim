@@ -33,6 +33,32 @@ the Physical AI AV track and `nuplan` for the nuPlan track. Submission limits
 are shared across tracks because both tracks use the same managed evaluator
 capacity.
 
+### Server warmup tracks
+
+`pai-warmup` and `nuplan-warmup` are server-side smoke tests for a driver image.
+They use the same managed evaluator as official submissions, but run one fixed
+wave only: 32 private scenes (16 driver replicas with two simultaneous scenes
+per replica). A warmup run has a 45-minute simulation limit.
+
+Warmups are form-factor smoke tests only: completing one does **not** establish
+that an image meets the timing, throughput, or full-workload requirements of
+either official track.
+
+Warmups are not scored, never appear on a leaderboard, and do not change an
+official submission or its ranking. Their artifacts are stored separately from
+official evaluation artifacts; contestants can inspect only the normal
+submission status to confirm whether the image completed successfully. Each
+team has three warmup submissions per warmup track in any rolling 30-day
+window. The official `pai` and `nuplan` limits are unaffected.
+
+```bash
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track pai-warmup \
+  696254625193.dkr.ecr.us-east-1.amazonaws.com/teams/<team_id>:<tag>
+
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py submit --track nuplan-warmup \
+  696254625193.dkr.ecr.us-east-1.amazonaws.com/teams/<team_id>:<tag>
+```
+
 ### Physical AI (PAI) AV
 
 The Physical AI AV track uses an internal set of NuRec-compatible scenes similar to those
