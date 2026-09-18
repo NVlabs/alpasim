@@ -337,6 +337,10 @@ def ensure_image_exists(image_uri: str) -> None:
 def print_limits(client: ChallengeClient) -> None:
     me = client.get("/me")
     submissions = client.get("/submissions?limit=1")
+    warmup_limits = {
+        track: client.get(f"/submissions?limit=1&track={track}")
+        for track in ("pai-warmup", "nuplan-warmup")
+    }
     competition = me.get("competition") or {}
     registration = me.get("registration") or {}
 
@@ -348,6 +352,13 @@ def print_limits(client: ChallengeClient) -> None:
     print(f"Monthly submission limit: {submissions.get('monthly_submission_limit')}")
     print(f"Submitted this month: {submissions.get('current_month_submission_count')}")
     print(f"Remaining this month: {submissions.get('remaining_monthly_submissions')}")
+    for track, limits in warmup_limits.items():
+        print(
+            f"{track} limit ({limits.get('warmup_submission_window_days')}-day rolling): "
+            f"{limits.get('warmup_submission_limit')}"
+        )
+        print(f"{track} submitted: {limits.get('current_warmup_submission_count')}")
+        print(f"{track} remaining: {limits.get('remaining_warmup_submissions')}")
 
 
 def load_config() -> dict[str, str]:
