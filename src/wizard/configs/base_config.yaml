@@ -339,7 +339,7 @@ runtime:
 
     physics_update_mode: "EGO_ONLY"
 
-    route_generator_type: "MAP" # "NONE", "MAP", or "RECORDED"
+    route_generator_type: "MAP" # "NONE", "MAP", "RECORDED", or a route-generator plugin name
     route_start_offset_m: 0.0 # Along-route distance ahead of ego where submitted routes start
 
     vehicle: null # use values from the .usdz file (original dimensions)

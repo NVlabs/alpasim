@@ -15,7 +15,6 @@ from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
     PhysicsUpdateMode,
     RenderBundling,
-    RouteGeneratorType,
     RuntimeCameraConfig,
     SimulationConfig,
     VehicleConfig,
@@ -194,7 +193,7 @@ class UnboundRollout:
     transform_ego_coords_ds_to_aabb: Pose
     ego_aabb: AABB
     planner_delay_us: int
-    route_generator_type: RouteGeneratorType
+    route_generator_type: str
     route_start_offset_m: float
     send_recording_ground_truth: bool
     nre_runid: str

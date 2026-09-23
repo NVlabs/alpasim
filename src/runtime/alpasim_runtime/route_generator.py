@@ -4,15 +4,54 @@
 import logging
 import math
 from abc import ABC, abstractmethod
-from typing import final
+from typing import Any, final
 
 import numpy as np
-from alpasim_runtime.config import RouteGeneratorType
 from alpasim_utils.geometry import Polyline, Pose
 from trajdata.maps import VectorMap
 from trajdata.maps.vec_map_elements import RoadLane
 
 logger = logging.getLogger(__name__)
+
+BUILTIN_ROUTE_GENERATOR_TYPES = ("MAP", "RECORDED", "NONE")
+
+
+def resolve_route_generator_plugin(route_generator_type: str) -> Any:
+    """Return the alpasim.route_generators plugin class for a non-built-in type.
+
+    Raises:
+      ValueError: alpasim_plugins is not installed.
+      PluginNotFoundError: no plugin is registered under this name.
+    """
+    # Built-in routing must not require alpasim_plugins, so import lazily.
+    try:
+        from alpasim_plugins import route_generators
+    except ImportError as exc:
+        raise ValueError(
+            f"Invalid route generator type: {route_generator_type!r} is not "
+            "MAP, RECORDED or NONE, and alpasim_plugins is not installed"
+        ) from exc
+    return route_generators.get(route_generator_type)
+
+
+def warn_on_shadowed_route_plugins() -> None:
+    """Warn about route plugins registered under a reserved built-in name.
+
+    Built-in names always win, so such a plugin can never be selected.
+    """
+    try:
+        from alpasim_plugins import route_generators
+    except ImportError:
+        return
+    shadowed = sorted(
+        set(route_generators.get_names()) & set(BUILTIN_ROUTE_GENERATOR_TYPES)
+    )
+    if shadowed:
+        logger.warning(
+            "Route generator plugins %s use reserved built-in names and can "
+            "never be selected; rename their alpasim.route_generators entry points",
+            shadowed,
+        )
 
 
 class RouteGenerator(ABC):
@@ -38,35 +77,43 @@ class RouteGenerator(ABC):
     def create(
         cls,
         recorded_waypoints_in_local: np.ndarray,
-        vector_map: VectorMap,
-        route_generator_type: RouteGeneratorType,
+        vector_map: VectorMap | None,
+        route_generator_type: str,
         route_start_offset_m: float = 0.0,
     ) -> "RouteGenerator | None":
         """
         Factory method to create a RouteGenerator
         Args:
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
-          vector_map: the map data
-          route_generator_type: the type of route generator to create
+          vector_map: the map data, or None when the scene has no map
+          route_generator_type: "MAP", "RECORDED", "NONE", or the name of an
+            alpasim.route_generators entry point. A plugin must expose
+            from_context(recorded_waypoints_in_local, vector_map,
+            *, route_start_offset_m=0.0), returning a RouteGenerator instance.
           route_start_offset_m: approximate distance ahead of the ego projection where routes start
         Returns:
           A route generator of the specified type, or None if route generation is disabled
         """
-        if route_generator_type == RouteGeneratorType.NONE:
+        if route_generator_type == "NONE":
             return None
-        elif route_generator_type == RouteGeneratorType.RECORDED:
+        elif route_generator_type == "RECORDED":
             return RouteGeneratorRecorded(
                 recorded_waypoints_in_local,
                 route_start_offset_m=route_start_offset_m,
             )
-        elif route_generator_type == RouteGeneratorType.MAP:
+        elif route_generator_type == "MAP":
             return RouteGeneratorMap(
                 recorded_waypoints_in_local,
                 vector_map,
                 route_start_offset_m=route_start_offset_m,
             )
-        else:
-            raise ValueError(f"Invalid route generator type: {route_generator_type}")
+
+        plugin_cls = resolve_route_generator_plugin(route_generator_type)
+        return plugin_cls.from_context(
+            recorded_waypoints_in_local,
+            vector_map,
+            route_start_offset_m=route_start_offset_m,
+        )
 
     def __init__(
         self, rig_waypoints_in_local: np.ndarray, route_start_offset_m: float = 0.0

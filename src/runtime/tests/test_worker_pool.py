@@ -75,6 +75,7 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config.user.scene_affine_dispatch.max_renderers_per_scene = 2
     config.user.scene_affine_dispatch.max_scenes_per_renderer = None
     config.user.simulation_config.force_gt_frame_cache.enabled = False
+    config.user.simulation_config.route_generator_type = "MAP"
     config.user.renderer = RendererConfig(kind=RendererKind.sensorsim)
     config.user.endpoints.driver.skip = False
     config.user.endpoints.driver.n_concurrent_rollouts = 2

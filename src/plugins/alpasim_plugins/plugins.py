@@ -41,6 +41,8 @@ class PluginRegistry:
         """
         self._group = group
         self._cache: dict[str, Any] | None = None
+        # Entry points that are registered but raised on load, by name.
+        self._load_errors: dict[str, str] = {}
 
     def get_available(self) -> dict[str, Any]:
         """Get all available plugins in this group.
@@ -50,6 +52,7 @@ class PluginRegistry:
         """
         if self._cache is None:
             self._cache = {}
+            self._load_errors = {}
             eps = entry_points(group=self._group)
             for ep in eps:
                 if ep.name in self._cache:
@@ -62,6 +65,7 @@ class PluginRegistry:
                     self._cache[ep.name] = ep.load()
                     logger.debug("Loaded plugin %s:%s", self._group, ep.name)
                 except Exception as e:
+                    self._load_errors[ep.name] = f"{type(e).__name__}: {e}"
                     logger.warning("Failed to load %s:%s: %s", self._group, ep.name, e)
         return self._cache
 
@@ -80,6 +84,11 @@ class PluginRegistry:
             PluginNotFoundError: If plugin not found.
         """
         available = self.get_available()
+        if name in self._load_errors:
+            raise PluginNotFoundError(
+                f"Plugin '{name}' in {self._group} is installed but failed to "
+                f"load: {self._load_errors[name]}"
+            )
         if name not in available:
             raise PluginNotFoundError(
                 f"Plugin '{name}' not found in {self._group}. "
@@ -107,6 +116,7 @@ models = PluginRegistry("alpasim.models")
 mpc_controllers = PluginRegistry("alpasim.mpc")
 scorers = PluginRegistry("alpasim.scorers")
 tools = PluginRegistry("alpasim.tools")
+route_generators = PluginRegistry("alpasim.route_generators")
 
 
 def get_plugin_info() -> dict[str, list[str]]:
@@ -121,5 +131,6 @@ def get_plugin_info() -> dict[str, list[str]]:
         "alpasim.scorers",
         "alpasim.tools",
         "alpasim.configs",
+        "alpasim.route_generators",
     ]
     return {group: PluginRegistry(group).get_names() for group in groups}

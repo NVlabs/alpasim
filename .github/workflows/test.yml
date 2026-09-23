@@ -71,8 +71,14 @@ jobs:
           cd "src/${{ matrix.service }}"
           uv sync --all-extras
 
+          plugin_test_args=()
+          if [[ "${{ matrix.service }}" == "runtime" ]]; then
+            # Exercise route-plugin discovery even in a runtime-only install.
+            plugin_test_args+=(--with-editable ../plugins)
+          fi
+
           set +e
-          uv run --all-extras pytest -vvs --tb=short
+          uv run --all-extras "${plugin_test_args[@]}" pytest -vvs --tb=short
           status=$?
           set -e
 
