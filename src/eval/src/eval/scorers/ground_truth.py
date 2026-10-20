@@ -2,42 +2,49 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
+from shapely.geometry import LineString, Point
 
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
 
 
-def _end_direction(gt_linestring) -> np.ndarray | None:
-    """Unit heading of the final ground truth segment, or None if degenerate."""
+def _end_direction(gt_linestring: LineString) -> np.ndarray | None:
+    """Final travel direction supported by at least 1 m of displacement.
+
+    A stopped recording can end with duplicate positions or millimetre jitter.
+    Look backwards for meaningful motion rather than normalizing that noise.
+    Paths confined within 1 m of their endpoint have no supported direction.
+    """
     coords = np.asarray(gt_linestring.coords, dtype=np.float64)[:, :2]
-    if len(coords) < 2:
-        return None
-    direction = coords[-1] - coords[-2]
-    norm = float(np.linalg.norm(direction))
-    return direction / norm if norm > 0 else None
+    for start_point in coords[-2::-1]:
+        direction = coords[-1] - start_point
+        norm = float(np.linalg.norm(direction))
+        if norm >= 1.0:
+            return direction / norm
+    return None
 
 
 def _lateral_distance_to_gt(
-    gt_linestring,
-    point,
-    gt_length_m: float,
+    gt_linestring: LineString,
+    point: Point,
     end_direction: np.ndarray | None,
 ) -> float:
-    """Distance to the ground truth ignoring any overshoot past its end.
+    """Distance to the recorded path union its forward endpoint ray.
 
-    `LineString.distance` clamps to the endpoint, so an ego that simply drove
-    further than the recording reads as increasingly far from it. Past the end,
-    measure only the component perpendicular to the final heading, so leaving
-    the corridor forwards is distinguishable from leaving it sideways.
+    The ray separates longitudinal overshoot from lateral departure even when
+    endpoint jitter puts the closest recorded point before the final station.
+    Ordinary distance still determines the supported aggregation window.
     """
-    if end_direction is None or gt_length_m <= 0:
-        return float(gt_linestring.distance(point))
-    if gt_linestring.project(point) < gt_length_m - 1e-9:
-        return float(gt_linestring.distance(point))
+    distance = float(gt_linestring.distance(point))
+    if end_direction is None:
+        return distance
 
     end_point = np.asarray(gt_linestring.coords, dtype=np.float64)[-1, :2]
     offset = np.array([point.x, point.y], dtype=np.float64) - end_point
-    return float(abs(offset[0] * end_direction[1] - offset[1] * end_direction[0]))
+    if float(offset @ end_direction) <= 0:
+        return distance
+    lateral = float(abs(offset[0] * end_direction[1] - offset[1] * end_direction[0]))
+    return min(distance, lateral)
 
 
 class GroundTruthScorer(Scorer):
@@ -110,7 +117,6 @@ class GroundTruthScorer(Scorer):
                 _lateral_distance_to_gt(
                     full_gt_linestring,
                     ego_polygon.centroid,
-                    full_gt_distance_traveled_m,
                     gt_end_direction,
                 )
             )
