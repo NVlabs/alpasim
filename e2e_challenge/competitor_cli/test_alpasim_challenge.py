@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
+import hashlib
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from e2e_challenge.competitor_cli import alpasim_challenge as cli
 
@@ -89,6 +92,104 @@ class TermsCliTest(unittest.TestCase):
         )
 
         cli.require_terms_ready(client)
+
+
+class ReportsCliTest(unittest.TestCase):
+    def test_upload_uses_s3_form_without_bearer_and_finalizes(self):
+        data = b"%PDF-1.7\ntest"
+        grant = {
+            "report": {"report_id": "revision"},
+            "upload": {
+                "url": "https://private.s3.amazonaws.com",
+                "fields": {"key": "team/report.pdf", "policy": "signed"},
+            },
+        }
+        client = FakeClient(
+            {
+                "/reports": {"max_size_bytes": 20971520},
+                "/reports/uploads": grant,
+                "/reports/revision/complete": {"status": "ACCEPTED"},
+            }
+        )
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.pdf"
+            path.write_bytes(data)
+            with patch.object(
+                cli.urllib.request, "urlopen", return_value=response
+            ) as transfer:
+                result = cli.upload_report(client, path)
+        self.assertEqual(result["status"], "ACCEPTED")
+        self.assertEqual(client.posts[0][1]["sha256"], hashlib.sha256(data).hexdigest())
+        request = transfer.call_args.args[0]
+        self.assertIsNone(request.get_header("Authorization"))
+        self.assertIn(b'name="file"; filename="report.pdf"', request.data)
+        self.assertLess(
+            request.data.index(b'name="key"'), request.data.index(b'name="file"')
+        )
+
+    def test_bad_pdf_is_rejected_before_upload_grant(self):
+        client = FakeClient({"/reports": {"max_size_bytes": 20}})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bad.pdf"
+            path.write_bytes(b"not a pdf")
+            with self.assertRaises(SystemExit):
+                cli.upload_report(client, path)
+        self.assertEqual(client.posts, [])
+
+    def test_download_verifies_checksum_and_preserves_existing_files(self):
+        receipt = {
+            "report_id": "revision",
+            "size_bytes": 3,
+            "sha256": hashlib.sha256(b"pdf").hexdigest(),
+        }
+        client = FakeClient(
+            {
+                "/reports/download": {
+                    "report": receipt,
+                    "download_url": "https://s3/file",
+                }
+            }
+        )
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"bad"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.pdf"
+            with (
+                patch.object(cli.urllib.request, "urlopen", return_value=response),
+                self.assertRaises(SystemExit),
+            ):
+                cli.download_report(client, path)
+            self.assertFalse(path.exists())
+            response.__enter__.return_value.read.return_value = b"pdf"
+            with patch.object(cli.urllib.request, "urlopen", return_value=response):
+                cli.download_report(client, path)
+            self.assertEqual(path.read_bytes(), b"pdf")
+            with self.assertRaises(SystemExit):
+                cli.download_report(client, path)
+            self.assertEqual(path.read_bytes(), b"pdf")
+
+    def test_admin_download_uses_separate_route(self):
+        client = FakeClient(
+            {
+                "/admin/reports/download?team_id=team-a": {
+                    "report": {
+                        "report_id": "revision",
+                        "size_bytes": 3,
+                        "sha256": hashlib.sha256(b"pdf").hexdigest(),
+                    },
+                    "download_url": "https://s3/file",
+                }
+            }
+        )
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"pdf"
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(cli.urllib.request, "urlopen", return_value=response):
+                cli.download_report(
+                    client, Path(directory) / "report.pdf", team_id="team-a"
+                )
 
 
 if __name__ == "__main__":
