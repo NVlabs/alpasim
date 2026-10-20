@@ -16,7 +16,7 @@ and wait for approval.
 - [SimScale/NAVSIM sample submissions](NAVSIM_MODEL_ADAPTATION.md): build and locally test SimScale/NAVSIM-style driver containers, including LTF, DiffusionDrive, and GTRS.
 - [Challenge CLI](competitor_cli/README.md): authenticate, privately review and
   accept the competition terms, log in to ECR, submit images, check status, and
-  view the leaderboard
+  view the leaderboard, and upload a team PDF report
 - [Controller tuning and trajectory validity](CONTROLLER_TUNING.md): understand
   why controller gains are part of the closed-loop system and what trajectories
   the official nonlinear MPC is designed to track

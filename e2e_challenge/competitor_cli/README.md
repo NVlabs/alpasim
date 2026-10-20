@@ -50,6 +50,28 @@ registered team captain must accept before any member of that team can upload
 or submit. If the published version or digest changes, everyone must review and
 accept the replacement.
 
+## Team reports
+
+Approved team members can upload team reports (PDF).
+Reports are visible to your team and authorized competition
+administrators; they are not published on the leaderboard.
+The uploader and team captain must have accepted the current terms.
+
+```bash
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py report upload report.pdf
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py report status
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py report download --output saved-report.pdf
+# Download an earlier accepted revision:
+uv run e2e_challenge/competitor_cli/alpasim_challenge.py report download --report-id <report-id> --output earlier.pdf
+```
+
+PDFs must be readable, unencrypted, and be less than 20 MiB.
+Each successful upload returns a receipt with its report ID, accepted time,
+size and SHA-256 checksum. Only a finalized upload replaces the latest report;
+earlier accepted revisions remain available to the team. Finish uploading and
+finalizing before the report deadline. There is a separate limit of ten upload
+requests per team per UTC hour.
+
 ## Submit Images and Request Evaluation
 
 ```bash

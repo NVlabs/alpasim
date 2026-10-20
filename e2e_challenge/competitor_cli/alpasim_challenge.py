@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -96,8 +98,53 @@ def main() -> int:
     status = subparsers.add_parser("status", help="Get one submission status.")
     status.add_argument("submission_id")
 
+    report = subparsers.add_parser(
+        "report", help="Upload and inspect private team PDFs."
+    )
+    report_commands = report.add_subparsers(dest="report_command", required=True)
+    report_upload = report_commands.add_parser(
+        "upload", help="Upload a new PDF revision."
+    )
+    report_upload.add_argument("pdf", type=Path)
+    report_status = report_commands.add_parser(
+        "status", help="List report revisions and receipt."
+    )
+    report_scope = report_status.add_mutually_exclusive_group()
+    report_scope.add_argument("--team", help="Administrator: inspect another team.")
+    report_scope.add_argument(
+        "--all-teams", action="store_true", help="Administrator: list all reports."
+    )
+    report_complete = report_commands.add_parser(
+        "complete", help="Retry finalization after an interrupted upload."
+    )
+    report_complete.add_argument("report_id")
+    report_download = report_commands.add_parser(
+        "download", help="Download an accepted report."
+    )
+    report_download.add_argument("--output", required=True, type=Path)
+    report_download.add_argument(
+        "--report-id", help="Defaults to the latest accepted revision."
+    )
+    report_download.add_argument(
+        "--team", help="Administrator: download another team's report."
+    )
+
     args = parser.parse_args()
     client = ChallengeClient(token=args.token or config.get("token"))
+
+    if args.command == "report":
+        if args.report_command == "upload":
+            require_terms_ready(client)
+            print_json(upload_report(client, args.pdf))
+        elif args.report_command == "complete":
+            require_terms_ready(client)
+            print_json(client.post(f"/reports/{args.report_id}/complete"))
+        elif args.report_command == "status":
+            prefix = "/admin/reports" if args.team or args.all_teams else "/reports"
+            print_json(client.get(path_with_query(prefix, team_id=args.team)))
+        elif args.report_command == "download":
+            download_report(client, args.output, args.report_id, args.team)
+        return 0
 
     if args.command == "auth-url":
         print(f"{DEFAULT_API_BASE}/auth/huggingface/login?cli=1")
@@ -205,6 +252,96 @@ class ChallengeClient:
             ) from exc
         except urllib.error.URLError as exc:
             raise SystemExit(f"API request failed: {exc}") from exc
+
+
+def upload_report(client: ChallengeClient, path: Path) -> dict[str, Any]:
+    limits = client.get("/reports")
+    max_bytes = int(limits["max_size_bytes"])
+    if path.suffix.lower() != ".pdf":
+        raise SystemExit("Report must have a .pdf extension.")
+    try:
+        with path.open("rb") as source:
+            data = source.read(max_bytes + 1)
+    except OSError as exc:
+        raise SystemExit(f"Cannot read report: {exc}") from exc
+    if not 0 < len(data) <= max_bytes or not data.startswith(b"%PDF-"):
+        raise SystemExit(f"Report must be a PDF no larger than {max_bytes} bytes.")
+    grant = client.post(
+        "/reports/uploads",
+        {
+            "filename": path.name,
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        },
+    )
+    report_id = grant["report"]["report_id"]
+    print(f"Uploading report revision {report_id}…", file=sys.stderr)
+    boundary = "alpasim-" + uuid.uuid4().hex
+    parts = []
+    for name, value in grant["upload"]["fields"].items():
+        parts.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode("utf-8")
+        )
+    parts.extend(
+        [
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="report.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n"
+            ).encode("ascii"),
+            data,
+            f"\r\n--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    # This is a separate S3 request: never forward the challenge bearer token.
+    request = urllib.request.Request(
+        grant["upload"]["url"],
+        data=b"".join(parts),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            response.read()
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(
+            f"Report transfer failed for {report_id}: {exc}. Run report upload again."
+        ) from exc
+    try:
+        return client.post(f"/reports/{report_id}/complete")
+    except SystemExit as exc:
+        raise SystemExit(
+            f"{exc}\nUpload transferred; retry with: report complete {report_id}"
+        ) from exc
+
+
+def download_report(
+    client: ChallengeClient,
+    output: Path,
+    report_id: str | None = None,
+    team_id: str | None = None,
+) -> None:
+    if output.exists():
+        raise SystemExit(f"Refusing to overwrite {output}.")
+    prefix = "/admin/reports" if team_id else "/reports"
+    path = f"{prefix}/{report_id}/download" if report_id else f"{prefix}/download"
+    grant = client.get(path_with_query(path, team_id=team_id))
+    receipt = grant["report"]
+    size = int(receipt["size_bytes"])
+    try:
+        with urllib.request.urlopen(grant["download_url"], timeout=180) as response:
+            data = response.read(size + 1)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != receipt["sha256"]:
+            raise SystemExit(
+                "Downloaded report does not match its receipt; no output written."
+            )
+        with output.open("xb") as destination:
+            destination.write(data)
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(f"Report download failed: {exc}") from exc
+    print(f"Saved report {receipt['report_id']} to {output} (SHA-256 verified).")
 
 
 def ecr_login(client: ChallengeClient) -> None:
