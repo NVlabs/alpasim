@@ -997,6 +997,18 @@ impl Trajectory {
     // Derivative Helpers (internal)
     // =========================================================================
 
+    /// Timestamps in seconds relative to the first pose.
+    ///
+    /// Epoch-scale timestamps (~1.7e9 s) are not representable at sub-second
+    /// resolution in f32, so the offset is taken in integer microseconds first.
+    fn relative_times_s(&self) -> Vec<f32> {
+        let t0 = self.poses[0].timestamp_us;
+        self.poses
+            .iter()
+            .map(|tp| ((tp.timestamp_us - t0) as f64 / 1e6) as f32)
+            .collect()
+    }
+
     /// Compute position derivative using finite differences.
     fn compute_position_derivative<'py>(
         &self,
@@ -1021,12 +1033,7 @@ impl Trajectory {
             })
             .collect();
 
-        // Convert timestamps to seconds
-        let times: Vec<f32> = self
-            .poses
-            .iter()
-            .map(|tp| tp.timestamp_us as f32 / 1e6)
-            .collect();
+        let times = self.relative_times_s();
 
         // Apply derivative `order` times
         for _ in 0..order {
@@ -1076,12 +1083,7 @@ impl Trajectory {
             }
         }
 
-        // Convert timestamps to seconds
-        let times: Vec<f32> = self
-            .poses
-            .iter()
-            .map(|tp| tp.timestamp_us as f32 / 1e6)
-            .collect();
+        let times = self.relative_times_s();
 
         // Apply derivative `order` times
         let mut values = yaws;

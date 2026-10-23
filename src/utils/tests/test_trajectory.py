@@ -362,6 +362,19 @@ def test_trajectory_yaw_rates_centered(traj_len_5: Trajectory) -> None:
     )
 
 
+def test_trajectory_derivatives_with_epoch_timestamps() -> None:
+    """Derivatives stay correct for 100 ms steps at Unix-epoch microseconds."""
+    epoch_us = 1_785_848_587_630_754
+    timestamps_us = epoch_us + np.arange(5, dtype=np.uint64) * 100_000
+    trajectory = Trajectory.from_poses(
+        timestamps_us,
+        [_make_pose(0.5 * i, 0.0, 0.0, 0.01 * i) for i in range(5)],
+    )
+
+    assert trajectory.velocities()[:, 0] == pytest.approx(5.0, rel=1e-3)
+    assert trajectory.yaw_rates() == pytest.approx(0.1, rel=1e-3)
+
+
 def test_trajectory_yaw_accelerations_centered(traj_len_5: Trajectory) -> None:
     yaw_accels = traj_len_5.yaw_accelerations("centered")
     assert yaw_accels.shape == (5,)
