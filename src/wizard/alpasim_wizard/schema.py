@@ -90,6 +90,17 @@ class RunMode(Enum):
     SERVER = "server"
 
 
+class DockerGpuDriver(Enum):
+    """Docker Compose device driver used to give containers GPUs.
+
+    NVIDIA uses the legacy nvidia container runtime. CDI uses Container Device
+    Interface specs (e.g. NixOS ``hardware.nvidia-container-toolkit``).
+    """
+
+    NVIDIA = "nvidia"
+    CDI = "cdi"
+
+
 @dataclass
 class WizardPrometheusConfig:
     """Prometheus ownership, identity, and discovery settings."""
@@ -140,6 +151,9 @@ class WizardConfig:
     nr_retries: int = 3
     run_sim_services: list[str] | None = MISSING
     debug_flags: DebugFlags = field(default_factory=DebugFlags)
+
+    # Device driver for GPU reservations in docker-compose.yaml.
+    docker_gpu_driver: DockerGpuDriver = DockerGpuDriver.NVIDIA
 
     # When True, add --cpu-bind=none to srun --overlap steps.  Required on
     # SLURM nodes where the batch step binds all CPUs (e.g. non-exclusive

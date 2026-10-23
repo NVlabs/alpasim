@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from alpasim_wizard.deployment.docker_compose import DockerComposeDeployment
-from alpasim_wizard.schema import RunMode
+from alpasim_wizard.schema import DockerGpuDriver, RunMode
 from alpasim_wizard.services import Address, ContainerSet
 
 
@@ -18,7 +18,13 @@ def _local_addresses(*ports: int) -> list[Address]:
     return [Address(host="127.0.0.1", port=port) for port in ports]
 
 
-def _deployment(tmp_path: Path, *, dry_run: bool) -> DockerComposeDeployment:
+def _deployment(
+    tmp_path: Path,
+    *,
+    dry_run: bool,
+    gpu_driver: DockerGpuDriver = DockerGpuDriver.NVIDIA,
+    num_gpus: int = 0,
+) -> DockerComposeDeployment:
     deployment = DockerComposeDeployment.__new__(DockerComposeDeployment)
     deployment.context = SimpleNamespace(
         cfg=SimpleNamespace(
@@ -27,9 +33,10 @@ def _deployment(tmp_path: Path, *, dry_run: bool) -> DockerComposeDeployment:
                 log_dir=str(tmp_path),
                 debug_flags=SimpleNamespace(use_localhost=False),
                 run_mode=RunMode.ONESHOT,
+                docker_gpu_driver=gpu_driver,
             )
         ),
-        num_gpus=0,
+        num_gpus=num_gpus,
     )
     deployment.container_set = SimpleNamespace(runtime=object())
     deployment.docker_compose_filepath = "docker-compose.yaml"
@@ -59,6 +66,68 @@ def _prometheus_container(
         published_ports={port_name: port},
         get_all_addresses=lambda: _local_addresses(port),
     )
+
+
+def _gpu_container(name: str, gpu: int | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        service_config=SimpleNamespace(
+            image=f"{name}-image", external_image=True, pull_policy="missing"
+        ),
+        volumes=[],
+        command="",
+        workdir=None,
+        environments=["HOME=/tmp"],
+        gpu=gpu,
+        published_ports={},
+        get_all_addresses=lambda: _local_addresses(7100),
+    )
+
+
+def _devices(service: dict) -> list[dict]:
+    return service["deploy"]["resources"]["reservations"]["devices"]
+
+
+def test_docker_compose_nvidia_driver_reserves_gpu_by_index(tmp_path: Path) -> None:
+    deployment = _deployment(tmp_path, dry_run=True, num_gpus=2)
+
+    service = deployment._to_docker_compose_service(_gpu_container("renderer", 1))
+    prometheus = deployment._to_docker_compose_service(
+        _gpu_container("prometheus", None)
+    )
+
+    assert _devices(service) == [
+        {"driver": "nvidia", "capabilities": ["gpu"], "device_ids": ["1"]}
+    ]
+    assert service["environment"] == ["HOME=/tmp"]
+    assert _devices(prometheus) == [
+        {"driver": "nvidia", "capabilities": ["gpu"], "count": "all"}
+    ]
+
+
+def test_docker_compose_cdi_driver_selects_gpu_with_cuda_visible_devices(
+    tmp_path: Path,
+) -> None:
+    deployment = _deployment(
+        tmp_path, dry_run=True, gpu_driver=DockerGpuDriver.CDI, num_gpus=2
+    )
+
+    service = deployment._to_docker_compose_service(_gpu_container("renderer", 1))
+    prometheus = deployment._to_docker_compose_service(
+        _gpu_container("prometheus", None)
+    )
+
+    expected = [
+        {
+            "driver": "cdi",
+            "capabilities": ["gpu"],
+            "device_ids": ["nvidia.com/gpu=all"],
+        }
+    ]
+    assert _devices(service) == expected
+    assert service["environment"] == ["HOME=/tmp", "CUDA_VISIBLE_DEVICES=1"]
+    assert _devices(prometheus) == expected
+    assert prometheus["environment"] == ["HOME=/tmp"]
 
 
 def test_docker_compose_dry_run_does_not_execute(
@@ -119,6 +188,7 @@ def test_docker_compose_adds_prometheus_before_runtime(
                 log_dir=str(tmp_path),
                 debug_flags=SimpleNamespace(use_localhost=False),
                 run_mode=RunMode.ONESHOT,
+                docker_gpu_driver=DockerGpuDriver.NVIDIA,
             )
         ),
         num_gpus=0,

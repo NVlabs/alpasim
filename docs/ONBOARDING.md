@@ -35,6 +35,8 @@ Alpasim depends on access to the following:
     570.x).
 - Install the NVIDIA Container Toolkit (see
   [here](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html))
+  - If Docker exposes GPUs only through CDI (e.g. NixOS `hardware.nvidia-container-toolkit`),
+    run the wizard with `wizard.docker_gpu_driver=CDI`.
 
 ## Optional: OmniDreams video-model renderer
 

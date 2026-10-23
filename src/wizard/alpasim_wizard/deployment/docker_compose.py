@@ -15,7 +15,7 @@ from typing import Any
 from alpasim_utils.paths import find_repo_root
 
 from ..context import WizardContext
-from ..schema import RunMode
+from ..schema import DockerGpuDriver, RunMode
 from ..services import ContainerDefinition, build_container_set
 from ..utils import LiteralStr, write_yaml
 
@@ -145,8 +145,7 @@ class DockerComposeDeployment:
             ret["command"] = ["-c", command]
         if container.workdir:
             ret["working_dir"] = container.workdir
-        if container.environments:
-            ret["environment"] = container.environments
+        environments = list(container.environments)
 
         addresses = container.get_all_addresses()
         publish_runtime_server_port = (
@@ -163,34 +162,37 @@ class DockerComposeDeployment:
         if ports:
             ret["ports"] = ports
 
+        gpu_driver = self.context.cfg.wizard.docker_gpu_driver
+        gpu_device: dict[str, Any] | None = None
         if container.gpu is not None:
-            ret["deploy"] = {
-                "resources": {
-                    "reservations": {
-                        "devices": [
-                            {
-                                "driver": "nvidia",
-                                "capabilities": ["gpu"],
-                                "device_ids": [str(container.gpu)],
-                            }
-                        ]
-                    }
-                }
-            }
+            if gpu_driver == DockerGpuDriver.CDI:
+                # CDI device names depend on the host's spec (index or UUID),
+                # but "all" always exists; CUDA_VISIBLE_DEVICES selects the GPU.
+                gpu_device = {"device_ids": ["nvidia.com/gpu=all"]}
+                environments.append(f"CUDA_VISIBLE_DEVICES={container.gpu}")
+            else:
+                gpu_device = {"device_ids": [str(container.gpu)]}
         elif container.name == "prometheus" and self.context.num_gpus > 0:
+            if gpu_driver == DockerGpuDriver.CDI:
+                gpu_device = {"device_ids": ["nvidia.com/gpu=all"]}
+            else:
+                gpu_device = {"count": "all"}
+        if gpu_device is not None:
             ret["deploy"] = {
                 "resources": {
                     "reservations": {
                         "devices": [
                             {
-                                "driver": "nvidia",
-                                "count": "all",
+                                "driver": gpu_driver.value,
                                 "capabilities": ["gpu"],
+                                **gpu_device,
                             }
                         ]
                     }
                 }
             }
+        if environments:
+            ret["environment"] = environments
         return ret
 
     def generate_docker_compose_yaml(self, container_set: Any) -> str:

@@ -18,6 +18,7 @@ from alpasim_wizard.deployment.docker_compose import DockerComposeDeployment
 from alpasim_wizard.schema import (
     ContainerConfig,
     DebugFlags,
+    DockerGpuDriver,
     RunMethod,
     RunMode,
     RuntimeServiceConfig,
@@ -85,6 +86,7 @@ def _cfg(
             run_sim_services=run_sim_services,
             runtime_server_port=None,
             debug_flags=DebugFlags(use_localhost=False),
+            docker_gpu_driver=DockerGpuDriver.NVIDIA,
             validate_mount_points=False,
             log_dir=str(tmp_path),
             external_services=None,
