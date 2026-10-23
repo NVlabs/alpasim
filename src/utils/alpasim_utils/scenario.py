@@ -111,10 +111,13 @@ class Rig:
                     f"Camera {unique_camera_id!r} in {sequence_id=} has malformed "
                     f"frame timestamp at index {frame_idx}: {raw_frame!r}."
                 )
-            if end_us <= start_us:
+            # start == end is a zero-length exposure: the source records a
+            # single capture timestamp per frame instead of a shutter window.
+            if end_us < start_us:
                 raise ValueError(
                     f"Camera {unique_camera_id!r} in {sequence_id=} has malformed "
-                    f"frame timestamp at index {frame_idx}: end must be after start."
+                    f"frame timestamp at index {frame_idx}: end must not be before "
+                    "start."
                 )
 
             frame_ranges_us.append(range(start_us, end_us))

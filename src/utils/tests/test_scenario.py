@@ -63,6 +63,32 @@ def test_rig_loads_camera_frame_ranges() -> None:
     assert rig.first_camera_frame_end_us(["camera_front", "camera_left"]) == 1_100
 
 
+def test_rig_loads_zero_length_exposure_frames() -> None:
+    (rig,) = Rig.load_from_json(
+        _rig_json(
+            {
+                "unique-front": [[1_200, 1_200], [1_300, 1_300]],
+                "unique-left": [[1_100, 1_100], [1_400, 1_400]],
+            }
+        )
+    )
+
+    assert rig.camera_frame_timestamps_us["unique-front"] == [1_200, 1_300]
+    assert rig.first_camera_frame_end_us(["camera_front", "camera_left"]) == 1_100
+
+
+def test_rig_load_rejects_frame_ending_before_start() -> None:
+    with pytest.raises(ValueError, match="end must not be before start"):
+        Rig.load_from_json(
+            _rig_json(
+                {
+                    "unique-front": [[1_200, 1_100]],
+                    "unique-left": [[-1, 1_100]],
+                }
+            )
+        )
+
+
 def test_rig_clip_start_drops_early_frames_and_trims_trajectory() -> None:
     """clip_start trims the trajectory to the offset and drops earlier frames."""
     (rig,) = Rig.load_from_json(
