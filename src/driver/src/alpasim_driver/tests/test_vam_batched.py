@@ -66,6 +66,7 @@ def _make_prediction_input(
         inference_seed=seed,
         previous_plan=None,
         route=None,
+        session_state={},
     )
 
 

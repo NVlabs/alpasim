@@ -64,6 +64,10 @@ class PredictionInput:
     # at the route's own timestamp.  None until the first route arrives, and
     # for scenarios that run without a route.
     route: Any | None  # Route
+    # Mutable per-session scratch space owned by the model, e.g. a recurrent
+    # state or KV cache.  The same dict is passed to every inference of a
+    # session and is discarded when the session closes.
+    session_state: dict[str, Any]
 
 
 @dataclass

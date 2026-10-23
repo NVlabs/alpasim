@@ -48,6 +48,7 @@ def test_run_batch_assigns_consecutive_per_session_inference_seeds() -> None:
         poses=[],
         last_selected_plan=None,
         route=None,
+        model_state={},
         frames_trail_request_warned=False,
     )
 
@@ -76,6 +77,7 @@ def test_alpamayo_force_determinism_reseeds_each_prediction(
         inference_seed=123,
         previous_plan=None,
         route=None,
+        session_state={},
     )
 
     with patch.object(model, "_validate_cameras", side_effect=RuntimeError):

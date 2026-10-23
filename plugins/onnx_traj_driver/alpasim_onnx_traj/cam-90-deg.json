@@ -1,0 +1,16 @@
+{
+  "model": "kannala_brandt",
+  "comment": "VERBATIM copy of the fleet-standard cam-90-deg.json (gamma-fleet intrinsics; confirmed byte-identical to /Volumes/data/.../intrinsics/cam-90-deg.json, 2026-07-03). This is the exact file lsd applied to ALL training data - do NOT replace it with a per-camera/physically-refined calibration (e.g. the raw libCalib report cam-90-deg/calib-pinhole.json, which has meaningfully different k1..k4): the model learned the residual distortion of THIS fit, so parity with training beats physical accuracy. Only change together with the training pipeline.",
+  "native_width": 1920,
+  "native_height": 1080,
+  "fx": 1298.4443093656541,
+  "fy": 1298.0387115574454,
+  "cx": 959.5,
+  "cy": 539.5,
+  "dist": [
+    -0.09353478487387938,
+    0.02245324292947111,
+    -0.10997002996700445,
+    0.099387369651779
+  ]
+}

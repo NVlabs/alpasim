@@ -119,6 +119,7 @@ def _prediction_input(
         inference_seed=0,
         previous_plan=previous_plan,
         route=None,
+        session_state={},
     )
 
 

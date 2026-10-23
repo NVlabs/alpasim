@@ -86,6 +86,7 @@ def _prediction_input(images: dict) -> PredictionInput:
         inference_seed=0,
         previous_plan=None,
         route=None,
+        session_state={},
     )
 
 

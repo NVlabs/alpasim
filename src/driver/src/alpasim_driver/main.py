@@ -191,6 +191,9 @@ class Session:
     # Most recent route, with waypoints in the rig frame at its own timestamp.
     # None until the first route arrives, and for scenarios without a route.
     route: Route | None = None
+    # Model-owned state carried across inferences of this session; see
+    # ``PredictionInput.session_state``.
+    model_state: dict[str, Any] = field(default_factory=dict)
     frames_trail_request_warned: bool = False
 
     @staticmethod
@@ -724,6 +727,7 @@ class EgoDriverService(EgodriverServiceServicer):
                     inference_seed=inference_seed,
                     previous_plan=job.session.last_selected_plan,
                     route=job.session.route,
+                    session_state=job.session.model_state,
                 )
             )
 

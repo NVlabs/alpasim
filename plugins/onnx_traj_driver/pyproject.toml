@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpasim_onnx_traj"
+version = "0.1.0"
+description = "Decoder-only KV-cache ONNX trajectory policy (rmind PatchPolicy) for Alpasim"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "alpasim_plugins",
+    "alpasim_driver",
+    "numpy",
+    "torch",
+    "torchvision",
+    "opencv-python-headless",
+    # Pinned exactly: 1.27+ is built against CUDA 13, which the 570 host
+    # driver cannot load, and onnxruntime then falls back to CPU silently.
+    "onnxruntime-gpu==1.26.0; sys_platform == 'linux'",
+]
+
+[project.entry-points."alpasim.models"]
+onnx_traj = "alpasim_onnx_traj.onnx_traj_model:OnnxTrajModel"
+
+[project.entry-points."alpasim.configs"]
+onnx_traj = "alpasim_onnx_traj.configs"
+
+[tool.setuptools.packages.find]
+include = ["alpasim_onnx_traj*"]
+
+[tool.setuptools.package-data]
+alpasim_onnx_traj = ["cam-90-deg.json", "configs/driver/*.yaml"]
+
+[tool.uv.sources]
+alpasim_plugins = { workspace = true }
+alpasim_driver = { workspace = true }

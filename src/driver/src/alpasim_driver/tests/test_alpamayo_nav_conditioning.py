@@ -14,8 +14,9 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 from alpasim_driver.models.alpamayo1_5_model import Alpamayo15Model
-from alpasim_driver.models.alpamayo_base import AlpamayoBaseModel, route_in_rig_at_t0
+from alpasim_driver.models.alpamayo_base import AlpamayoBaseModel
 from alpasim_driver.models.base import DriveCommand, PredictionInput
+from alpasim_driver.models.rig_frame import route_in_rig_at_t0
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Quat, Vec3
 from alpasim_grpc.v0.egodriver_pb2 import Route
 from alpasim_utils.geometry import Pose as GeometryPose
@@ -90,6 +91,7 @@ def _prediction_input(latest_us: int, route: Route | None) -> PredictionInput:
         inference_seed=0,
         previous_plan=None,
         route=route,
+        session_state={},
     )
 
 

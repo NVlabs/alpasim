@@ -1,0 +1,32 @@
+# Standalone host-side driver config for the ONNX trajectory policy.
+# Run from the repo root with:
+#   uv run python -m alpasim_driver.main \
+#     --config-path=$PWD/plugins/onnx_traj_driver/host_configs --config-name=onnx_traj
+# and start the simulator with driver=onnx_traj driver_source=external_static.
+
+log_level: INFO
+
+model:
+  model_type: onnx_traj
+  checkpoint_path: "/nasa/alex/onnx_models/causal/traj/dfldy2ki:v51-traj.onnx"
+  device: "cuda"
+
+host: "0.0.0.0"
+port: 6789
+
+inference:
+  use_cameras: ["cam_front_left"]
+  max_batch_size: 1
+  subsample_factor: 1
+  context_length: 1
+
+route:
+  default_command: 2
+  use_waypoint_commands: false
+
+output_dir: "."
+
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

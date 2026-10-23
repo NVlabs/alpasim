@@ -42,6 +42,7 @@ recipes = ["alpasim_driver[recipes]"]
 
 # -- Plugin extras --
 transfuser = ["alpasim_transfuser"]
+onnx_traj = ["alpasim_onnx_traj"]
 
 [tool.uv.workspace]
 members = [
@@ -71,6 +72,7 @@ alpasim-physics = { workspace = true }
 alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
+alpasim_onnx_traj = { workspace = true }
 alpasim_wizard = { workspace = true }
 trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "a0c1310c5fba190c181c6fb4f00c06fc5c77b417" }
 alpasim-trafficsim = { workspace = true }

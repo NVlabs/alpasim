@@ -1,0 +1,39 @@
+# Should be used in defaults list, e.g.
+# - /driver: onnx_traj
+# The model needs onnxruntime-gpu, which the driver container does not ship,
+# so run the driver on the host with
+# plugins/onnx_traj_driver/host_configs/onnx_traj.yaml and select this config
+# together with driver_source=external_static.
+
+defaults:
+  - onnx_traj_configs  # Camera and simulation configs
+  - _self_
+
+log_level: ${wizard.log_level}
+
+model:
+  model_type: onnx_traj
+  checkpoint_path: "/nasa/alex/onnx_models/causal/traj/dfldy2ki:v51-traj.onnx"
+  device: "cuda"
+
+host: "0.0.0.0"
+port: ???
+
+inference:
+  use_cameras: ["cam_front_left"]
+  # The graph's batch is fixed at 1.
+  max_batch_size: 1
+  subsample_factor: 1
+  context_length: 1
+
+# The model reads route waypoints directly; commands are unused.
+route:
+  default_command: 2
+  use_waypoint_commands: false
+
+output_dir: "/mnt/output/driver"
+
+trajectory_optimizer:
+  enabled: false
+
+plot_debug_images: false

@@ -68,6 +68,7 @@ def _make_prediction_input(
         inference_seed=seed,
         previous_plan=None,
         route=None,
+        session_state={},
     )
 
 
@@ -290,6 +291,7 @@ class TestPredictBatch:
             inference_seed=0,
             previous_plan=None,
             route=None,
+            session_state={},
         )
 
         with pytest.raises(ValueError, match=r"expects 1 frame"):

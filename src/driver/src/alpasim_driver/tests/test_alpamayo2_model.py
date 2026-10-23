@@ -128,6 +128,7 @@ def _prediction_input(previous_plan: object | None) -> PredictionInput:
         inference_seed=0,
         previous_plan=previous_plan,
         route=None,
+        session_state={},
     )
 
 
@@ -218,6 +219,7 @@ def test_stale_camera_keeps_images_but_uses_latest_ego_as_planning_t0(
         inference_seed=0,
         previous_plan=None,
         route=None,
+        session_state={},
     )
     model = _model(_candidates())
     captured_camera_images: dict[str, object] = {}

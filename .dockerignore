@@ -19,6 +19,7 @@
 !src/trafficsim/**
 !plugins/internal/**
 !plugins/transfuser_driver/**
+!plugins/onnx_traj_driver/**
 !e2e_challenge/
 !e2e_challenge/starter_kit/
 !e2e_challenge/starter_kit/**

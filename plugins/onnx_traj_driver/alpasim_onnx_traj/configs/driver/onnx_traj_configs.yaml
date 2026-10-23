@@ -1,0 +1,23 @@
+# @package _global_
+# Runtime configuration for the ONNX trajectory driver running on the host.
+#
+# The model ticks at 3 Hz and sees the raw cam_front_left fisheye at its
+# native 1920x1080, which the driver defishes the way the training data was.
+# No extra_cameras entry: the renderer keeps the recorded fisheye model.
+
+wizard:
+  external_services:
+    driver:
+      - "localhost:6789"
+
+runtime:
+  simulation_config:
+    control_timestep_us: 333_333
+    # Must be a whole number of control steps: 6 ticks (~2 s).
+    force_gt_duration_us: 1_999_998
+    cameras:
+      - height: 1080
+        width: 1920
+        logical_id: cam_front_left
+        frame_interval_us: 333_333
+        shutter_duration_us: 30_000
