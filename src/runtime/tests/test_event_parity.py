@@ -385,6 +385,38 @@ class TestControllerAndEgoPhysicsPipeline:
         )
 
     @pytest.mark.asyncio
+    async def test_controller_event_reports_gt_dynamics_during_force_gt(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        simple_trajectory: Trajectory,
+    ):
+        """Force-GT steps pass the recorded speed on, not the zero dynamics of
+        the controller service's GT-pose substitute."""
+        rollout_state.step_context = StepContext(
+            step_start_us=100_000,
+            target_time_us=200_000,
+            force_gt=True,
+            driver_trajectory=simple_trajectory,
+        )
+
+        event = ControllerEvent(
+            timestamp_us=100_000,
+            control_timestep_us=100_000,
+            services=service_bundle,
+        )
+        await event.run(rollout_state, EventQueue())
+
+        ctx = rollout_state.step_context
+        assert rollout_state.force_gt_dynamics is not None
+        expected = rollout_state.force_gt_dynamics.interpolate_dynamics(
+            ctx.ego_true.timestamps_us
+        )
+        assert np.linalg.norm(expected[:, 0:3], axis=1).min() > 0.0
+        np.testing.assert_allclose(ctx.ego_true.dynamics, expected)
+        np.testing.assert_allclose(ctx.ego_estimated.dynamics, expected)
+
+    @pytest.mark.asyncio
     async def test_controller_event_uses_force_gt_helper_for_reference(
         self,
         rollout_state: RolloutState,

@@ -153,6 +153,12 @@ class ControllerEvent(RecurringEvent):
         est_dynamics = geometry.dynamic_states_to_array(
             [s.dynamic_state_estimated for s in propagated_states]
         )
+        if force_gt:
+            # The controller service replaces force-GT steps with recorded poses
+            # but no dynamics; use the recorded dynamics so the policy sees the
+            # ego's actual speed instead of zero.
+            true_dynamics = state.force_gt_dynamics.interpolate_dynamics(timestamps)
+            est_dynamics = true_dynamics.copy()
 
         ego_true = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
             geometry.Trajectory.from_poses(timestamps, true_poses),
