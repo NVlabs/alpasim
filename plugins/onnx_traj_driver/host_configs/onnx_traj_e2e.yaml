@@ -1,0 +1,22 @@
+# Host-side ONNX trajectory driver for the e2e_challenge PAI scenes.
+# Run from the repo root with:
+#   uv run python -m alpasim_driver.main \
+#     --config-path=$PWD/plugins/onnx_traj_driver/host_configs --config-name=onnx_traj_e2e
+#
+# PAI scenes carry Hyperion f-theta cameras, not the fleet cam_front_left
+# fisheye.  The driver rectifies camera_front_wide_120fov to the pinhole the
+# defisher produces for training data (1920x1080, f = cx = 959.5), and the
+# model skips its own defish for that camera.
+
+defaults:
+  - onnx_traj
+  - _self_
+
+inference:
+  use_cameras: ["camera_front_wide_120fov"]
+
+rectification:
+  camera_front_wide_120fov:
+    focal_length: [959.5, 959.5]
+    principal_point: [959.5, 539.5]
+    resolution_hw: [1080, 1920]
