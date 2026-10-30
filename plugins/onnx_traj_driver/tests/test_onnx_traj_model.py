@@ -41,6 +41,7 @@ def _input(
     speed: float = 10.0,
     t0_us: int = T0_US,
     image_hw: tuple[int, int] = (1080, 1920),
+    camera_id: str = "cam_front_left",
 ) -> PredictionInput:
     # Straight route ahead of the rig at timestamp 0, ending 80 m out.
     route = Route(
@@ -49,7 +50,7 @@ def _input(
     )
     return PredictionInput(
         camera_images={
-            "cam_front_left": [
+            camera_id: [
                 CameraFrame(t0_us, np.full((*image_hw, 3), 128, dtype=np.uint8))
             ]
         },
@@ -153,7 +154,7 @@ def test_kv_cache_persists_per_session_and_is_isolated(
 
 
 def test_rejects_wrong_camera_set() -> None:
-    with pytest.raises(ValueError, match="cam_front_left"):
+    with pytest.raises(ValueError, match="needs exactly one of"):
         OnnxTrajModel(
             checkpoint_path=str(FIXTURES / "dummy_decoder.onnx"),
             device=torch.device("cpu"),
@@ -173,3 +174,20 @@ def test_rejects_graph_without_trajectory_head() -> None:
 def test_rejects_non_native_frames(model: OnnxTrajModel) -> None:
     with pytest.raises(ValueError, match="native fisheye resolution"):
         model.predict(_input({}, image_hw=(540, 960)))
+
+
+def test_pinhole_camera_skips_defish_and_feeds_the_model_input() -> None:
+    model = OnnxTrajModel(
+        checkpoint_path=str(FIXTURES / "dummy_decoder.onnx"),
+        device=torch.device("cpu"),
+        camera_ids=["camera_front_wide_120fov"],
+    )
+    assert model._defisher is None
+
+    prediction = model.predict(_input({}, camera_id="camera_front_wide_120fov"))
+
+    assert prediction.selected_index == 3
+    with pytest.raises(ValueError, match="must be rectified"):
+        model.predict(
+            _input({}, image_hw=(1080, 1916), camera_id="camera_front_wide_120fov")
+        )

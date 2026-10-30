@@ -11,7 +11,10 @@ ignored.  Input conventions follow ``rsim_port``.
 Model contract (rsim ``OnnxDecoderAgent``, rmind ``decoder_only_kv_cache.md``):
 
 * Camera: the raw ``cam_front_left`` fisheye at 1920x1080, defished with the
-  fleet ``cam-90-deg.json`` calibration, then cropped and resized.
+  fleet ``cam-90-deg.json`` calibration, then cropped and resized.  A
+  ``PINHOLE_CAMERA_IDS`` camera instead arrives already rectified by the
+  driver (``rectification`` config) to the defisher's output pinhole:
+  1920x1080, ``f = 959.5``, centred principal point.
 * Speed: km/h.
 * Trajectory: ``(Q, P, 3)`` hypotheses x poses x (x, y, theta) in metres,
   absolute from t0, poses ``1/3`` s apart starting at t0 + 1/3 s.  Exports
@@ -60,6 +63,9 @@ from .rsim_port import (
 logger = logging.getLogger(__name__)
 
 CAMERA_ID = "cam_front_left"
+# Cameras fed through the driver's f-theta rectifier instead of the defisher.
+PINHOLE_CAMERA_IDS = ("camera_front_wide_120fov",)
+PINHOLE_HW = (1080, 1920)
 MPS_TO_KMH = 3.6
 KV_RING_KEY = "kv_ring"
 
@@ -97,9 +103,10 @@ class OnnxTrajModel(BaseTrajectoryModel):
     ):
         import onnxruntime as ort
 
-        if camera_ids != [CAMERA_ID]:
+        allowed = (CAMERA_ID, *PINHOLE_CAMERA_IDS)
+        if len(camera_ids) != 1 or camera_ids[0] not in allowed:
             raise ValueError(
-                f"OnnxTrajModel needs exactly [{CAMERA_ID!r}], got {camera_ids}"
+                f"OnnxTrajModel needs exactly one of {list(allowed)}, got {camera_ids}"
             )
         model_path = Path(checkpoint_path)
         if device.type == "cuda":
@@ -117,16 +124,21 @@ class OnnxTrajModel(BaseTrajectoryModel):
             )
 
         self._spec = DecoderGraphSpec.from_session(self._session)
-        if list(self._spec.camera_inputs) != camera_ids:
+        if list(self._spec.camera_inputs) != [CAMERA_ID]:
             raise ValueError(
                 f"{model_path.name} expects cameras {list(self._spec.camera_inputs)}, "
-                f"configured {camera_ids}"
+                f"only [{CAMERA_ID!r}] is supported"
             )
         self._camera_ids = camera_ids
+        self._source_camera = camera_ids[0]
         self._output_index = {
             o.name: i for i, o in enumerate(self._session.get_outputs())
         }
-        self._defisher = Defisher(FisheyeCalibration.from_json(FLEET_CALIBRATION_PATH))
+        self._defisher = (
+            Defisher(FisheyeCalibration.from_json(FLEET_CALIBRATION_PATH))
+            if self._source_camera == CAMERA_ID
+            else None
+        )
         self._step_us = 1_000_000 // self.OUTPUT_FREQUENCY_HZ
 
         logger.info(
@@ -159,7 +171,7 @@ class OnnxTrajModel(BaseTrajectoryModel):
 
     def predict(self, prediction_input: PredictionInput) -> ModelPrediction:
         self._validate_cameras(prediction_input.camera_images)
-        frames = prediction_input.camera_images[CAMERA_ID]
+        frames = prediction_input.camera_images[self._source_camera]
         if len(frames) != 1:
             raise ValueError(f"OnnxTrajModel expects 1 frame, got {len(frames)}")
         t0_us, image = frames[0]
@@ -184,7 +196,15 @@ class OnnxTrajModel(BaseTrajectoryModel):
             ring = KvCacheRing(self._spec)
             prediction_input.session_state[KV_RING_KEY] = ring
 
-        rectilinear = self._defisher.apply(image)
+        if self._defisher is not None:
+            rectilinear = self._defisher.apply(image)
+        elif image.shape[:2] != PINHOLE_HW:
+            raise ValueError(
+                f"{self._source_camera} must be rectified to {PINHOLE_HW}, got "
+                f"{image.shape[:2]}; check the driver's rectification config"
+            )
+        else:
+            rectilinear = image
         feed = {
             self._spec.camera_inputs[CAMERA_ID]: preprocess_image(
                 rectilinear, self._spec.image_hw
