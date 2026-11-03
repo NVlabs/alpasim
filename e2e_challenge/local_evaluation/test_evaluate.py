@@ -20,6 +20,26 @@ SPEC.loader.exec_module(evaluation)
 
 
 class LocalEvaluationTest(unittest.TestCase):
+    def test_bundled_nuplan_references_form_a_complete_score_matrix(self) -> None:
+        inputs, manifest = evaluation.load_reference_inputs("nuplan", None)
+        runs = [evaluation.load_run_scores(run) for run in inputs]
+        matrix, subjects, scenes, exclusions = evaluation.build_matrix(runs)
+
+        self.assertEqual(manifest["test_suite_id"], "nuplan_private_1000")
+        self.assertEqual(matrix.shape, (36, 1000))
+        self.assertEqual(len(set(subjects)), 36)
+        self.assertEqual(len(set(scenes)), 1000)
+        self.assertEqual(exclusions, [])
+        self.assertTrue(all(len(run.scene_scores) == 1000 for run in runs))
+        self.assertTrue(all(run.is_reference for run in runs))
+        self.assertTrue(
+            all(run.avg_dist_between_incidents_at_fault is None for run in runs)
+        )
+        self.assertEqual(
+            evaluation.effective_algorithm("zoib", matrix, subjects, scenes),
+            ("zoib", None),
+        )
+
     def test_zero_scene_score_is_valid_and_repeated_rollouts_are_averaged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             summary_path = Path(tmpdir) / "results-summary.json"

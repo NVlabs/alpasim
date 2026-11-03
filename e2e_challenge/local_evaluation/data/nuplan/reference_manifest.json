@@ -1,0 +1,156 @@
+{
+  "track": "nuplan",
+  "test_suite_id": "nuplan_private_1000",
+  "source": {
+    "file": "nuplan_leaderboard_scene_score_matrix.csv",
+    "sha256": "06e4999f135f178856251ae94f404000c3b7b424070e071c1c62d30ef5ebed31",
+    "submission_count": 36,
+    "scene_count": 1000
+  },
+  "runs": [
+    {
+      "subject_id": "d7e190df-ceaf-4ec3-8ce8-49571baaec93",
+      "summary_path": "d7e190df-ceaf-4ec3-8ce8-49571baaec93/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "f6b127cc-9d1e-42cf-8c1d-aaf2b42f834c",
+      "summary_path": "f6b127cc-9d1e-42cf-8c1d-aaf2b42f834c/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "1a7f9e1a-4295-478e-b9a0-194c04de62a8",
+      "summary_path": "1a7f9e1a-4295-478e-b9a0-194c04de62a8/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "1340e69a-ac0f-4a1f-96a3-507b315c51aa",
+      "summary_path": "1340e69a-ac0f-4a1f-96a3-507b315c51aa/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "e4e7b293-b976-452b-b962-a1d839c4119d",
+      "summary_path": "e4e7b293-b976-452b-b962-a1d839c4119d/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "e6e980e4-c972-48af-b635-4c8a553eee1e",
+      "summary_path": "e6e980e4-c972-48af-b635-4c8a553eee1e/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "8f58f9d7-cfaa-414b-8358-3b1b5fcaa7d5",
+      "summary_path": "8f58f9d7-cfaa-414b-8358-3b1b5fcaa7d5/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "f382dcbe-410d-49b1-9a2d-c29b764e82d0",
+      "summary_path": "f382dcbe-410d-49b1-9a2d-c29b764e82d0/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "716ccb1b-2ef2-42f7-b5ec-81ce0506e7b4",
+      "summary_path": "716ccb1b-2ef2-42f7-b5ec-81ce0506e7b4/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "c71eb248-b49a-44bd-89a6-e95c99cdb3df",
+      "summary_path": "c71eb248-b49a-44bd-89a6-e95c99cdb3df/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "91777e54-e1ff-442b-bac2-08dce9652427",
+      "summary_path": "91777e54-e1ff-442b-bac2-08dce9652427/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "74fd4513-845c-40cd-9749-e73a12ef74ed",
+      "summary_path": "74fd4513-845c-40cd-9749-e73a12ef74ed/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "09fcaae1-f4a0-42f4-bfae-3e0058d78698",
+      "summary_path": "09fcaae1-f4a0-42f4-bfae-3e0058d78698/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "f9c094f9-853b-486a-a727-071cfb404356",
+      "summary_path": "f9c094f9-853b-486a-a727-071cfb404356/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "ed1ad237-1b81-4a26-b5d3-792a0e2ab726",
+      "summary_path": "ed1ad237-1b81-4a26-b5d3-792a0e2ab726/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "c5fb6e70-d78c-465e-8384-4150fb1f1712",
+      "summary_path": "c5fb6e70-d78c-465e-8384-4150fb1f1712/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "68f4415c-ccd1-48c5-ab7c-a3b9a2745ca7",
+      "summary_path": "68f4415c-ccd1-48c5-ab7c-a3b9a2745ca7/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "fe2ca883-a106-462e-9150-ad4c99fa1394",
+      "summary_path": "fe2ca883-a106-462e-9150-ad4c99fa1394/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "5edecfbc-62e4-44c4-92b7-8ae3fa0c8539",
+      "summary_path": "5edecfbc-62e4-44c4-92b7-8ae3fa0c8539/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "85d42611-2eec-40ac-afbf-a5271d609269",
+      "summary_path": "85d42611-2eec-40ac-afbf-a5271d609269/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "621596ec-22e1-4649-a594-2dc8046b9e45",
+      "summary_path": "621596ec-22e1-4649-a594-2dc8046b9e45/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "087251c0-2e56-4cb3-872b-ce1252e6e6bb",
+      "summary_path": "087251c0-2e56-4cb3-872b-ce1252e6e6bb/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "37cd2328-0d28-4845-96da-5cfc13238b84",
+      "summary_path": "37cd2328-0d28-4845-96da-5cfc13238b84/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "d5163c11-7358-4cd9-8fa8-ab6bdcba9b57",
+      "summary_path": "d5163c11-7358-4cd9-8fa8-ab6bdcba9b57/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "8598ad07-510a-4742-aee6-77248c08b44b",
+      "summary_path": "8598ad07-510a-4742-aee6-77248c08b44b/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "60321101-cf79-4705-89d0-71662737a0e0",
+      "summary_path": "60321101-cf79-4705-89d0-71662737a0e0/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "7a0dcd35-bca1-4a04-9ff4-5efccbe96171",
+      "summary_path": "7a0dcd35-bca1-4a04-9ff4-5efccbe96171/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "44276ced-ec0d-48c0-8f71-3a28f7c3f16b",
+      "summary_path": "44276ced-ec0d-48c0-8f71-3a28f7c3f16b/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "c19dcb9c-63bb-4126-8647-4306604adebb",
+      "summary_path": "c19dcb9c-63bb-4126-8647-4306604adebb/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "2665c592-6c00-4043-a798-0521609522d1",
+      "summary_path": "2665c592-6c00-4043-a798-0521609522d1/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "92865d00-d03e-479c-b109-dce4c1e32780",
+      "summary_path": "92865d00-d03e-479c-b109-dce4c1e32780/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "90ae17c9-3906-4630-b105-f7942a3ce911",
+      "summary_path": "90ae17c9-3906-4630-b105-f7942a3ce911/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "106bab67-3892-4f16-8bce-926ccd44f183",
+      "summary_path": "106bab67-3892-4f16-8bce-926ccd44f183/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "4d832b4c-1402-4fa8-ad36-3a5457684382",
+      "summary_path": "4d832b4c-1402-4fa8-ad36-3a5457684382/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "7d72022f-7fe3-4723-a4df-60acd9024762",
+      "summary_path": "7d72022f-7fe3-4723-a4df-60acd9024762/aggregate/results-summary.json"
+    },
+    {
+      "subject_id": "91f8d118-d685-4540-befd-7446596665b5",
+      "summary_path": "91f8d118-d685-4540-befd-7446596665b5/aggregate/results-summary.json"
+    }
+  ]
+}

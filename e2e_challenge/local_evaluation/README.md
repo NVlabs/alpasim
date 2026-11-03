@@ -55,8 +55,9 @@ capability ranking, posterior rank interval, rank spread, and average scene
 score.
 
 It does not copy a model's results. Give the run directory directly with
-`--run MODEL_ID=PATH`. A pre-populated PAI reference bundle is included and
-loaded automatically; nuPlan does not yet have a reference bundle.
+`--run MODEL_ID=PATH`. Reference bundles are included for PAI's public curated
+validation split and nuPlan's private competition scene set. The selected
+track's bundle is loaded automatically unless `--without-references` is set.
 
 ### Install and run
 
@@ -109,10 +110,11 @@ uv run --extra local-evaluation \
   --output-dir ./runs/my-nuplan-model/local-evaluation
 ```
 
-No nuPlan reference bundle is included yet. The evaluator requests the
-competition's `zoib` algorithm; with insufficient observations it records a
-warning in `manifest.json` and falls back to `average`. Pass `--algorithm average`
-to request that directly.
+Keep `--without-references` for public `navtest` runs: the bundled nuPlan
+references cover a different, private scene set and cannot be compared with
+these runs. The evaluator requests the competition's `zoib` algorithm; with
+insufficient observations it records a warning in `manifest.json` and falls
+back to `average`. Pass `--algorithm average` to request that directly.
 
 The PAI curated NuRec split and the NuPlan/MTGS scene suites are different;
 their reference data is intentionally kept separate.
@@ -121,8 +123,9 @@ their reference data is intentionally kept separate.
 
 `data/pai/` ships with precomputed PAI reference runs on the 441-scene
 `nurec_curated_val` split; see "How the PAI reference runs were produced" below
-for what each subject is. `data/nuplan/` remains empty until organizer-published
-precomputed reference results are added. The bundle layout is:
+for what each subject is. `data/nuplan/` ships with per-scene scores for 36
+submissions on the 1,000-scene private competition set; see "nuPlan reference
+scores" below. The bundle layout is:
 
 ```text
 data/
@@ -135,8 +138,9 @@ data/
 Each manifest identifies its track and reference subject IDs. When present,
 the evaluator includes those runs automatically. You may point at a separately
 downloaded bundle with `--reference-manifest /path/to/reference_manifest.json`.
-It also supplies the two named anchor subjects and their target scores used to
-scale the reported Policy Capability Score (see "Anchor scale").
+An optional `score_scale` supplies the two named anchor subjects and their
+target scores used to scale the reported Policy Capability Score (see "Anchor
+scale"). Without it, the reported PCS remains on the raw fitted scale.
 
 The required manifest interface is intentionally small:
 
@@ -157,8 +161,8 @@ The required manifest interface is intentionally small:
 }
 ```
 
-For a track with no installed reference bundle, `--without-references` allows an
-experimental comparison of two or more local runs:
+Use `--without-references` for an experimental comparison of two or more local
+runs on a scene set that differs from the track's reference bundle:
 
 ```bash
 uv run --extra local-evaluation \
@@ -172,6 +176,34 @@ For `zoib`, the tool uses the same sufficiency guard as the service: at least
 `S + 5N` observations for `S` subjects and `N` scenes. If there are too few,
 it records a warning in `manifest.json` and uses the arithmetic-average
 fallback. That fallback has no posterior rank spread.
+
+### nuPlan reference scores
+
+The nuPlan bundle was converted from
+`nuplan_leaderboard_scene_score_matrix.csv`. Its manifest records the source
+file's SHA256 and identifies each submission by its original submission UUID;
+team IDs are omitted. Every exported per-scene score is preserved as one
+`rollouts` entry with its original scene ID. These entries represent exported
+scene scores, rather than reconstructed individual simulation rollouts.
+
+Analyze the 36 bundled submissions without supplying a new run:
+
+```bash
+uv run --extra local-evaluation \
+  python e2e_challenge/local_evaluation/evaluate.py \
+  --track nuplan --output-dir ./runs/nuplan-reference-evaluation
+```
+
+The 1,000 private scenes have no overlap with public `navtest`. A new run can
+join this fit only if it contains scores for exactly the same scene IDs;
+mismatched runs are excluded and recorded in the output `manifest.json`.
+This bundle does not provide the private scene assets.
+
+The source export contains no incident-distance metrics or PCS scaling
+anchors, so those metrics remain unavailable and `score_scale` is omitted.
+PCS is reported on the raw fitted scale. The resulting analysis does not
+reproduce the official leaderboard's score scale or incident-distance
+tiebreaks, and the PAI bundle's anchors do not apply to nuPlan.
 
 ### How the PAI reference runs were produced
 
