@@ -1992,8 +1992,8 @@ class MetricReturn:
     timestamps_us: list[int]
     values: list[float | bool]
     # The valid field can be used when the computation of a metric is impossible
-    # for some timesteps. This can then be used in aggregation (not implemented
-    # yet). For example, computing a stop-sign metric only makes sense if we're
+    # for some timesteps. Invalid timesteps are excluded from aggregation.
+    # For example, computing a stop-sign metric only makes sense if we're
     # close to a stop-sign. Any aggregation of a stop-sign metric should take
     # into account how many stop-signs we actually encountered.
     valid: list[bool]

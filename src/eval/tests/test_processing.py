@@ -525,6 +525,43 @@ class TestAggregateAndWriteMetricsResultsTxt:
         assert hasattr(result, "trajectory_uid_df")
         assert hasattr(result, "agg_function_df")
 
+    def test_invalid_timesteps_are_excluded_from_aggregation(
+        self, unified_metrics_df: pl.DataFrame
+    ) -> None:
+        """Invalid placeholder values must not reach time or clip aggregation.
+
+        Mirrors MinDistanceToObstacleScorer: a clip without other actors emits
+        `inf` with valid=False at every timestep.
+        """
+        run_1_rollout_1 = unified_metrics_df.filter(
+            (pl.col("run_uuid") == "uuid1")
+            & (pl.col("rollout_id") == "rollout1")
+            & (pl.col("name") == "eval_relevant")
+        )
+        min_distance = run_1_rollout_1.with_columns(
+            pl.lit("min_distance_to_obstacle_m").alias("name"),
+            pl.lit("min").alias("time_aggregation"),
+            pl.when(pl.col("clipgt_id") == "clip1")
+            .then(pl.lit(float("inf")))
+            .otherwise(pl.col("timestamps_us").cast(pl.Float64) / 1000.0)
+            .alias("values"),
+            (pl.col("clipgt_id") == "clip2").alias("valid"),
+        )
+
+        result = aggregate_and_write_metrics_results_txt(
+            pl.concat([unified_metrics_df, min_distance])
+        )
+
+        per_rollout = result.df_wide_avg_t.filter(
+            (pl.col("run_uuid") == "uuid1") & (pl.col("rollout_id") == "rollout1")
+        )
+        values_by_clip = dict(
+            per_rollout.select("clipgt_id", "min_distance_to_obstacle_m").iter_rows()
+        )
+        assert values_by_clip == {"clip1": None, "clip2": 1.0}
+        run_1 = result.df_wide_avg_t_clip_rollout.filter(pl.col("run_uuid") == "uuid1")
+        assert run_1["min_distance_to_obstacle_m"].item() == 1.0
+
     def test_force_same_run_uniqueness_requirements(
         self, unified_metrics_df: pl.DataFrame
     ) -> None:

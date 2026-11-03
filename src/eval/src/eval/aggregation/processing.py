@@ -735,6 +735,12 @@ def aggregate_and_write_metrics_results_txt(
         )
 
     df_long, trajectory_uid_df = add_rollout_and_trajectory_uids(metrics_df)
+    # Values at invalid timesteps are placeholders (e.g. `inf` when no other
+    # actor exists). Null them so time and clip aggregation skip them, as
+    # `MetricReturn.aggregate` does.
+    df_long = df_long.with_columns(
+        pl.when(pl.col("valid")).then(pl.col("values")).alias("values")
+    )
 
     agg_function_df = df_long.group_by("name").agg(
         pl.col("time_aggregation").first().alias("time_aggregation"),
