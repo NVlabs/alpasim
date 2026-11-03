@@ -15,6 +15,7 @@ from shapely.geometry.base import BaseGeometry
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
 from trajdata.maps import vec_map_elements
+from trajdata.utils.arr_utils import angle_wrap
 
 # nuPlan road-area polygons that should share a boundary can have tiny gaps from
 # floating-point map geometry. Close seams narrower than 2 mm before checking
@@ -253,7 +254,7 @@ def _compute_off_lane(
     ]
 
     rel_ego_yaw_to_center_line = [
-        center_line_yaw - ego_yaw for center_line_yaw in center_line_yaws
+        angle_wrap(center_line_yaw - ego_yaw) for center_line_yaw in center_line_yaws
     ]
 
     return {
