@@ -33,9 +33,8 @@ outputs/
 artifacts/
 asset_harvesting/
 
-# uv.lock is only used in local development. On the server, we use uv tool run,
-# which does not require uv.lock.
-**/uv.lock
+# uv.lock is committed so local setups and the Docker build resolve the
+# same package versions from the same commit.
 .worktrees/
 
 # Rollout viewer scratch output
