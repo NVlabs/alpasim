@@ -76,7 +76,7 @@ Main components of the codebase:
   [`scorers.__init__.py`](src/eval/scorers/__init__.py)
 * Scorers produce metrics per timestamp per rollout. These results are
   aggregated in
-  [`eval_aggregation.py`](src/eval/aggregation/eval_aggregation.py). As long as
+  [`processing.py`](src/eval/aggregation/processing.py). As long as
   you conform to the existing datastructure, you probably won't need to touch this.
 * Lastly, video generation is done in [`video.py`](src/eval/video.py)
 
