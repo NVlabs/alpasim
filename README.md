@@ -111,6 +111,8 @@ This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE
 
 ## Citation
 
+### AlpaSim simulator
+
 If you use this software, please cite it as follows:
 
 ```
@@ -138,6 +140,36 @@ If you use this software, please cite it as follows:
   year         = {2025},
   month        = {October},
   url          = {https://github.com/NVlabs/alpasim},
+}
+```
+
+### 2026 AlpaSim End to End Driving Challenge
+
+If you use the challenge benchmark or report challenge results, please also cite:
+
+```bibtex
+@misc{alpasim_challenge_2026,
+  author       = {
+    Watson, Michael and
+    Chitta, Kashyap and
+    Nguyen, Long and
+    Wang, Caojun and
+    Igl, Maximilian and
+    Bursuc, Andrei and
+    Rong, Frieda and
+    Karkus, Peter and
+    Da Col, Damiano and
+    Tian, Haochen and
+    Qiu, Yihang and
+    Lew, William and
+    Liao, Yiyi and
+    Li, Hongyang and
+    Ivanovic, Boris and
+    Pavone, Marco
+  },
+  title        = {2026 {AlpaSim} End to End Driving Challenge},
+  year         = {2026},
+  url          = {https://huggingface.co/spaces/nvidia/AlpasimE2EClosedLoopChallenge2026},
 }
 ```
 
