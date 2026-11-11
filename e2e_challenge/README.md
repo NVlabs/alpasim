@@ -91,6 +91,15 @@ Local closed-loop evaluation is supported using the same driver API as the PAI
 track. For local public evaluation, use the NAVSIM-aligned `navtest` scene
 set; use the `full` preset to select the complete set without a scene limit.
 
+MTGS images retain lens distortion. After updating the MTGS server to include
+the calibration fix, `start_session.rollout_spec.vehicle.available_cameras`
+provides the same intrinsic matrix and distortion coefficients used by the
+renderer, preferring the asset's COLMAP-refined calibration when available.
+The OpenCV pinhole fields contain radial `[k1, k2, k3, k4, k5, k6]`, tangential
+`[p1, p2]`, and thin-prism `[s1, s2, s3, s4]` coefficients, with unused terms
+set to zero. Older servers leave these fields empty; that does not indicate
+undistorted images.
+
 #### Adapting a NAVSIM-Style Model
 
 Models developed with NAVSIM do not need to bring the NAVSIM or nuPlan training
