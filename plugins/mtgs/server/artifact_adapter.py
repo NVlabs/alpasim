@@ -132,6 +132,15 @@ def pose_pair_to_agent_state(
     return np.array([trans[0], trans[1], trans[2], 0.0, 0.0, yaw], dtype=np.float64)
 
 
+def _camera_calibration(cam_info: Dict) -> tuple[np.ndarray, np.ndarray]:
+    """Select the same intrinsic/distortion pair for rendering and RPC metadata."""
+    calibration = cam_info.get("colmap_param", cam_info)
+    return (
+        np.array(calibration["cam_intrinsic"]),
+        np.array(calibration["distortion"]),
+    )
+
+
 def rgb_render_request_to_render_state(
     request: RGBRenderRequest,
     asset_manager: Optional[Any] = None,
@@ -181,16 +190,7 @@ def rgb_render_request_to_render_state(
                 logger.warning("No 'cams' found in frame_infos[0]")
             else:
                 for cam_name, mtgs_cam_info in frame_info["cams"].items():
-                    if "colmap_param" in mtgs_cam_info:
-                        intrinsic = np.array(
-                            mtgs_cam_info["colmap_param"]["cam_intrinsic"]
-                        )
-                        distortion = np.array(
-                            mtgs_cam_info["colmap_param"]["distortion"]
-                        )
-                    else:
-                        intrinsic = np.array(mtgs_cam_info["cam_intrinsic"])
-                        distortion = np.array(mtgs_cam_info["distortion"])
+                    intrinsic, distortion = _camera_calibration(mtgs_cam_info)
 
                     sensor2ego_rotation = mtgs_cam_info["sensor2ego_rotation"]
                     if isinstance(sensor2ego_rotation, Quaternion):
@@ -246,7 +246,10 @@ def get_available_cameras_from_data_source(
     ):
         try:
             video_scene_dict = asset_manager.video_scene_dict
-            if isinstance(video_scene_dict, dict):
+            if (
+                isinstance(video_scene_dict, dict)
+                and "frame_infos" not in video_scene_dict
+            ):
                 video_info = list(video_scene_dict.values())[0]
             else:
                 video_info = video_scene_dict
@@ -262,10 +265,19 @@ def get_available_cameras_from_data_source(
         frame_info = video_info["frame_infos"][0]
 
         for cam_name, cam_info in frame_info["cams"].items():
-            if "colmap_param" in cam_info:
-                intrinsic = np.array(cam_info["colmap_param"]["cam_intrinsic"])
-            else:
-                intrinsic = np.array(cam_info["cam_intrinsic"])
+            intrinsic, distortion = _camera_calibration(cam_info)
+            distortion = distortion.reshape(-1)
+            if (
+                distortion.size not in (4, 5, 8, 12)
+                or not np.isfinite(distortion).all()
+            ):
+                raise ValueError(
+                    f"Camera {cam_name}: RPC requires 4, 5, 8 or 12 finite OpenCV "
+                    f"distortion coefficients, got {distortion!r}"
+                )
+            # OpenCV: k1, k2, p1, p2[, k3[, k4, k5, k6[, s1, s2, s3, s4]]].
+            # The RPC groups radial, tangential and thin-prism terms separately.
+            distortion = np.pad(distortion, (0, 12 - distortion.size))
 
             focal_length_x = float(intrinsic[0, 0])
             focal_length_y = float(intrinsic[1, 1])
@@ -294,6 +306,9 @@ def get_available_cameras_from_data_source(
             pinhole.focal_length_y = focal_length_y
             pinhole.principal_point_x = principal_point_x
             pinhole.principal_point_y = principal_point_y
+            pinhole.radial_coeffs.extend(distortion[[0, 1, 4, 5, 6, 7]])
+            pinhole.tangential_coeffs.extend(distortion[2:4])
+            pinhole.thin_prism_coeffs.extend(distortion[8:12])
 
             rig_to_camera = GrpcPose()
             rig_to_camera.vec.x = float(sensor2ego_translation[0])
