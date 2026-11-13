@@ -358,7 +358,7 @@ As an example for how to integrate a different driver model, we provide a provis
 for the
 [Transfuser](https://github.com/autonomousvision/lead?tab=readme-ov-file#beyond-carla-cross-benchmark-deployment)
 policy, specifically the Latent TransFuser v6
-([LTFv6](<(https://huggingface.co/ln2697/tfv6_navsim)>)) model developed for
+([LTFv6](https://huggingface.co/ln2697/tfv6_navsim)) model developed for
 [NAVSIM](https://github.com/autonomousvision/navsim).
 
 To run with the Transfuser model use `driver=transfuser`.
