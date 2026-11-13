@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
@@ -42,9 +42,11 @@ class CollisionScorer(Scorer):
                 lateral_collisions.append(False)
                 continue
 
+            # Accumulate the union across actors so later contacts cannot erase
+            # categories detected for earlier actors.
+            front_collision, rear_collision, lateral_collision = False, False, False
             for idx in intersecting_indices:
                 other_polygon = timestep_polygons.bbox_polygons[idx]
-                front_collision, rear_collision, lateral_collision = False, False, False
                 if other_polygon.intersects(ego_front_bumper):
                     front_collision = True
                 elif other_polygon.intersects(ego_rear_bumper):
