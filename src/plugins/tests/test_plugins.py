@@ -23,6 +23,27 @@ def test_plugin_registry_nonexistent_group_returns_empty() -> None:
         registry.get("anything")
 
 
+def test_plugin_registry_reports_load_failure(tmp_path, monkeypatch) -> None:
+    """A registered plugin that fails to import is not reported as missing."""
+    metadata = tmp_path / "broken_plugin-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: broken-plugin\nVersion: 1.0\n"
+    )
+    (metadata / "entry_points.txt").write_text(
+        "[alpasim.test.broken]\nbroken = no_such_module_xyz:Thing\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    registry = PluginRegistry("alpasim.test.broken")
+    assert registry.get_names() == []
+    with pytest.raises(
+        PluginNotFoundError,
+        match="'broken' in alpasim.test.broken is installed but failed to load: "
+        "ModuleNotFoundError",
+    ):
+        registry.get("broken")
+
+
 def test_plugin_registry_get_names_sorted() -> None:
     """get_names() returns sorted list."""
     registry = PluginRegistry("alpasim.scorers")  # typically empty
@@ -40,6 +61,7 @@ def test_get_plugin_info_returns_all_groups() -> None:
         "alpasim.scorers",
         "alpasim.tools",
         "alpasim.configs",
+        "alpasim.route_generators",
     ]
     for group in expected_groups:
         assert group in info

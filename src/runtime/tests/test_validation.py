@@ -26,7 +26,10 @@ from alpasim_runtime.config import (
     UserSimulatorConfig,
     VideoModelConfig,
 )
-from alpasim_runtime.runtime_context import validate_renderer_config
+from alpasim_runtime.runtime_context import (
+    validate_renderer_config,
+    validate_route_generator_config,
+)
 from alpasim_runtime.validation import (
     _log_awaitable_progress,
     gather_versions_from_addresses,
@@ -465,3 +468,39 @@ def test_force_gt_cache_rejects_video_model_renderer() -> None:
     )
     with pytest.raises(ValueError, match="only supported by the sensorsim"):
         validate_renderer_config(config)
+
+
+@pytest.mark.parametrize("route_generator_type", ["MAP", "RECORDED", "NONE"])
+def test_route_generator_config_accepts_builtins(route_generator_type: str) -> None:
+    config = _make_simulator_config()
+    config.user.simulation_config.route_generator_type = route_generator_type
+    validate_route_generator_config(config)
+
+
+def test_route_generator_config_accepts_registered_plugin(monkeypatch) -> None:
+    plugins = pytest.importorskip("alpasim_plugins")
+    monkeypatch.setattr(plugins.route_generators, "_cache", {"custom": object()})
+    config = _make_simulator_config()
+    config.user.simulation_config.route_generator_type = "custom"
+    validate_route_generator_config(config)
+
+
+def test_route_generator_config_rejects_unknown_type_at_startup(monkeypatch) -> None:
+    # A typo must fail before services start, not as one failure per rollout.
+    plugins = pytest.importorskip("alpasim_plugins")
+    monkeypatch.setattr(plugins.route_generators, "_cache", {})
+    config = _make_simulator_config()
+    config.user.simulation_config.route_generator_type = "map"
+    with pytest.raises(plugins.PluginNotFoundError, match="'map' not found"):
+        validate_route_generator_config(config)
+
+
+def test_route_generator_config_warns_on_reserved_plugin_name(
+    monkeypatch, caplog
+) -> None:
+    plugins = pytest.importorskip("alpasim_plugins")
+    monkeypatch.setattr(plugins.route_generators, "_cache", {"MAP": object()})
+    config = _make_simulator_config()
+    with caplog.at_level("WARNING", logger="alpasim_runtime.route_generator"):
+        validate_route_generator_config(config)
+    assert "['MAP'] use reserved built-in names" in caplog.text

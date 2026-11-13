@@ -40,6 +40,7 @@ The available entry-point groups are:
 | `alpasim.configs` | Hydra config directories (auto-discovered by the wizard) |
 | `alpasim.scorers` | Evaluation metric scorers |
 | `alpasim.tools` | CLI tools |
+| `alpasim.route_generators` | Runtime route generators |
 
 ---
 
@@ -82,6 +83,55 @@ uv run alpasim-info                    # should list your new component
 ```
 
 Model plugins can then be referenced by name in driver configs (e.g. `model_type: transfuser`).
+
+### Adding route generators
+
+A route plugin provides a `RouteGenerator` instance via a
+`from_context(recorded_waypoints_in_local, vector_map, *, route_start_offset_m=0.0)`
+classmethod. The recorded waypoints are an `(N, 3)` array in the local frame.
+`vector_map` is a `VectorMap` or `None` when the scene has no map; plugins that
+require map data must handle that case. The returned generator implements the
+runtime's `generate_route(timestamp_us, pose_local_to_rig)` interface.
+
+For example, this minimal plugin reuses recorded routing:
+
+```python
+# my_routes.py
+from alpasim_runtime.route_generator import RouteGeneratorRecorded
+
+
+class CustomRoutes(RouteGeneratorRecorded):
+    @classmethod
+    def from_context(
+        cls, recorded_waypoints_in_local, vector_map, *, route_start_offset_m=0.0
+    ):
+        return cls(recorded_waypoints_in_local, route_start_offset_m)
+```
+
+Declare dependencies on `alpasim_plugins` and `alpasim-runtime` in your package,
+and register the class:
+
+```toml
+[project.entry-points."alpasim.route_generators"]
+custom = "my_routes:CustomRoutes"
+```
+
+Install the package in the **runtime service's environment**, then select it in
+the runtime user configuration:
+
+```yaml
+simulation_config:
+  route_generator_type: custom
+  route_start_offset_m: 0.0
+```
+
+`route_generator_type` accepts the built-in names `MAP`, `RECORDED` and `NONE`,
+or the name of a registered route plugin. The built-in names are reserved: a
+plugin registered under one can never be selected, and the runtime logs a
+warning at startup. The name is resolved when the configuration is parsed, so an
+unknown name raises `PluginNotFoundError` before any rollout starts; it does not
+fall back to a built-in generator. Built-in routing does not need
+`alpasim_plugins` installed.
 
 ### Adding Hydra configs
 

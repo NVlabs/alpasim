@@ -19,6 +19,11 @@ from alpasim_runtime.config import (
     UserSimulatorConfig,
 )
 from alpasim_runtime.endpoints import get_endpoint_addresses
+from alpasim_runtime.route_generator import (
+    BUILTIN_ROUTE_GENERATOR_TYPES,
+    resolve_route_generator_plugin,
+    warn_on_shadowed_route_plugins,
+)
 from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
 from alpasim_runtime.validation import (
     gather_versions_from_addresses,
@@ -185,6 +190,14 @@ def validate_renderer_config(config: SimulatorConfig) -> None:
         )
 
 
+def validate_route_generator_config(config: SimulatorConfig) -> None:
+    """Resolve a plugin route_generator_type at startup, not once per rollout."""
+    route_generator_type = config.user.simulation_config.route_generator_type
+    if route_generator_type not in BUILTIN_ROUTE_GENERATOR_TYPES:
+        resolve_route_generator_plugin(route_generator_type)
+    warn_on_shadowed_route_plugins()
+
+
 def validate_scene_affinity_config(config: SimulatorConfig) -> None:
     """Validate scene-affine dispatch bounds and renderer compatibility."""
     affine = config.user.scene_affine_dispatch
@@ -242,6 +255,7 @@ def parse_simulator_config(
     network_config = typed_parse_config(network_config_path, NetworkSimulatorConfig)
     config = SimulatorConfig(user=user_config, network=network_config)
     validate_renderer_config(config)
+    validate_route_generator_config(config)
     validate_scene_affinity_config(config)
     return config
 
