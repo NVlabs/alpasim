@@ -23,6 +23,7 @@
 !e2e_challenge/starter_kit/
 !e2e_challenge/starter_kit/**
 !pyproject.toml
+!uv.lock
 
 # Exclude specific runtime directories/files we don't need
 src/runtime/build.env
