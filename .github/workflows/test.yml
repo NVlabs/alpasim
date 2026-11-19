@@ -187,6 +187,11 @@ jobs:
 
           git lfs pull --include="src/**/*" || true
 
+          # The wizard imports the generated gRPC modules.
+          cd "${GITHUB_WORKSPACE}/src/grpc"
+          uv sync
+          uv run compile-protos
+
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           uv run alpasim_wizard \
@@ -329,6 +334,11 @@ jobs:
           uv sync
           uv run compile-protos
 
+          # The wizard runs from the workspace and imports the generated modules.
+          cd "${GITHUB_WORKSPACE}/src/grpc"
+          uv sync
+          uv run compile-protos
+
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           # CI runners may expose only one GPU; pin all GPU-backed services to GPU 0.
@@ -339,6 +349,7 @@ jobs:
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            ego_hoods.banks="${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
             services.driver.workdir=/repo/src/driver \
             services.physics.workdir=/repo/src/physics \
             services.runtime.workdir=/repo/src/runtime \
@@ -488,6 +499,11 @@ jobs:
           uv sync
           uv run compile-protos
 
+          # The wizard runs from the workspace and imports the generated modules.
+          cd "${GITHUB_WORKSPACE}/src/grpc"
+          uv sync
+          uv run compile-protos
+
           cd "${GITHUB_WORKSPACE}/src/wizard"
           uv sync
           HF_HOME="${LOCAL_OUTPUT_PATH}/data/huggingface" uv run alpasim_wizard \
@@ -497,6 +513,7 @@ jobs:
             wizard.log_dir="${LOCAL_OUTPUT_PATH}" \
             wizard.run_method=NONE \
             defines.filesystem="${LOCAL_OUTPUT_PATH}/data" \
+            ego_hoods.banks="${LOCAL_OUTPUT_PATH}/data/nre-artifacts/ego-hoods" \
             services.driver.workdir=/repo/src/driver \
             services.physics.workdir=/repo/src/physics \
             services.runtime.workdir=/repo/src/runtime \
