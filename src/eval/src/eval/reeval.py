@@ -48,6 +48,7 @@ class JobLayout:
     scene_cache: str
     sceneset_path: str
     num_processes: int
+    external_artifact_mounts: list[str] = field(default_factory=list)
     sqshcaches: list[str] = field(default_factory=list)
 
 
@@ -61,6 +62,9 @@ def _layout_from_wizard_cfg(
         scene_cache=wizard_cfg["scenes"]["scene_cache"],
         sceneset_path=wizard_cfg["scenes"]["sceneset_path"],
         num_processes=eval_cfg["num_processes"],
+        external_artifact_mounts=wizard_cfg["scenes"].get(
+            "external_artifact_mounts", []
+        ),
         sqshcaches=wizard_cfg.get("wizard", {}).get("sqshcaches", []),
     )
 
@@ -249,6 +253,9 @@ def run_slurm(layout: JobLayout, partition: str, account: str | None) -> int:
     src_mount = f",{repo_src}:/repo/src"
     # Mount the full scene cache so symlinks in the sceneset dir can resolve.
     scene_mount = f",{layout.scene_cache}:/mnt/nre-data"
+    external_scene_mounts = "".join(
+        f",{mount}" for mount in layout.external_artifact_mounts
+    )
     usdz_arg = f"--usdz_glob='/mnt/nre-data/{layout.sceneset_path}/**/*.usdz'"
 
     srun_base = (
@@ -267,7 +274,8 @@ def run_slurm(layout: JobLayout, partition: str, account: str | None) -> int:
             f"mkdir -p $JOB_DIR/txt-logs\n"
             f"exec > $JOB_DIR/txt-logs/reeval_eval.log 2>&1\n"
             f"{srun_base}"
-            f"--container-mounts=$JOB_DIR:/mnt/log_dir{src_mount}{scene_mount} "
+            f"--container-mounts=$JOB_DIR:/mnt/log_dir{src_mount}{scene_mount}"
+            f"{external_scene_mounts} "
             f'bash -c "uv run alpasim-eval '
             f"--asl_search_glob='/mnt/log_dir/rollouts/**/*.asl' "
             f"--config_path=/mnt/log_dir/eval-config.yaml "
@@ -284,7 +292,8 @@ def run_slurm(layout: JobLayout, partition: str, account: str | None) -> int:
         log_dir = layout.job_dirs[0]
         eval_srun = (
             f"{srun_base}"
-            f"--container-mounts={log_dir}:/mnt/log_dir{src_mount}{scene_mount} "
+            f"--container-mounts={log_dir}:/mnt/log_dir{src_mount}{scene_mount}"
+            f"{external_scene_mounts} "
             f'bash -c "uv run alpasim-eval '
             f"--asl_search_glob='/mnt/log_dir/rollouts/**/*.asl' "
             f"--config_path=/mnt/log_dir/eval-config.yaml "

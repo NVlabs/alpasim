@@ -28,10 +28,7 @@ class VehicleConfig:
     Dimensions of the vehicle. It matters mostly for collision detection (physics simulation and KPIs)
     """
 
-    # defaults follow hyperion_8_daimler_s223 spec from the NDAS repo:
-    # https://git-av.nvidia.com/r/plugins/gitiles/ndas/+/refs/heads/main/data/rig/hyperion_8_daimler_s223/vehicle.json
-    # For more information on the conventions, see:
-    # https://git-av.nvidia.com/r/plugins/gitiles/ndas/+/refs/heads/main/src/dw/rig/Vehicle.h
+    # Example sedan parameters.
     aabb_x_m: float = 5.393  # length
     aabb_y_m: float = 2.109  # width
     aabb_z_m: float = 1.503  # height
@@ -266,8 +263,8 @@ class Rig:
                 off_x, off_y, off_z = rig_bbox["centroid"]
                 dim_x, dim_y, dim_z = rig_bbox["dim"]
 
-                # apply the inverse of what NRE does to create the `bbox` field from NV data
-                # https://gitlab-master.nvidia.com/nrs/nre/-/commit/5960d03c5cece299dc3bbb9fcb39dc2b9e81ca54#a3188997f9567d6bd647820cff3545f30bc10bb2_233_256
+                # Recover the rear-bottom midpoint from NuRec's bbox centroid.
+                # https://github.com/NVIDIA/NuRec/blob/ffce3667841691c7fe2ca763c5c10e2949c8ca0e/nurec/utils/ncore_utils.py#L89-L100
                 vehicle_config = VehicleConfig(
                     aabb_x_m=dim_x,
                     aabb_y_m=dim_y,

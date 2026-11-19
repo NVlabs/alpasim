@@ -1,0 +1,24 @@
+defaults:
+  - alpamayo2
+  - /cameras: 6cam_1080
+  - alpamayo2_edge_configs
+  - _self_
+
+model:
+  model_type: alpamayo2_edge
+  checkpoint_path: nvidia/Alpamayo2-Edge
+  # Reinstate the schema defaults that alpamayo2 overrides: the Edge adapter
+  # prepares its inputs from CPU frames and runs eager inference.
+  image_decode_device: cpu
+  diffusion_expert_cuda_graph: false
+
+inference:
+  use_cameras:
+    - camera_cross_left_120fov
+    - camera_front_wide_120fov
+    - camera_cross_right_120fov
+    - camera_rear_left_70fov
+    - camera_rear_right_70fov
+    - camera_front_tele_30fov
+  context_length: 21
+  max_batch_size: 1

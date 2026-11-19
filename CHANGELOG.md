@@ -2,6 +2,24 @@
 This document lists major updates which change UX and require adaptation.
 It should be sorted by date (more recent on top) and link to MRs which introduce the changes.
 
+## November 2026 public sync updates (27.11.26)
+
+- **Alpamayo 2 Edge**: `driver=alpamayo2_edge`; `+exp/presets=alpamayo2_edge_public_2601`
+  runs its model-card protocol ([notes](docs/model_notes/ALPAMAYO2EDGE.md)).
+- **Navigation**: the runtime sends turn-by-turn instructions to drivers. Select
+  `nav_instruction=none`, `geometry` or `v5_anonymized` (anonymized recorded navigation
+  for `public_2601_eval_filtered`, in `data/nav/`).
+- **Ego hoods**: `+ego_textures=public_carline_transformed` re-renders carline hoods
+  into each scene's camera. Note: these hoods greatly affect closed loop perf in Alpamayo
+- **Controllers**: one bicycle model across all speeds and controllers, a new SQP MPC
+  (`controller=sqp`), and a lateral-acceleration limit in the nonlinear MPC. Driving
+  results change.
+- **Evaluation**: leaving the 4 m GT corridor scores zero; off-road scoring ignores
+  overpass edges. Brings in some aspects of the E2E challenge evaluation
+- **Rollouts and scenes**: rollout forking (`RolloutSpec.ego_history`),
+  `scenes.suite_ids`, `scenes.suite_groups`, `scenes.exclude_clip_ids`, and
+  `runtime.simulation_config.write_asl=false`. Features necessary to support AlpaGym
+
 ## August 2026 public sync updates (11.08.26)
 
 This release adds Alpamayo 2 support, improves Alpamayo image processing, and
@@ -33,8 +51,7 @@ caching.
 
 ## Direct pinhole rendering for VaVAM and Transfuser (04.08.26)
 
-[!567](https://gitlab-master.nvidia.com/alpamayo/alpasim/-/merge_requests/567)
-moves the VaVAM and Transfuser camera calibration into
+Move the VaVAM and Transfuser camera calibration into
 `runtime.extra_cameras`, so NuRec (the renderer service) renders the policy's
 OpenCV pinhole view directly without CPU-side FTheta-to-pinhole remapping.
 Driver rectification remains available as an explicit compatibility path for

@@ -35,7 +35,13 @@ class Alpamayo15Model(AlpamayoBaseModel):
 
     @classmethod
     def _variant_init_kwargs(cls, model_cfg: ModelConfig) -> dict[str, Any]:
-        return {"cfg_guidance_weight": model_cfg.cfg_guidance_weight}
+        return {
+            "cfg_guidance_weight": model_cfg.cfg_guidance_weight,
+            "diffusion_expert_cuda_graph": model_cfg.diffusion_expert_cuda_graph,
+            "diffusion_expert_cuda_graph_max_graphs": (
+                model_cfg.diffusion_expert_cuda_graph_max_graphs
+            ),
+        }
 
     def __init__(
         self,
@@ -47,6 +53,8 @@ class Alpamayo15Model(AlpamayoBaseModel):
         top_p: float = 0.98,
         temperature: float = 0.6,
         cfg_guidance_weight: float | None = None,
+        diffusion_expert_cuda_graph: bool = False,
+        diffusion_expert_cuda_graph_max_graphs: int = 4,
         force_determinism: bool = False,
         selection_strategy: TrajectorySelectionStrategy = (
             TrajectorySelectionStrategy.ALWAYS_FIRST
@@ -70,6 +78,10 @@ class Alpamayo15Model(AlpamayoBaseModel):
                 the conditioned and unconditioned velocity fields, which costs a
                 second forward pass and roughly 60 GB VRAM (vs ~40 GB).  A weight
                 of 1.0 reproduces the conditioned field and buys nothing.
+            diffusion_expert_cuda_graph: Replay diffusion expert forwards with
+                exact-shape CUDA graphs.
+            diffusion_expert_cuda_graph_max_graphs: Maximum prompt-shape graphs
+                retained before new shapes use eager execution.
             force_determinism: Whether to make stochastic inference repeatable from
                 each prediction's inference seed.
             selection_strategy: How to pick one of the sampled trajectories.
@@ -88,6 +100,12 @@ class Alpamayo15Model(AlpamayoBaseModel):
             dtype=self.DTYPE,
             attn_implementation=_ATTN_IMPLEMENTATION,
         ).to(device)
+        model.eval()
+        if diffusion_expert_cuda_graph:
+            model.enable_diffusion_expert_cuda_graph(
+                max_batch_size=num_traj_samples,
+                max_graphs=diffusion_expert_cuda_graph_max_graphs,
+            )
         processor = helper.get_processor(model.tokenizer)
 
         self._cfg_guidance_weight = cfg_guidance_weight
@@ -107,6 +125,12 @@ class Alpamayo15Model(AlpamayoBaseModel):
             max_num_distance_points=max_num_distance_points,
             skip_first_n_distance_points=skip_first_n_distance_points,
         )
+
+        if diffusion_expert_cuda_graph:
+            logger.info(
+                "Diffusion expert CUDA graphs enabled with at most %d signatures",
+                diffusion_expert_cuda_graph_max_graphs,
+            )
 
         if cfg_guidance_weight is not None:
             logger.info(

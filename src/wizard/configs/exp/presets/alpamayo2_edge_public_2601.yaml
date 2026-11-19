@@ -1,0 +1,43 @@
+# @package _global_
+
+# Alpamayo 2 Edge closed-loop evaluation matching its model card: 875
+# public_2601 scenes, three rollouts each, one chain of thought with six
+# trajectory candidates, the candidate closest laterally to the previous plan.
+#
+#   uv run alpasim_wizard deploy=<target> topology=<layout> \
+#     +exp/presets=alpamayo2_edge_public_2601 wizard.log_dir=<dir>
+#
+# Navigation is the model card's V5 turn-by-turn text, anonymized: generic road types
+# instead of street names, and no GPS (nav_instruction=v5_anonymized; data/nav/README.md
+# lists the scenes it covers).
+#
+# The model card's per-scene ego hood banks are not yet public, so this preset uses the
+# carline images re-rendered into each scene's camera. The per-scene hood banks will be
+# added once they are cleared for release.
+
+defaults:
+  - /ego_textures: public_carline_transformed
+  - override /driver: alpamayo2_edge
+  - override /nav_instruction: v5_anonymized
+  - _self_
+
+scenes:
+  clip_ids: null
+  suite_ids: [public_2601_eval_filtered]
+
+wizard:
+  timeout: 7200
+
+runtime:
+  simulation_config:
+    n_rollouts: 3
+    n_sim_steps: 199
+    route_generator_type: RECORDED
+
+driver:
+  model:
+    num_trajectory_samples: 6
+    trajectory_selection:
+      strategy: CLOSEST_LATERAL
+      max_num_distance_points: 64
+      skip_first_n_distance_points: 0

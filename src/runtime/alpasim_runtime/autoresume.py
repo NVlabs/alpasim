@@ -23,7 +23,7 @@ def mark_rollout_complete(save_path_root: str, batch_uuid: str) -> None:
     """
     Mark the rollout as complete by creating a file in the batch directory
     Args:
-        save_path_root: asl scene directory (i.e. <wizard_log_dir>/<scene_id>/)
+        save_path_root: ASL scene directory (``<rollouts>/<scene_key>/``)
         batch_uuid: the directory name of the batch
     """
     marker_file = os.path.join(
@@ -31,39 +31,40 @@ def mark_rollout_complete(save_path_root: str, batch_uuid: str) -> None:
         batch_uuid,
         TRACKER_FILE_NAME,
     )
+    os.makedirs(os.path.dirname(marker_file), exist_ok=True)
     # touch the file to mark the session as complete. allow existing file to be overwritten
     with open(marker_file, "w"):
         pass
 
 
-def find_num_complete_rollouts(log_dir_root: str, scene_id: str) -> int:
+def find_num_complete_rollouts(log_dir_root: str, scene_key: str) -> int:
     """
     Find the number of completed rollouts in the scene directory
     Args:
         log_dir_root: root directory of the logs (i.e. wizard_log_dir)
-        scene_id: scene id
+        scene_key: derived scene path key
     Returns:
         number of completed rollouts as measured by the presence of the tracker file
     """
-    save_path_root = os.path.join(log_dir_root, scene_id)
+    save_path_root = os.path.join(log_dir_root, scene_key)
     tracker_file_glob = os.path.join(save_path_root, "*", TRACKER_FILE_NAME)
     tracker_files = glob.glob(tracker_file_glob)
     num_finished_rollouts = len(tracker_files)
     logger.info(
-        f"Autoresume {scene_id}: found {num_finished_rollouts} completed rollouts with "
+        f"Autoresume {scene_key}: found {num_finished_rollouts} completed rollouts with "
         f"{tracker_file_glob=}"
     )
     return num_finished_rollouts
 
 
-def remove_incomplete_rollouts(log_dir_root: str, scene_id: str) -> None:
+def remove_incomplete_rollouts(log_dir_root: str, scene_key: str) -> None:
     """
     Remove incomplete rollouts (those without the tracker file) in the scene directory
     Args:
         log_dir_root: root directory of the logs (i.e. wizard_log_dir)
-        scene_id: scene id
+        scene_key: derived scene path key
     """
-    save_path_root = os.path.join(log_dir_root, scene_id)
+    save_path_root = os.path.join(log_dir_root, scene_key)
     if not os.path.isdir(save_path_root):  # no existing results
         return
     for item in os.listdir(save_path_root):

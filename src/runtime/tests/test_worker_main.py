@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import logging
 from multiprocessing import Queue
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -23,7 +25,12 @@ from alpasim_runtime.worker.ipc import (
     ServiceEndpoints,
 )
 from alpasim_runtime.worker.main import run_single_rollout, run_worker_loop
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
 from prometheus_client import generate_latest
+
+
+def _scene(clip_id: str) -> Scene:
+    return Scene(ClipDataSource(clip_id, f"uuid-for-{clip_id}"), T0_AUTO)
 
 
 @pytest.mark.asyncio
@@ -45,6 +52,8 @@ async def test_run_single_rollout_reports_error_code(
     error: Exception,
     expected_code: int,
 ) -> None:
+    create_kwargs: dict[str, object] = {}
+    overrides = {"bad-scene": object()}
     for service in [
         "DriverService",
         "PhysicsService",
@@ -58,6 +67,7 @@ async def test_run_single_rollout_reports_error_code(
         )
 
     def _raise(**kwargs):
+        create_kwargs.update(kwargs)
         raise error
 
     monkeypatch.setattr(
@@ -69,7 +79,7 @@ async def test_run_single_rollout_reports_error_code(
         job=AssignedRolloutJob(
             request_id="req-1",
             job_id="job-1",
-            scene_id="bad-scene",
+            scene=_scene("bad-scene"),
             rollout_spec_index=0,
             endpoints=ServiceEndpoints(
                 driver=ServiceAddress("localhost:10001", skip=False),
@@ -80,21 +90,25 @@ async def test_run_single_rollout_reports_error_code(
             ),
             dispatch_kind="fifo",
             scheduler_wait_seconds=0.0,
+            ego_history_bytes=b"serialized-ego-history",
         ),
         user_config=SimpleNamespace(
             renderer=RendererConfig(kind=RendererKind.sensorsim),
             simulation_config=MagicMock(),
         ),
-        data_source=MagicMock(),
+        data_source_loader=MagicMock(),
         camera_catalog=MagicMock(),
         version_ids=MagicMock(),
         rollouts_dir="/tmp",
         eval_config=MagicMock(),
         eval_executor=MagicMock(),
+        ego_mask_overrides=overrides,
     )
 
     assert result.success is False
     assert result.error_code == expected_code
+    assert create_kwargs["ego_history_bytes"] == b"serialized-ego-history"
+    assert create_kwargs["ego_mask_overrides"] is overrides
 
 
 @pytest.mark.asyncio
@@ -107,17 +121,19 @@ async def test_run_worker_loop_uses_parent_version_ids(
     async def _fake_run_single_rollout(
         job,
         user_config,
-        data_source,
+        data_source_loader,
         camera_catalog,
         version_ids,
         rollouts_dir,
         eval_config,
         eval_executor=None,
         force_gt_frame_cache=None,
+        ego_mask_overrides=None,
+        nav_routes=None,
     ) -> JobResult:
         del (
             user_config,
-            data_source,
+            data_source_loader,
             camera_catalog,
             rollouts_dir,
             eval_config,
@@ -151,7 +167,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
     job = AssignedRolloutJob(
         request_id="req-1",
         job_id="job-1",
-        scene_id="scene-1",
+        scene=_scene("scene-1"),
         rollout_spec_index=0,
         endpoints=endpoints,
         dispatch_kind="fifo",
@@ -169,8 +185,8 @@ async def test_run_worker_loop_uses_parent_version_ids(
     user_config = MagicMock()
     user_config.endpoints.startup_timeout_s = 1
     user_config.simulation_config.force_gt_frame_cache.enabled = False
-    scene_loader = MagicMock()
-    scene_loader.get_data_source.return_value = MagicMock()
+    data_source_loader = MagicMock()
+    data_source_loader.get_data_source.return_value = MagicMock()
 
     completed = await run_worker_loop(
         worker_id=0,
@@ -178,7 +194,7 @@ async def test_run_worker_loop_uses_parent_version_ids(
         result_queue=result_queue,
         num_consumers=1,
         user_config=user_config,
-        scene_loader=scene_loader,
+        data_source_loader=data_source_loader,
         camera_catalog=MagicMock(),
         version_ids=parent_version_ids,
         rollouts_dir="/tmp",
@@ -193,6 +209,59 @@ async def test_run_worker_loop_uses_parent_version_ids(
     assert result.rollout_spec_index == 0
     assert result.success is True
     assert seen_version_ids is parent_version_ids
+
+
+@pytest.mark.asyncio
+async def test_run_worker_loop_reports_materialization_failure_without_teardown() -> (
+    None
+):
+    loader_error = OSError("temporary artifact read failure")
+    job = AssignedRolloutJob(
+        request_id="req-1",
+        job_id="job-1",
+        scene=_scene("scene-1"),
+        rollout_spec_index=0,
+        endpoints=ServiceEndpoints(
+            driver=ServiceAddress("driver", skip=False),
+            renderer=ServiceAddress("renderer", skip=False),
+            physics=ServiceAddress("physics", skip=False),
+            trafficsim=ServiceAddress("trafficsim", skip=False),
+            controller=ServiceAddress("controller", skip=False),
+        ),
+        dispatch_kind="fifo",
+        scheduler_wait_seconds=0.0,
+    )
+    job_queue: Queue = Queue()
+    result_queue: Queue = Queue()
+    job_queue.put(job)
+    job_queue.put(SHUTDOWN_SENTINEL)
+    data_source_loader = MagicMock()
+    data_source_loader.get_data_source.side_effect = loader_error
+    user_config = MagicMock()
+    user_config.simulation_config.force_gt_frame_cache.enabled = False
+
+    completed = await run_worker_loop(
+        worker_id=0,
+        job_queue=job_queue,
+        result_queue=result_queue,
+        num_consumers=1,
+        user_config=user_config,
+        data_source_loader=data_source_loader,
+        camera_catalog=MagicMock(),
+        version_ids=MagicMock(),
+        rollouts_dir="/tmp",
+        eval_config=MagicMock(),
+        parent_pid=None,
+    )
+
+    result = result_queue.get(timeout=1)
+    assert completed == 1
+    assert result.request_id == job.request_id
+    assert result.job_id == job.job_id
+    assert result.success is False
+    assert result.error_code == runtime_pb2.ROLLOUT_ERROR_CODE_UNSPECIFIED
+    assert str(loader_error) in result.error
+    data_source_loader.get_data_source.assert_called_once_with("scene-1")
 
 
 @pytest.mark.asyncio
@@ -216,7 +285,7 @@ async def test_run_worker_loop_clears_active_metric_when_rollout_raises(
         AssignedRolloutJob(
             request_id="req-1",
             job_id="job-1",
-            scene_id="scene-1",
+            scene=_scene("scene-1"),
             rollout_spec_index=0,
             endpoints=ServiceEndpoints(
                 driver=ServiceAddress("driver", skip=False),
@@ -230,14 +299,14 @@ async def test_run_worker_loop_clears_active_metric_when_rollout_raises(
         )
     )
 
-    with pytest.raises(ExceptionGroup):
+    with pytest.raises(ExceptionGroup):  # noqa: F821
         await run_worker_loop(
             worker_id=4,
             job_queue=job_queue,
             result_queue=Queue(),
             num_consumers=1,
             user_config=MagicMock(),
-            scene_loader=MagicMock(),
+            data_source_loader=MagicMock(),
             camera_catalog=MagicMock(),
             version_ids=MagicMock(),
             rollouts_dir="/tmp",
@@ -248,8 +317,7 @@ async def test_run_worker_loop_clears_active_metric_when_rollout_raises(
     metrics = generate_latest(telemetry.registry).decode("utf-8")
     assert 'alpasim_renderer_active_rollouts{worker_id="4"} 0.0' in metrics
     assert (
-        'alpasim_renderer_rollouts_started_total{kind="cold_replica",'
-        'worker_id="4"} 1.0'
+        'alpasim_renderer_rollouts_started_total{kind="cold_replica",worker_id="4"} 1.0'
     ) in metrics
     assert (
         'alpasim_renderer_scheduler_wait_seconds_sum{kind="cold_replica",'
@@ -308,7 +376,9 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
 
     def _fake_unbound_create(**kwargs):
         captured["unbound_create_kwargs"] = kwargs
-        return SimpleNamespace(rollout_uuid="rollout-uuid", scene_id="scene-1")
+        return SimpleNamespace(
+            rollout_uuid="rollout-uuid",
+        )
 
     monkeypatch.setattr(
         "alpasim_runtime.worker.main.UnboundRollout.create",
@@ -327,7 +397,7 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
     job = AssignedRolloutJob(
         request_id="req-1",
         job_id="job-1",
-        scene_id="scene-1",
+        scene=_scene("scene-1"),
         rollout_spec_index=0,
         endpoints=ServiceEndpoints(
             driver=ServiceAddress("localhost:10001", skip=False),
@@ -349,10 +419,12 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
     )
 
     data_source = MagicMock()
+    data_source_loader = MagicMock()
+    data_source_loader.get_data_source.return_value = data_source
     result = await run_single_rollout(
         job=job,
         user_config=user_config,
-        data_source=data_source,
+        data_source_loader=data_source_loader,
         camera_catalog=MagicMock(),
         version_ids=MagicMock(),
         rollouts_dir="/tmp",
@@ -372,3 +444,68 @@ async def test_run_single_rollout_uses_builtin_video_model_renderer(
     assert captured["rollout_kwargs"]["data_source"] is data_source
     # Renderer-specific artifact access stays behind data_source.
     assert "artifact_path" not in captured["rollout_kwargs"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_level", [logging.INFO, logging.WARNING])
+async def test_worker_logging_respects_configured_level(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    log_level: int,
+) -> None:
+    """Worker file and console logs retain warnings and honor the selected level."""
+    from alpasim_runtime.worker import main as worker
+
+    monkeypatch.setattr(
+        worker,
+        "typed_parse_config",
+        lambda *_: SimpleNamespace(extra_cameras=[]),
+    )
+    monkeypatch.setattr(worker, "build_data_source_loader", lambda _: None)
+    names = ["alpasim_runtime", "alpasim_utils", "alpasim_grpc"]
+
+    async def emit_logs(**kwargs) -> None:
+        for name in names:
+            logging.getLogger(name).info("worker-test-info %s", name)
+            logging.getLogger(name).warning("worker-test-warning %s", name)
+
+    monkeypatch.setattr(worker, "run_worker_loop", emit_logs)
+    args = SimpleNamespace(
+        shared_rpc_tracking=None,
+        user_config_path="unused.yaml",
+        log_dir=str(tmp_path),
+        worker_id=0,
+        num_workers=2,
+        num_consumers=1,
+        telemetry_port=0,
+        log_level=log_level,
+        job_queue=SimpleNamespace(qsize=lambda: 0),
+        result_queue=None,
+        eval_config=None,
+        version_ids=None,
+        parent_pid=None,
+        ego_mask_overrides=None,
+        nav_routes=None,
+    )
+    loggers = [logging.getLogger(name) for name in names]
+    saved = [(log.level, list(log.handlers), log.propagate) for log in loggers]
+    try:
+        await worker.worker_async_main(args)
+        outputs = [
+            capsys.readouterr().out,
+            (tmp_path / "txt-logs/runtime_worker_0.log").read_text(),
+        ]
+        for output in outputs:
+            for name in names:
+                assert f"worker-test-warning {name}" in output
+                assert (f"worker-test-info {name}" in output) == (
+                    log_level == logging.INFO
+                )
+    finally:
+        for log, (level, handlers, propagate) in zip(loggers, saved, strict=True):
+            for handler in log.handlers:
+                handler.close()
+            log.handlers[:] = handlers
+            log.setLevel(level)
+            log.propagate = propagate

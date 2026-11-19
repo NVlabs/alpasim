@@ -6,7 +6,7 @@
 This is the canonical path from the USDZ scene's recorded calibration to a
 runtime ``CameraDefinition`` carrying real ftheta intrinsics and the actual
 sensor-mount pose.  Avoids the previous degenerate fallback in
-``VideoModelService._register_scene_cameras`` (synthesized 60deg equidistant
+``VideoModelService._register_clip_cameras`` (synthesized 60deg equidistant
 FTheta + ``Pose.identity()`` rig_to_camera), which placed the camera at the
 rig origin and made the world model render the scene from ground level.
 

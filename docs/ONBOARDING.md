@@ -6,7 +6,7 @@ Alpasim depends on access to the following:
   - Used for downloading simulation artifacts
   - For new runs, use the recommended
     [26.01 release](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release).
-    See [Test Suites & Scenes](../data/scenes/README.md) for release selection,
+    See [Scene Data](../data/scenes/README.md) for release selection,
     legacy datasets, and exact run commands.
   - See info on data
     [here](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/blob/main/README.md#dataset-format)
@@ -66,7 +66,7 @@ source setup_local_env.sh
 # Or install selectively:
 uv sync --extra wizard                           # wizard + transitive deps only
 uv sync --extra all                              # all core packages
-uv sync --extra all --extra transfuser_driver    # core + transfuser_driver plugin
+uv sync --extra all --extra transfuser           # core + transfuser_driver plugin
 
 # Single-package install from a subdirectory also works:
 cd src/wizard && uv sync

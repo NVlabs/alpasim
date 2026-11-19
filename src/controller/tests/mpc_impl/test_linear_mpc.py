@@ -93,7 +93,7 @@ class TestLinearMPCComputeControl:
                 timestamp_us=0,
             )
         )
-        state[3] = controller._vehicle_params.kinematic_threshold_speed
+        state[3] = 5.0
         at_threshold = controller.compute_control(
             ControllerInput(
                 state=state,
@@ -117,46 +117,38 @@ class TestLinearMPCLinearization:
         state = np.zeros(8)
         state[3] = 10.0  # Need non-zero velocity for dynamic model
 
-        A_d, B_d = controller._linearize_dynamics(state)
+        A_d, B_d, residual = controller._linearize_dynamics(state)
 
         assert A_d.shape == (8, 8)
         assert B_d.shape == (8, 2)
 
-    def test_linearize_dynamics_kinematic_model(self):
-        """At low speeds, should use kinematic model."""
+    def test_linearize_dynamics_low_speed(self):
+        """The discrete model remains finite at low speeds."""
         controller = LinearMPC()
 
-        # Low speed - should use kinematic model
         state = np.zeros(8)
-        state[3] = 1.0  # vx < kinematic_threshold_speed (5.0)
+        state[3] = 1.0
 
-        A_d, B_d = controller._linearize_dynamics(state)
+        A_d, B_d, residual = controller._linearize_dynamics(state)
 
         # Should still produce valid matrices
         assert not np.isnan(A_d).any()
         assert not np.isnan(B_d).any()
 
-    def test_kinematic_model_preserves_steady_turning_manifold(self):
-        """Steady low-speed lateral velocity and yaw rate should be preserved."""
+    def test_affine_linearization_preserves_operating_point_prediction(self):
+        """Product derivatives must not double the operating-point contribution."""
         controller = LinearMPC()
-        params = controller._vehicle_params
-        velocity = params.kinematic_threshold_speed - 0.01
-        steering = 0.25
+        state = np.array([0.1, 0.2, 0.05, 4.99, 0.3, 0.2, 0.1, 0.4])
+        model = VehicleModel(np.array([state[3], 0.0]), 0.0)
+        model.state[:] = state
+        model.advance(np.zeros(2), controller.dt_mpc)
 
-        state = np.zeros(controller.NX)
-        state[controller.IVX] = velocity
-        state[controller.IVY] = (
-            velocity * steering * params.l_rig_to_cg / params.wheelbase
+        A_d, B_d, residual = controller._linearize_dynamics(state)
+        np.testing.assert_allclose(
+            A_d @ state + B_d @ np.zeros(2) + residual,
+            model.state,
+            atol=1e-12,
         )
-        state[controller.IYAW_RATE] = velocity * steering / params.wheelbase
-        state[controller.ISTEERING] = steering
-        command = np.array([steering, 0.0])
-
-        A_d, B_d = controller._linearize_dynamics(state)
-        next_state = A_d @ state + B_d @ command
-
-        indices = [controller.IVY, controller.IYAW_RATE]
-        np.testing.assert_allclose(next_state[indices], state[indices], atol=1e-12)
 
     def test_linearize_dynamics_dynamic_model(self):
         """At higher speeds, should use dynamic model."""
@@ -164,9 +156,9 @@ class TestLinearMPCLinearization:
 
         # Higher speed - should use dynamic model
         state = np.zeros(8)
-        state[3] = 15.0  # vx > kinematic_threshold_speed (5.0)
+        state[3] = 15.0
 
-        A_d, B_d = controller._linearize_dynamics(state)
+        A_d, B_d, residual = controller._linearize_dynamics(state)
 
         # Should produce valid matrices
         assert not np.isnan(A_d).any()

@@ -8,9 +8,7 @@ These tests define the *desired* behaviour after the VAM batching rework:
   - Batch-tokenize all frames in a single GPU call
   - predict_batch overridden for true batched inference
   - predict() delegates to predict_batch()
-
-Many of these tests are expected to **fail** against the current
-implementation — that is intentional (red phase of TDD).
+  - Image preprocessing done via batched GPU ops (no PIL)
 """
 
 from __future__ import annotations
@@ -20,6 +18,7 @@ from unittest import mock
 import numpy as np
 import pytest
 import torch
+import torchvision.transforms.v2.functional as TF
 from alpasim_driver.models.base import (
     CameraFrame,
     DriveCommand,
@@ -33,7 +32,7 @@ from alpasim_driver.models.vam_model import VAMModel
 # ---------------------------------------------------------------------------
 CONTEXT_LENGTH = 8
 CAMERA_ID = "front_center"
-IMG_H, IMG_W = 900, 1600  # NeuroNCAP expected dimensions
+IMG_H, IMG_W = 1080, 1920  # real camera resolution, preprocessing handles resize
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +65,7 @@ def _make_prediction_input(
         inference_seed=seed,
         previous_plan=None,
         route=None,
+        navigation=None,
     )
 
 
@@ -99,9 +99,6 @@ def vam_model():
             "alpasim_driver.models.vam_model.load_inference_VAM",
         ) as mock_load_vam,
         mock.patch("torch.jit.load") as mock_jit_load,
-        mock.patch(
-            "alpasim_driver.models.vam_model.NeuroNCAPTransform",
-        ) as mock_transform,
     ):
         # -- tokenizer mock --
         mock_tokenizer = mock.MagicMock(name="tokenizer")
@@ -112,10 +109,6 @@ def vam_model():
         mock_vam = mock.MagicMock(name="vam")
         mock_vam.side_effect = _vam_fn
         mock_load_vam.return_value = mock_vam
-
-        # -- preprocessing mock (returns CHW float tensor) --
-        mock_preproc = mock_transform.return_value
-        mock_preproc.side_effect = lambda img: torch.rand(3, 224, 224)
 
         model = VAMModel(
             checkpoint_path="/fake/checkpoint.pt",
@@ -270,3 +263,55 @@ class TestNoCacheCrossContamination:
         assert not hasattr(
             model, "_token_cache"
         ), "VAMModel still has _token_cache; it should be removed"
+
+
+# ===================================================================
+# TestGPUPreprocessing
+# ===================================================================
+class TestGPUPreprocessing:
+    """Tests verifying the GPU-batched preprocessing pipeline."""
+
+    def _reference_pipeline(self, image: np.ndarray) -> torch.Tensor:
+        """Run the PIL camera resize and NeuroNCAP tensor downscale.
+
+        Returns a (C, H, W) float32 tensor normalized to [-1, 1].
+        """
+        from PIL import Image
+
+        h, w = image.shape[:2]
+        target_h, target_w = 900, 1600
+
+        # Step 1: resize to height 900, preserving aspect ratio (PIL bilinear)
+        pil_img = Image.fromarray(image)
+        scale = target_h / h
+        new_w = int(w * scale)
+        pil_img = pil_img.resize((new_w, target_h), Image.Resampling.BILINEAR)
+
+        # Step 2: center crop to 1600 width if needed
+        if new_w > target_w:
+            left = (new_w - target_w) // 2
+            pil_img = pil_img.crop((left, 0, left + target_w, target_h))
+
+        # Step 3: NeuroNCAPTransform downsamples the CHW uint8 tensor.
+        tensor = torch.from_numpy(np.array(pil_img)).permute(2, 0, 1)
+        tensor = TF.resize(tensor, [288, 512], antialias=True)
+
+        # Step 4: normalize to [-1, 1]
+        return tensor.float() / 127.5 - 1.0
+
+    def test_model_preprocess_batch_matches_pil_pipeline(self, vam_model):
+        """Fused preprocessing stays close to the reference pipeline."""
+        model, _, _ = vam_model
+        rng = np.random.RandomState(42)
+        images = [
+            rng.randint(0, 256, (1080, 1920, 3), dtype=np.uint8) for _ in range(2)
+        ]
+
+        reference = torch.stack([self._reference_pipeline(image) for image in images])
+        model_out = model._preprocess_batch(images)
+
+        assert model_out.shape == reference.shape
+        max_diff = (reference - model_out).abs().max().item()
+        assert (
+            max_diff < 16 / 255
+        ), f"Max pixel difference {max_diff:.4f} exceeds tolerance 16/255"

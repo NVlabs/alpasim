@@ -137,11 +137,14 @@ def test_render_metrics_omits_unobserved_groups(tmp_path: Path) -> None:
         utime=100,
         stime=50,
         resident_pages=10,
-        environ=["CUDA_VISIBLE_DEVICES=3"],
     )
 
     process_samples = collect_processes(tmp_path, {"101"})
-    payload = render_metrics(process_samples, duration=0.125).decode("utf-8")
+    payload = render_metrics(
+        process_samples,
+        duration=0.125,
+        gpu_indices=(3,),
+    ).decode("utf-8")
 
     assert 'namedprocess_namegroup_cpu_seconds_total{groupname="physics"}' in payload
     assert (

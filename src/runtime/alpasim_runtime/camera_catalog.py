@@ -240,8 +240,8 @@ class CameraCatalog:
                 )
             self._local_overrides[cfg.logical_id] = cfg
 
-        self._scene_definitions: Dict[str, Dict[str, CameraDefinition]] = {}
-        self._scene_locks: Dict[str, asyncio.Lock] = {}
+        self._clip_definitions: Dict[str, Dict[str, CameraDefinition]] = {}
+        self._clip_locks: Dict[str, asyncio.Lock] = {}
 
     def _apply_override(
         self,
@@ -349,81 +349,79 @@ class CameraCatalog:
 
     async def merge_local_and_sensorsim_cameras(
         self,
-        scene_id: str,
+        clip_id: str,
         sensorsim_cameras: Iterable[
             sensorsim_pb2.AvailableCamerasReturn.AvailableCamera
         ],
     ) -> None:
-        """Ensure `scene_id` has merged definitions using provided sensorsim data."""
-        if scene_id in self._scene_definitions:
+        """Ensure `clip_id` has merged definitions using provided sensorsim data."""
+        if clip_id in self._clip_definitions:
             return
 
-        lock = self._scene_locks.setdefault(scene_id, asyncio.Lock())
+        lock = self._clip_locks.setdefault(clip_id, asyncio.Lock())
         async with lock:
-            if scene_id not in self._scene_definitions:
-                scene_defs: Dict[str, CameraDefinition] = {}
+            if clip_id not in self._clip_definitions:
+                clip_defs: Dict[str, CameraDefinition] = {}
                 for camera in sensorsim_cameras:
                     key = camera.logical_id
-                    scene_defs[key] = CameraDefinition.from_proto(camera)
+                    clip_defs[key] = CameraDefinition.from_proto(camera)
 
                 # Check that all local overrides reference cameras available
                 # in sensorsim (sensorsim only supports changing, not adding).
                 missing_cameras = set(self._local_overrides.keys()) - set(
-                    scene_defs.keys()
+                    clip_defs.keys()
                 )
                 if missing_cameras:
                     raise ValueError(
                         f"Local camera definitions {missing_cameras} are not "
-                        f"available in sensorsim for scene '{scene_id}'."
+                        f"available in sensorsim for clip '{clip_id}'."
                     )
 
                 # Apply local overrides field-by-field
                 if self._local_overrides:
                     logger.info(
-                        "Applying %d camera override(s) for scene '%s': %s",
+                        "Applying %d camera override(s) for clip '%s': %s",
                         len(self._local_overrides),
-                        scene_id,
+                        clip_id,
                         list(self._local_overrides.keys()),
                     )
                 for logical_id, override in self._local_overrides.items():
-                    base = scene_defs[logical_id]
-                    scene_defs[logical_id] = self._apply_override(base, override)
+                    base = clip_defs[logical_id]
+                    clip_defs[logical_id] = self._apply_override(base, override)
 
-                self._scene_definitions[scene_id] = scene_defs
+                self._clip_definitions[clip_id] = clip_defs
 
-    def get_camera_definitions(self, scene_id: str) -> Dict[str, CameraDefinition]:
-        """Return copy of the cached camera definitions for `scene_id`."""
+    def get_camera_definitions(self, clip_id: str) -> Dict[str, CameraDefinition]:
+        """Return copy of the cached camera definitions for `clip_id`."""
         return {
-            key: defn.copy() for key, defn in self._scene_definitions[scene_id].items()
+            key: defn.copy() for key, defn in self._clip_definitions[clip_id].items()
         }
 
-    def get_camera_definition(self, scene_id: str, logical_id: str) -> CameraDefinition:
-        """Return copy of cached camera definition for `logical_id`, `scene_id`."""
-        return self._scene_definitions[scene_id][logical_id].copy()
+    def get_camera_definition(self, clip_id: str, logical_id: str) -> CameraDefinition:
+        """Return copy of cached camera definition for `logical_id`, `clip_id`."""
+        return self._clip_definitions[clip_id][logical_id].copy()
 
-    def ensure_camera_defined(self, scene_id: str, logical_id: str) -> None:
-        """Raise if `logical_id` is unknown for `scene_id`."""
-        if logical_id not in self._scene_definitions[scene_id]:
-            raise KeyError(
-                f"Camera '{logical_id}' is not defined for scene '{scene_id}'"
-            )
+    def ensure_camera_defined(self, clip_id: str, logical_id: str) -> None:
+        """Raise if `logical_id` is unknown for `clip_id`."""
+        if logical_id not in self._clip_definitions[clip_id]:
+            raise KeyError(f"Camera '{logical_id}' is not defined for clip '{clip_id}'")
 
     def get_local_overrides(self) -> Dict[str, CameraDefinitionConfig]:
         """Return a shallow copy of locally configured camera overrides."""
         return dict(self._local_overrides)
 
-    def register_scene_definitions(
-        self, scene_id: str, scene_defs: Dict[str, CameraDefinition]
+    def register_clip_definitions(
+        self, clip_id: str, clip_defs: Dict[str, CameraDefinition]
     ) -> None:
-        """Register camera definitions for a scene without querying sensorsim.
+        """Register camera definitions for a clip without querying sensorsim.
 
         This is useful for renderer backends that provide their own camera
         definitions (for example, the video-model renderer) and do not
         rely on sensorsim for camera discovery.
         """
-        self._scene_definitions[scene_id] = {
+        self._clip_definitions[clip_id] = {
             logical_id: definition.copy()
-            for logical_id, definition in scene_defs.items()
+            for logical_id, definition in clip_defs.items()
         }
 
 

@@ -11,7 +11,10 @@ wizard:
 runtime:
   simulation_config:
     n_rollouts: 3
+    # No generated route, so no route-derived navigation text either.
     route_generator_type: NONE
+    nav_instruction:
+      source: none
     cameras:
       - logical_id: camera_cross_left_120fov
         height: 1080

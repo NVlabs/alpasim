@@ -80,4 +80,15 @@ message RunControllerAndVehicleModelResponse {
   // Contains intermediate states at pose_reporting_interval_us boundaries
   // followed by the final state at future_time_us.
   repeated PropagatedState states = 6;
+
+  // Counts of MPC updates performed for this request, excluding propagation
+  // with a held command and inner SQP iterations. Failed updates use the
+  // controller's fallback command; they still contribute to solve_count.
+  message SolverStats {
+    uint32 solve_count = 1;
+    uint32 failed_solve_count = 2;
+  }
+
+  // Absence means diagnostics are unsupported, rather than zero solves.
+  SolverStats solver_stats = 7;
 }

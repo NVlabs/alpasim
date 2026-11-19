@@ -23,6 +23,9 @@ model:
   # Decode on the GPU, so the vision processor resizes there too.
   image_decode_device: cuda
   num_trajectory_samples: 1
+  # Lazily capture exact expert signatures. Set false to use eager expert forwards.
+  diffusion_expert_cuda_graph: true
+  diffusion_expert_cuda_graph_max_graphs: 4
   trajectory_selection:
     strategy: ALWAYS_FIRST  # [ALWAYS_FIRST, CLOSEST_3D, CLOSEST_LATERAL]
     max_num_distance_points: 64

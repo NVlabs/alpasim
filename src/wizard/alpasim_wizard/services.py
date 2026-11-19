@@ -14,9 +14,19 @@ from importlib.resources import files as resource_files
 from typing import Any, Iterator, List, Literal
 
 from .context import WizardContext
-from .schema import ContainerConfig, RunMethod, RunMode, ServiceConfig
+from .schema import ContainerConfig, RunMode, ServiceConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_service_environments(name: str, environments: list[str]) -> None:
+    for environment in environments:
+        variable = environment.partition("=")[0]
+        if variable in ("CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES"):
+            raise ValueError(
+                f"services.{name}.environments cannot set {variable}; "
+                "GPU visibility is owned by the deployment"
+            )
 
 
 def resolve_prometheus_command(context: WizardContext) -> str:
@@ -182,6 +192,8 @@ class ContainerDefinition:
         if not service_instances:
             raise ValueError("Must provide at least one service instance")
 
+        _validate_service_environments(name, service_config.environments)
+
         # Note: all service instances share the same ServiceConfig, volumes and environments
         first_instance = service_instances[0]
 
@@ -298,7 +310,17 @@ def build_container_set(
         ContainerSet populated with containers for all configured services
     """
     cfg = context.cfg
-    num_gpus = context.num_gpus
+    gpu_pool = tuple(
+        range(len(context.gpu_allocation))
+        if cfg.wizard.gpu_slots is None
+        else cfg.wizard.gpu_slots
+    )
+    if len(gpu_pool) != len(set(gpu_pool)):
+        raise ValueError("wizard.gpu_slots must not contain duplicate slots")
+    gpu_devices = tuple(context.resolve_gpu_slot(slot) for slot in gpu_pool)
+    logger.info(
+        "Wizard GPU allocation: slots %s map to devices %s", gpu_pool, gpu_devices
+    )
 
     # Overwrite from config
     use_address_string = (
@@ -333,27 +355,20 @@ def build_container_set(
                 f"replicas_per_container must be >= 1, got {replicas_per_container}"
             )
 
-        # Validate GPU configuration
-        if (
-            service_config.gpus is not None
-            and len(service_config.gpus) > 0
-            and num_gpus > 0
-            and not all(gpu_id < num_gpus for gpu_id in service_config.gpus)
-        ):
-            raise RuntimeError(
-                f"Service {service_name} requested GPUs {service_config.gpus} "
-                f"but only 0 .. {num_gpus - 1} are available."
-            )
+        service_gpus = service_config.gpus or []
+        if any(slot < 0 for slot in service_gpus):
+            raise ValueError("Service GPU slots must be non-negative")
+        service_gpus = [gpu_pool[slot] for slot in service_gpus]
 
         # Determine number of containers
         # If no GPUs specified, create a single container
-        # Otherwise, create one container per GPU
-        if service_config.gpus is None or len(service_config.gpus) == 0:
+        # Otherwise, create one container per gpus entry (duplicates allowed)
+        if not service_gpus:
             num_containers = 1
             gpu_assigner = create_gpu_assigner(None)  # No GPUs
         else:
-            num_containers = len(service_config.gpus)
-            gpu_assigner = create_gpu_assigner(service_config.gpus)
+            num_containers = len(service_gpus)
+            gpu_assigner = create_gpu_assigner(service_gpus)
 
         containers: List[ContainerDefinition] = []
         replica_idx = 0
@@ -468,6 +483,7 @@ def _build_prometheus_container(
 ) -> ContainerDefinition:
     name = "prometheus"
     config = cfg.services.prometheus
+    _validate_service_environments(name, config.environments)
     prometheus_ports = context.telemetry_ports.prometheus_service_ports()
     readiness_port = prometheus_ports[
         "prometheus" if cfg.wizard.prometheus.start_prometheus else "node_exporter"
@@ -490,7 +506,7 @@ def _build_prometheus_container(
             if not volume.host_exists():
                 raise FileNotFoundError(f"Mount point does not exist: {volume.host}")
     environments = list(config.environments)
-    if cfg.wizard.run_method == RunMethod.SLURM_ENROOT:
+    if cfg.wizard.run_method.is_slurm:
         environments.append("ALPASIM_PROCESS_EXPORTER_MODE=host")
 
     container = ContainerDefinition(

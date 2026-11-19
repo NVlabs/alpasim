@@ -15,7 +15,10 @@ from typing import Literal
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.address_pool import ServiceAddress
+from alpasim_runtime.ego_masks import EgoMaskOverride
+from alpasim_runtime.nav_route import NavRouteLibrary
 from alpasim_runtime.telemetry.rpc_wrapper import SharedRpcTracking
+from alpasim_utils.types import Scene
 
 from eval.scenario_evaluator import ScenarioEvalResult
 from eval.schema import EvalConfig
@@ -39,6 +42,9 @@ class ServiceEndpoints:
     physics: ServiceAddress
     trafficsim: ServiceAddress
     controller: ServiceAddress
+    frame_quality: ServiceAddress = field(
+        default_factory=lambda: ServiceAddress("skip", skip=True)
+    )
 
 
 @dataclass
@@ -52,16 +58,16 @@ class PendingRolloutJob:
     request_id: str
     # Unique identifier for tracking this job in results and logs
     job_id: str
-    # Scene ID identifying which scene to simulate
-    scene_id: str
+    # Complete scene selected by the runtime registry.
+    scene: Scene
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
-    # µs to skip from the recording start. See RolloutSpec in runtime.proto.
-    start_time_offset_us: int = 0
     # Session seed for this rollout; 0 ⇒ services pick a random one. See RolloutSpec.
     session_seed: int = 0
+    # Serialized parent ego history, or None for an ordinary rollout.
+    ego_history_bytes: bytes | None = None
     # Number of failed attempts before this pending attempt.
     retry_attempt: int = 0
     # Creation time (monotonic clock); basis for scheduler-wait telemetry.
@@ -76,8 +82,8 @@ class AssignedRolloutJob:
     request_id: str
     # Unique identifier for tracking this job in results and logs
     job_id: str
-    # Scene ID identifying which scene to simulate
-    scene_id: str
+    # Complete scene selected by the runtime registry.
+    scene: Scene
     # Index of rollout spec in SimulationRequest.rollout_specs
     rollout_spec_index: int
     # Concrete service addresses assigned by the parent dispatch loop.
@@ -87,10 +93,10 @@ class AssignedRolloutJob:
     scheduler_wait_seconds: float
     # Optional; empty ⇒ runtime generates the UUID. See RolloutSpec in runtime.proto.
     session_uuid: str = ""
-    # µs to skip from the recording start. See RolloutSpec in runtime.proto.
-    start_time_offset_us: int = 0
     # Session seed for this rollout; 0 ⇒ services pick a random one. See RolloutSpec.
     session_seed: int = 0
+    # Serialized parent ego history, or None for an ordinary rollout.
+    ego_history_bytes: bytes | None = None
 
 
 @dataclass
@@ -137,9 +143,13 @@ class WorkerArgs:
     log_dir: str  # Root directory for outputs (asl/, metrics/, txt-logs/)
     eval_config: EvalConfig
     telemetry_port: int  # Port for this worker's Prometheus metrics endpoint
+    log_level: int
     # Canonical version IDs computed once by the parent process.
     version_ids: RolloutMetadata.VersionIds | None = None
     # For orphan detection in subprocess mode. None disables detection (inline mode).
     parent_pid: int | None = None
     # Shared RPC tracking for global queue depth metrics across processes
     shared_rpc_tracking: SharedRpcTracking | None = None
+    # Route indices for navigation instructions, resolved once by the parent.
+    nav_routes: NavRouteLibrary | None = None
+    ego_mask_overrides: dict[str, EgoMaskOverride] | None = None

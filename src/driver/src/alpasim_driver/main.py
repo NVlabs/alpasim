@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import bisect
 import functools
 import logging
 import os
@@ -37,10 +38,12 @@ from alpasim_grpc.v0.egodriver_pb2 import (
     DriveSessionCloseRequest,
     DriveSessionRequest,
     GroundTruthRequest,
+    NavigationInstruction,
     RolloutCameraImage,
     RolloutEgoTrajectory,
     Route,
     RouteRequest,
+    VectorizedObservation,
 )
 from alpasim_grpc.v0.egodriver_pb2_grpc import (
     EgodriverServiceServicer,
@@ -152,6 +155,10 @@ def _rig_est_waypoints_to_local_trajectory(
 # Unique queue marker instructing the worker thread to flush and exit.
 _SENTINEL_JOB = object()
 
+# Maximum number of pose / dynamic-state entries retained per session.
+# Older entries (smallest timestamps) are pruned when the cap is exceeded.
+_MAX_POSE_HISTORY = 100
+
 
 @dataclass
 class DriveJob:
@@ -191,6 +198,12 @@ class Session:
     # Most recent route, with waypoints in the rig frame at its own timestamp.
     # None until the first route arrives, and for scenarios without a route.
     route: Route | None = None
+    # Most recent vector payload, in the physical ego-rig frame where sensors
+    # observe the surrounding scene.
+    vectorized_observation: VectorizedObservation | None = None
+    # Most recent turn-by-turn instruction. None until the first one arrives, and
+    # for scenarios that run without navigation.
+    navigation: NavigationInstruction | None = None
     frames_trail_request_warned: bool = False
 
     @staticmethod
@@ -335,7 +348,10 @@ class Session:
     def add_egoposes(self, egoposes: Trajectory) -> None:
         """Add rig-est pose observations in the local frame."""
         self.poses.extend(egoposes.poses)
-        self.poses = sorted(self.poses, key=lambda pose: pose.timestamp_us)
+        self.poses.sort(key=lambda pose: pose.timestamp_us)
+        excess = len(self.poses) - _MAX_POSE_HISTORY
+        if excess > 0:
+            del self.poses[:excess]
         logger.debug(f"poses: {self.poses}")
 
     def add_dynamic_state(
@@ -350,8 +366,11 @@ class Session:
         """
         if dynamic_state is None:
             raise ValueError("Dynamic state is required")
-        self.dynamic_states.append((timestamp_us, dynamic_state))
-        self.dynamic_states = sorted(self.dynamic_states, key=lambda x: x[0])
+        entry = (timestamp_us, dynamic_state)
+        bisect.insort(self.dynamic_states, entry, key=lambda x: x[0])
+        excess = len(self.dynamic_states) - _MAX_POSE_HISTORY
+        if excess > 0:
+            del self.dynamic_states[:excess]
         logger.debug(
             f"dynamic_state at {timestamp_us}: "
             f"lin_vel=({dynamic_state.linear_velocity.x:.2f}, "
@@ -724,6 +743,7 @@ class EgoDriverService(EgodriverServiceServicer):
                     inference_seed=inference_seed,
                     previous_plan=job.session.last_selected_plan,
                     route=job.session.route,
+                    navigation=job.session.navigation,
                 )
             )
 
@@ -901,6 +921,33 @@ class EgoDriverService(EgodriverServiceServicer):
                 request.route,
                 use_waypoint_commands=False,
             )
+        return Empty()
+
+    @log_call
+    def submit_vectorized_observation(
+        self, request: VectorizedObservation, context: grpc.ServicerContext
+    ) -> Empty:
+        session = self._sessions[request.session_uuid]
+        session.vectorized_observation = request
+        logger.debug(
+            "submit_vectorized_observation: timestamp_us=%s, lane_lines=%s, "
+            "road_boundaries=%s, obstacles=%s",
+            request.timestamp_us,
+            len(request.lane_lines),
+            len(request.road_boundaries),
+            len(request.obstacles),
+        )
+        return Empty()
+
+    @log_call
+    def submit_navigation(
+        self, request: NavigationInstruction, context: grpc.ServicerContext
+    ) -> Empty:
+        logger.debug("submit_navigation: %s", request.instruction_text)
+        session = self._sessions[request.session_uuid]
+        # An empty instruction means none applies this step; run unconditioned rather
+        # than on a stale one.
+        session.navigation = request if request.instruction_text else None
         return Empty()
 
     @log_call

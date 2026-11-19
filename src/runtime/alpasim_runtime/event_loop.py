@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import LogEntry, RolloutMetadata
 from alpasim_runtime.autoresume import mark_rollout_complete
-from alpasim_runtime.broadcaster import MessageBroadcaster
+from alpasim_runtime.broadcaster import MessageBroadcaster, MessageHandler
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.delay_buffer import DelayBuffer
@@ -44,13 +44,16 @@ from alpasim_runtime.force_gt_blend import (
 )
 from alpasim_runtime.force_gt_cache_signature import build_force_gt_render_signature
 from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache
+from alpasim_runtime.nav_route import GeometryNavigator
 from alpasim_runtime.route_generator import RouteGenerator
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.frame_quality_service import FrameQualityService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.session_configs import (
     DriverSessionConfig,
+    FrameQualitySessionConfig,
     RendererSessionConfig,
     TrafficSessionConfig,
 )
@@ -72,10 +75,13 @@ logger = logging.getLogger(__name__)
 
 def _build_traffic_session_trajectory(unbound: UnboundRollout) -> geometry.Trajectory:
     """Build the ego AABB trajectory used for traffic session initialization."""
-    return unbound.gt_ego_trajectory.clip(
-        unbound.egomotion_context_start_us,
-        unbound.end_timestamp_us + 1,
-    ).transform(
+    ego_source = unbound.fork_ego_history
+    if ego_source is None:
+        ego_source = unbound.gt_ego_trajectory.clip(
+            unbound.egomotion_context_start_us,
+            unbound.end_timestamp_us + 1,
+        )
+    return ego_source.transform(
         unbound.transform_ego_coords_ds_to_aabb,
         is_relative=True,
     )
@@ -84,6 +90,40 @@ def _build_traffic_session_trajectory(unbound: UnboundRollout) -> geometry.Traje
 def _simulated_duration_us(unbound: UnboundRollout) -> int:
     """Return the effective simulated span covered by this rollout."""
     return unbound.end_timestamp_us - unbound.egomotion_context_start_us
+
+
+def _build_initial_ego_trajectory(
+    unbound: UnboundRollout,
+) -> geometry.DynamicTrajectory:
+    """Seed ego poses and dynamics from fork history or recording GT."""
+    ego_source = (
+        unbound.fork_ego_history
+        if unbound.fork_ego_history is not None
+        else unbound.gt_ego_trajectory
+    )
+    # A fork carries parent poses from before the short render warm-up so the
+    # first driver update can populate the policy's complete egomotion grid.
+    # Ordinary recording-GT rollouts still start at the render context boundary.
+    initial_history_start_us = (
+        ego_source.time_range_us.start
+        if unbound.fork_ego_history is not None
+        else unbound.egomotion_context_start_us
+    )
+    ego_trajectory = ego_source.clip(
+        initial_history_start_us,
+        unbound.first_policy_timestamp_us + 1,
+    )
+
+    # Estimate dynamics over the full source trajectory with the same helper the
+    # force-GT controller coercion uses, so the seed and the coerced dynamics
+    # agree at shared timestamps (dynamics are rig-frame, see DynamicState).
+    initial_dynamics = force_gt_dynamic_trajectory(ego_source).interpolate_dynamics(
+        ego_trajectory.timestamps_us
+    )
+
+    return geometry.DynamicTrajectory.from_trajectory_and_dynamics(
+        ego_trajectory, initial_dynamics
+    )
 
 
 @dataclass
@@ -106,6 +146,7 @@ class EventBasedRollout:
     physics: PhysicsService
     trafficsim: TrafficService
     controller: ControllerService
+    frame_quality: FrameQualityService
     camera_catalog: CameraCatalog
     eval_config: EvalConfig
     eval_executor: ProcessPoolExecutor
@@ -131,42 +172,23 @@ class EventBasedRollout:
     runtime_cameras: list[RuntimeCamera] = field(init=False, default_factory=list)
 
     _runtime_evaluator: RuntimeEvaluator = field(init=False)
+    _frame_quality_enabled: bool = field(init=False)
 
     def __post_init__(self) -> None:
         """Initialize mutable state."""
         context_start_us = self.unbound.egomotion_context_start_us
         first_policy_timestamp_us = self.unbound.first_policy_timestamp_us
 
-        asl_log_writer = LogWriter(file_path=self._asl_log_path())
-
-        # Seed all recorded ego context through the first policy decision.
+        # Seed the selected ego context through the first policy decision.
         # The first policy call then receives dense egomotion history rather
         # than a synthetic two-point shortcut.
         self.traffic_objs = self.unbound.traffic_objs.clip_trajectories(
             context_start_us, first_policy_timestamp_us + 1
         )
 
-        gt = self.unbound.gt_ego_trajectory
-        ego_traj = gt.clip(context_start_us, first_policy_timestamp_us + 1)
-        context_timestamps = ego_traj.timestamps_us
-
-        # Build initial dynamics from GT derivatives at each context timestamp.
-        gt_velocities = gt.velocities()
-        gt_yaw_rates = gt.yaw_rates()
-        gt_ts = gt.timestamps_us
-
-        n_context = len(context_timestamps)
-        initial_dynamics = np.zeros((n_context, 12), dtype=np.float64)
-        for i in range(3):
-            initial_dynamics[:, i] = np.interp(
-                context_timestamps, gt_ts, gt_velocities[:, i]
-            )
-        initial_dynamics[:, 5] = np.interp(context_timestamps, gt_ts, gt_yaw_rates)
-
-        self.ego_trajectory = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
-            ego_traj, initial_dynamics
-        )
+        self.ego_trajectory = _build_initial_ego_trajectory(self.unbound)
         self.ego_trajectory_estimate = self.ego_trajectory.clone()
+        self.force_gt_ego_trajectory = self.unbound.fork_ego_history
 
         self.planner_delay_buffer = DelayBuffer(self.unbound.planner_delay_us)
         self.route_generator = RouteGenerator.create(
@@ -174,19 +196,23 @@ class EventBasedRollout:
             vector_map=self.unbound.vector_map,
             route_generator_type=self.unbound.route_generator_type,
             route_start_offset_m=self.unbound.route_start_offset_m,
+            recorded_quaternions_in_local=self.unbound.gt_ego_trajectory.quaternions,
         )
 
         self._runtime_evaluator = RuntimeEvaluator(
             eval_config=self.eval_config,
             rollout_uuid=self.unbound.rollout_uuid,
-            scene_id=self.unbound.scene_id,
             save_path_root=self.unbound.save_path_root,
             vector_map=self.unbound.vector_map,
         )
 
-        self.broadcaster = MessageBroadcaster(
-            handlers=[asl_log_writer, self._runtime_evaluator],
+        handlers: list[MessageHandler] = [self._runtime_evaluator]
+        self._frame_quality_enabled = not self.frame_quality.skip and (
+            self.eval_config.enabled or self.unbound.write_asl
         )
+        if self.unbound.write_asl:
+            handlers.insert(0, LogWriter(file_path=self._asl_log_path()))
+        self.broadcaster = MessageBroadcaster(handlers=handlers)
 
     def _rollout_dir(self) -> str:
         return os.path.join(self.unbound.save_path_root, self.unbound.rollout_uuid)
@@ -252,7 +278,7 @@ class EventBasedRollout:
         delta_end_us = int(trajectory.timestamps_us[-1])
 
         corrected_aabb, _ = await self.physics.ground_intersection(
-            scene_id=self.unbound.scene_id,
+            clip_id=self.unbound.scene.source.source_id,
             delta_start_us=delta_start_us,
             delta_end_us=delta_end_us,
             ego_trajectory_aabb=traj_aabb,
@@ -372,7 +398,7 @@ class EventBasedRollout:
 
         camera_definitions = {
             camera.logical_id: self.camera_catalog.get_camera_definition(
-                self.unbound.scene_id, camera.logical_id
+                self.unbound.scene.source.source_id, camera.logical_id
             )
             for camera in self.runtime_cameras
         }
@@ -431,6 +457,7 @@ class EventBasedRollout:
             control_timestep_us=unbound.control_timestep_us,
             runtime_cameras=list(self.runtime_cameras),
             driver=self.driver,
+            frame_quality=self.frame_quality,
             broadcaster=self.broadcaster,
         )
         if isinstance(render_events, list):
@@ -451,7 +478,14 @@ class EventBasedRollout:
                 services=services,
                 camera_ids=camera_ids,
                 route_generator=self.route_generator,
+                navigation=unbound.route_navigator
+                or (
+                    GeometryNavigator()
+                    if unbound.geometry_navigation and self.route_generator is not None
+                    else None
+                ),
                 send_recording_ground_truth=unbound.send_recording_ground_truth,
+                send_vectorized_observation=unbound.send_vectorized_observation,
             )
         )
         queue.submit(
@@ -540,6 +574,7 @@ class EventBasedRollout:
                         gt_ego_trajectory=self.unbound.gt_ego_trajectory,
                         image_format=self.unbound.image_format,
                         ego_mask_rig_config_id=self.unbound.ego_mask_rig_config_id,
+                        ego_mask_camera_logical_ids=self.unbound.ego_mask_camera_logical_ids,
                     ),
                 )
             )
@@ -552,10 +587,24 @@ class EventBasedRollout:
                     )
                 )
 
+            if self._frame_quality_enabled:
+                quality_config = self.eval_config.scorers.frame_quality
+                await async_stack.enter_async_context(
+                    self.frame_quality.rollout_session(
+                        uuid=str(self.unbound.rollout_uuid),
+                        broadcaster=self.broadcaster,
+                        session_config=FrameQualitySessionConfig(
+                            camera_logical_id=quality_config.camera_logical_id,
+                            rpc_timeout_s=quality_config.rpc_timeout_s,
+                            enabled=True,
+                        ),
+                    )
+                )
+
             # camera_catalog is now populated by the renderer's session init.
             available_camera_protos = [
                 self.camera_catalog.get_camera_definition(
-                    self.unbound.scene_id, camera_cfg.logical_id
+                    self.unbound.scene.source.source_id, camera_cfg.logical_id
                 ).as_proto()
                 for camera_cfg in self.unbound.camera_configs
             ]
@@ -570,7 +619,9 @@ class EventBasedRollout:
                     broadcaster=self.broadcaster,
                     session_config=DriverSessionConfig(
                         sensorsim_cameras=available_camera_protos,
-                        scene_id=self.unbound.scene_id,
+                        ego_aabb=self.unbound.ego_aabb,
+                        rig_to_ego_aabb=(self.unbound.transform_ego_coords_ds_to_aabb),
+                        scene_key=self.unbound.scene.scene_key,
                         random_seed=self.unbound.session_seed or None,
                     ),
                 )
@@ -583,7 +634,7 @@ class EventBasedRollout:
                     broadcaster=self.broadcaster,
                     session_config=TrafficSessionConfig(
                         traffic_objs=self.unbound.traffic_objs,
-                        scene_id=self.unbound.scene_id,
+                        clip_id=self.unbound.scene.source.source_id,
                         ego_aabb=self.unbound.ego_aabb,
                         gt_ego_aabb_trajectory=_build_traffic_session_trajectory(
                             self.unbound
@@ -596,7 +647,10 @@ class EventBasedRollout:
                 )
             )
 
-            if self.unbound.physics_update_mode != PhysicsUpdateMode.NONE:
+            if (
+                self.unbound.physics_update_mode != PhysicsUpdateMode.NONE
+                and self.unbound.fork_ego_history is None
+            ):
                 self.force_gt_ego_trajectory = (
                     await self._build_force_gt_physics_blend_trajectory()
                 )
@@ -605,7 +659,7 @@ class EventBasedRollout:
             logger.info(
                 "Session STARTING: uuid=%s scene=%s steps=%d",
                 self.unbound.rollout_uuid,
-                self.unbound.scene_id,
+                self.unbound.scene.scene_key,
                 self.unbound.n_sim_steps,
             )
 
@@ -636,8 +690,7 @@ class EventBasedRollout:
                     logger.error("  - %s", event_desc)
                 raise
 
-            if state.step_context is not None:
-                await state.step_context.drain_outstanding_tasks()
+            await self._drain_runtime_work(state)
 
             # Record timing
             loop_duration = time.perf_counter() - loop_start_time
@@ -648,32 +701,33 @@ class EventBasedRollout:
             if ctx is not None:
                 ctx.record_rollout_duration(rollout_duration)
 
-            eval_result = await self._runtime_evaluator.run_evaluation(
-                self.eval_executor
-            )
+        eval_result = await self._runtime_evaluator.run_evaluation(self.eval_executor)
+        mark_rollout_complete(self.unbound.save_path_root, self.unbound.rollout_uuid)
 
-            mark_rollout_complete(
-                self.unbound.save_path_root, self.unbound.rollout_uuid
-            )
+        simulated_duration_us = _simulated_duration_us(self.unbound)
+        simulated_duration_s = simulated_duration_us / 1e6
+        realtime_ratio = simulated_duration_s / loop_duration
 
-            # Calculate realtime ratio
-            simulated_duration_us = _simulated_duration_us(self.unbound)
-            simulated_duration_s = simulated_duration_us / 1e6
-            realtime_ratio = simulated_duration_s / loop_duration
-
-            logger.info(
-                "Session COMPLETED: uuid=%s scene=%s "
-                "simulated %.2f sim seconds in %.2f wall clock seconds for %.2fx real time "
-                "(total rollout %.2fs incl. setup/warmup)",
-                self.unbound.rollout_uuid,
-                self.unbound.scene_id,
-                simulated_duration_s,
-                loop_duration,
-                realtime_ratio,
-                rollout_duration,
-            )
+        logger.info(
+            "Session COMPLETED: uuid=%s scene=%s "
+            "simulated %.2f sim seconds in %.2f wall clock seconds for %.2fx real time "
+            "(total rollout %.2fs incl. setup/warmup)",
+            self.unbound.rollout_uuid,
+            self.unbound.scene.scene_key,
+            simulated_duration_s,
+            loop_duration,
+            realtime_ratio,
+            rollout_duration,
+        )
 
         return eval_result
+
+    async def _drain_runtime_work(self, state: RolloutState) -> None:
+        """Finish driver-path and quality tasks before evaluation starts."""
+        if state.step_context is not None:
+            await state.step_context.drain_outstanding_tasks()
+        if self._frame_quality_enabled:
+            await self.frame_quality.drain()
 
 
 def create_event_rollout(
@@ -685,6 +739,7 @@ def create_event_rollout(
     physics: PhysicsService,
     trafficsim: TrafficService,
     controller: ControllerService,
+    frame_quality: FrameQualityService,
     camera_catalog: CameraCatalog,
     eval_config: EvalConfig,
     eval_executor: ProcessPoolExecutor,
@@ -699,6 +754,7 @@ def create_event_rollout(
         physics=physics,
         trafficsim=trafficsim,
         controller=controller,
+        frame_quality=frame_quality,
         camera_catalog=camera_catalog,
         eval_config=eval_config,
         eval_executor=eval_executor,

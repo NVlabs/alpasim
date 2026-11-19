@@ -4,7 +4,8 @@
 """Tests for EvalDataAccumulator."""
 
 import pytest
-from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
+from alpasim_grpc.v0.egodriver_pb2 import DriveResponse, RolloutCameraImage
+from alpasim_grpc.v0.frame_quality_pb2 import FrameQualityResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_grpc.v0.traffic_pb2 import (
     ObjectTrajectory,
@@ -16,7 +17,7 @@ from alpasim_grpc.v0.traffic_pb2 import (
 from conftest import create_test_eval_config
 
 from eval.accumulator import EvalDataAccumulator
-from eval.data import ScenarioEvalInput
+from eval.data import AggregationType, ScenarioEvalInput
 from eval.schema import EvalConfig
 
 
@@ -26,8 +27,8 @@ def _create_rollout_metadata() -> RolloutMetadata:
 
     # Session metadata
     metadata.session_metadata.session_uuid = "test-uuid-123"
-    metadata.session_metadata.scene_id = "test-scene"
-    metadata.session_metadata.batch_size = 1
+    metadata.session_metadata.scene.source.clip.clip_id = "test-scene"
+    metadata.session_metadata.scene.source.clip.usdz_uuid = "test-artifact"
     metadata.session_metadata.n_sim_steps = 10
     metadata.session_metadata.start_timestamp_us = 0
     metadata.session_metadata.control_timestep_us = 100_000  # 100ms
@@ -201,12 +202,48 @@ class TestEvalDataAccumulatorHandleMessage:
         # Check session metadata was extracted
         assert accumulator.session_metadata is not None
         assert accumulator.session_metadata.session_uuid == "test-uuid-123"
-        assert accumulator.session_metadata.scene_id == "test-scene"
+        assert accumulator.session_metadata.scene.source.clip.clip_id == "test-scene"
 
         # Check internal state was populated
         assert accumulator._ego_aabb_dims == (4.5, 2.0, 1.5)
         assert accumulator._ego_coords_rig_to_aabb_center is not None
         assert accumulator._gt_ego_trajectory is not None
+
+    def test_handles_navigation_instructions(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        """Navigation entries keep the text and the debug_info diagnostics for the overlay."""
+        from alpasim_grpc.v0.egodriver_pb2 import NavigationInstruction
+
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        accumulator.handle_message(
+            LogEntry(
+                navigation_instruction=NavigationInstruction(
+                    timestamp_us=1_000_000,
+                    instruction_text="Turn right onto Oak Ave in 42m",
+                    debug_info=NavigationInstruction.DebugInfo(
+                        status=NavigationInstruction.DebugInfo.UPCOMING,
+                        remaining_distance_m=42.0,
+                        route_offset_m=0.5,
+                    ),
+                )
+            )
+        )
+        # An empty instruction (nothing applies this step) is logged but yields no label.
+        accumulator.handle_message(
+            LogEntry(
+                navigation_instruction=NavigationInstruction(
+                    timestamp_us=2_000_000, instruction_text=""
+                )
+            )
+        )
+
+        nav = accumulator._nav_instructions
+        assert (
+            nav.label(1_500_000)
+            == "Nav: Turn right onto Oak Ave in 42m | UPCOMING | 42 m | offset 0.5 m"
+        )
+        assert nav.label(2_500_000) is None
 
     def test_handles_actor_poses(self, default_eval_config: EvalConfig) -> None:
         """Test that actor_poses messages are accumulated correctly."""
@@ -336,6 +373,150 @@ class TestEvalDataAccumulatorBuildScenarioEvalInput:
         assert result.session_metadata.session_uuid == "test-uuid-123"
         assert result.run_uuid == "test-run"
         assert result.run_name == "test"
+
+    def test_builds_sorted_frame_quality_metric(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        accumulator.handle_message(
+            LogEntry(rollout_metadata=_create_rollout_metadata())
+        )
+        for timestamp_us, value in [(200, 0.2), (100, 0.1)]:
+            accumulator.handle_message(
+                LogEntry(
+                    driver_camera_image=RolloutCameraImage(
+                        session_uuid="test-uuid-123",
+                        camera_image=RolloutCameraImage.CameraImage(
+                            logical_id="front",
+                            frame_end_us=timestamp_us,
+                            image_bytes=b"image",
+                        ),
+                    )
+                )
+            )
+            accumulator.handle_message(
+                LogEntry(
+                    frame_quality_response=FrameQualityResponse(
+                        session_uuid="test-uuid-123",
+                        camera_logical_id="front",
+                        timestamp_us=timestamp_us,
+                        score=value,
+                        checkpoint_id="v1",
+                        checkpoint_sha256="abc",
+                    )
+                )
+            )
+
+        result = accumulator.build_scenario_eval_input("run", "name")
+
+        assert len(result.recorded_metrics) == 1
+        metric = result.recorded_metrics[0]
+        assert metric.name == "frame_quality_score"
+        assert metric.timestamps_us == [100, 200]
+        assert metric.values == pytest.approx([0.1, 0.2])
+        assert metric.valid == [True, True]
+        assert metric.time_aggregation is AggregationType.P90
+        assert metric.info == (
+            '{"metadata": {"camera_logical_id": "front", "checkpoint_id": "v1", '
+            '"checkpoint_sha256": "abc"}, "source": "frame_quality"}'
+        )
+
+    def test_rejects_frame_quality_response_for_another_session(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        accumulator.handle_message(
+            LogEntry(rollout_metadata=_create_rollout_metadata())
+        )
+        accumulator.handle_message(
+            LogEntry(
+                frame_quality_response=FrameQualityResponse(
+                    session_uuid="another-rollout",
+                    camera_logical_id="front",
+                    timestamp_us=1,
+                    score=0.5,
+                    checkpoint_id="v1",
+                    checkpoint_sha256="abc",
+                )
+            )
+        )
+
+        with pytest.raises(ValueError, match="session"):
+            accumulator.build_scenario_eval_input("run", "name")
+
+    def test_rejects_duplicate_frame_quality_timestamp(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        response = FrameQualityResponse(
+            session_uuid="test-uuid-123",
+            camera_logical_id="front",
+            timestamp_us=1,
+            score=0.5,
+            checkpoint_id="v1",
+            checkpoint_sha256="abc",
+        )
+        accumulator.handle_message(LogEntry(frame_quality_response=response))
+
+        with pytest.raises(ValueError, match="duplicate timestamp"):
+            accumulator.handle_message(LogEntry(frame_quality_response=response))
+
+    def test_rejects_conflicting_frame_quality_provenance(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        for timestamp_us, checkpoint_id in [(1, "v1"), (2, "v2")]:
+            entry = LogEntry(
+                frame_quality_response=FrameQualityResponse(
+                    session_uuid="test-uuid-123",
+                    camera_logical_id="front",
+                    timestamp_us=timestamp_us,
+                    score=0.5,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_sha256="abc",
+                )
+            )
+            if timestamp_us == 1:
+                accumulator.handle_message(entry)
+            else:
+                with pytest.raises(ValueError, match="provenance"):
+                    accumulator.handle_message(entry)
+
+    def test_rejects_incomplete_frame_quality_response_stream(
+        self, default_eval_config: EvalConfig
+    ) -> None:
+        accumulator = EvalDataAccumulator(cfg=default_eval_config)
+        accumulator.handle_message(
+            LogEntry(rollout_metadata=_create_rollout_metadata())
+        )
+        for timestamp_us in (1, 2):
+            accumulator.handle_message(
+                LogEntry(
+                    driver_camera_image=RolloutCameraImage(
+                        session_uuid="test-uuid-123",
+                        camera_image=RolloutCameraImage.CameraImage(
+                            logical_id="front",
+                            frame_end_us=timestamp_us,
+                            image_bytes=b"image",
+                        ),
+                    )
+                )
+            )
+        accumulator.handle_message(
+            LogEntry(
+                frame_quality_response=FrameQualityResponse(
+                    session_uuid="test-uuid-123",
+                    camera_logical_id="front",
+                    timestamp_us=1,
+                    score=0.5,
+                    checkpoint_id="v1",
+                    checkpoint_sha256="abc",
+                )
+            )
+        )
+
+        with pytest.raises(ValueError, match="incomplete"):
+            accumulator.build_scenario_eval_input("run", "name")
 
     def test_builds_actor_trajectories(self, default_eval_config: EvalConfig) -> None:
         """Test that actor trajectories are built from accumulated poses."""

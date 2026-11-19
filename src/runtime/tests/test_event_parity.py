@@ -28,6 +28,7 @@ from alpasim_runtime.events.base import (
 )
 from alpasim_runtime.events.camera import CameraFrameEvent, CameraRenderFlushEvent
 from alpasim_runtime.events.controller import ControllerEvent
+from alpasim_runtime.events.force_gt_utils import controller_reference_trajectory
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import (
     PolicyEvent,
@@ -350,6 +351,7 @@ class TestControllerAndEgoPhysicsPipeline:
             driver_trajectory=driver_trajectory,
         )
         rollout_state.step_context = ctx
+        rollout_state.ego_trajectory = rollout_state.ego_trajectory.clip(0, 100_001)
 
         event = ControllerEvent(
             timestamp_us=100_000,
@@ -371,8 +373,10 @@ class TestControllerAndEgoPhysicsPipeline:
             call_kwargs["fallback_trajectory_local_to_rig"]
             is rollout_state.unbound.gt_ego_trajectory
         )
-        expected_reference = rollout_state.unbound.gt_ego_trajectory.clip(
-            100_000, 1_000_001
+        expected_reference = controller_reference_trajectory(
+            rollout_state.unbound.gt_ego_trajectory,
+            100_000,
+            rollout_state.unbound.control_timestep_us,
         ).transform(rollout_state.ego_trajectory.last_pose.inverse())
         actual_reference = call_kwargs["rig_reference_trajectory_in_rig"]
         np.testing.assert_array_equal(
@@ -393,7 +397,7 @@ class TestControllerAndEgoPhysicsPipeline:
     ):
         """Controller should delegate force-GT reference construction to the helper."""
         force_gt_trajectory = MagicMock()
-        force_gt_trajectory.time_range_us = range(100_000, 1_000_001)
+        force_gt_trajectory.time_range_us = range(100_000, 5_200_001)
         force_gt_trajectory.clip.return_value = simple_trajectory
         force_gt_trajectory.interpolate_pose.return_value = simple_trajectory.get_pose(
             1
@@ -490,6 +494,46 @@ class TestControllerAndEgoPhysicsPipeline:
         ).run(rollout_state, EventQueue())
         post_handoff_call = mock_controller.run_controller_and_vehicle.call_args.kwargs
         assert post_handoff_call["coerce_dynamic_state"] is False
+
+    @pytest.mark.asyncio
+    async def test_controller_event_attaches_force_gt_dynamics(
+        self,
+        rollout_state: RolloutState,
+        service_bundle: ServiceBundle,
+        mock_controller: AsyncMock,
+        simple_trajectory: Trajectory,
+    ) -> None:
+        """Force-GT poses carry their corresponding dynamics."""
+        target_time_us = 100_000
+        propagated_state = mock_controller.run_controller_and_vehicle.return_value[0]
+        propagated_state.timestamp_us = target_time_us
+        propagated_state.pose_local_to_rig = simple_trajectory.interpolate_pose(
+            target_time_us
+        )
+        propagated_state.pose_local_to_rig_estimate = propagated_state.pose_local_to_rig
+
+        rollout_state.step_context = StepContext(
+            step_start_us=0,
+            target_time_us=target_time_us,
+            force_gt=True,
+            driver_trajectory=simple_trajectory,
+        )
+        await ControllerEvent(
+            timestamp_us=0,
+            control_timestep_us=target_time_us,
+            services=service_bundle,
+        ).run(rollout_state, EventQueue())
+
+        assert rollout_state.force_gt_dynamics is not None
+        expected_dynamics = rollout_state.force_gt_dynamics.interpolate_dynamics(
+            np.array([target_time_us], dtype=np.uint64)
+        )[0]
+        ctx = rollout_state.step_context
+        assert ctx is not None
+        assert ctx.ego_true is not None
+        assert ctx.ego_estimated is not None
+        np.testing.assert_allclose(ctx.ego_true.dynamics[-1], expected_dynamics)
+        np.testing.assert_allclose(ctx.ego_estimated.dynamics[-1], expected_dynamics)
 
     @pytest.mark.asyncio
     async def test_controller_event_rejects_force_gt_trajectory_outside_step(
@@ -769,6 +813,7 @@ class TestControllerAndEgoPhysicsPipeline:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         queue = EventQueue()
@@ -794,12 +839,14 @@ class TestGroupedRenderDataFlow:
         runtime_camera,
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
+        mock_frame_quality: AsyncMock,
     ) -> CameraFrameEvent:
         return CameraFrameEvent(
             camera=runtime_camera,
             trigger=runtime_camera.clock.ith_trigger(0),
             sensorsim=mock_sensorsim,
             driver=mock_driver,
+            frame_quality=mock_frame_quality,
         )
 
     @pytest.mark.asyncio
@@ -830,12 +877,14 @@ class TestGroupedRenderDataFlow:
         rollout_state: RolloutState,
         mock_sensorsim: AsyncMock,
         mock_driver: AsyncMock,
+        mock_frame_quality: AsyncMock,
     ):
         """When no camera triggers are registered, driver_data is not set."""
         event = CameraRenderFlushEvent(
             timestamp_us=200_000,
             sensorsim=mock_sensorsim,
             driver=mock_driver,
+            frame_quality=mock_frame_quality,
         )
 
         rollout_state.data_sensorsim_to_driver = None
@@ -867,6 +916,7 @@ class TestGroupedRenderDataFlow:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         queue = EventQueue()
@@ -896,6 +946,7 @@ class TestGroupedRenderDataFlow:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         queue = EventQueue()
@@ -1181,6 +1232,7 @@ class TestPolicyEventPipelineIntegration:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
     @pytest.mark.asyncio

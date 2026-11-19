@@ -34,7 +34,7 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
 
     async def ground_intersection(
         self,
-        scene_id: str,
+        clip_id: str,
         delta_start_us: int,
         delta_end_us: int,
         ego_trajectory_aabb: geometry.Trajectory,
@@ -65,7 +65,7 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
         traffic_poses = traffic_poses or {}
 
         request = self._prepare_request(
-            scene_id,
+            clip_id,
             delta_start_us,
             delta_end_us,
             ego_trajectory_aabb=ego_trajectory_aabb,
@@ -91,7 +91,7 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
 
     def _prepare_request(
         self,
-        scene_id: str,
+        clip_id: str,
         delta_start_us: int,
         delta_end_us: int,
         ego_trajectory_aabb: geometry.Trajectory,
@@ -100,7 +100,7 @@ class PhysicsService(ServiceBase[PhysicsServiceStub]):
     ) -> PhysicsGroundIntersectionRequest:
         """Prepare the physics ground intersection request."""
         return PhysicsGroundIntersectionRequest(
-            scene_id=scene_id,
+            scene_id=clip_id,
             now_us=delta_start_us,
             future_us=delta_end_us,
             ego_data=PhysicsGroundIntersectionRequest.EgoData(

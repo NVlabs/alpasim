@@ -43,7 +43,6 @@ class ProcessSample:
     pid: str
     group: str
     port: str
-    gpu_indices: tuple[int, ...]
     cpu_seconds: float
     resident_bytes: int
 
@@ -91,14 +90,6 @@ def _group_for_cmdline(cmdline: str) -> str | None:
 def _port_for_cmdline(cmdline: str) -> str:
     match = re.search(r"(?:^|\s)(?:--?)?port(?:=|\s+)(\d+)(?:\s|$)", cmdline)
     return match.group(1) if match else ""
-
-
-def _gpu_indices_for_environ(environ: Sequence[str]) -> tuple[int, ...]:
-    for entry in environ:
-        key, separator, value = entry.partition("=")
-        if separator and key == "CUDA_VISIBLE_DEVICES":
-            return tuple(int(device) for device in value.split(",") if device)
-    return ()
 
 
 def _run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -208,7 +199,6 @@ def collect_processes(procfs: Path, pids: Iterable[str]) -> list[ProcessSample]:
                     pid=pid,
                     group=group,
                     port=_port_for_cmdline(cmdline),
-                    gpu_indices=_gpu_indices_for_environ(_read_environ(pid_dir)),
                     cpu_seconds=_read_cpu_seconds(pid_dir),
                     resident_bytes=_read_resident_bytes(pid_dir),
                 )
@@ -225,6 +215,7 @@ def _label_value(value: str) -> str:
 def render_metrics(
     process_samples: Sequence[ProcessSample],
     duration: float,
+    gpu_indices: Sequence[int],
 ) -> bytes:
     usage_by_group: dict[str, GroupUsage] = {}
     for process in process_samples:
@@ -270,13 +261,11 @@ def render_metrics(
         )
     lines.extend(
         [
-            "# HELP alpasim_gpu_workload_info Physical GPUs owned by AlpaSim processes",
+            "# HELP alpasim_gpu_workload_info Physical GPUs assigned to AlpaSim",
             "# TYPE alpasim_gpu_workload_info gauge",
         ]
     )
-    for gpu_index in sorted(
-        {gpu_index for process in process_samples for gpu_index in process.gpu_indices}
-    ):
+    for gpu_index in sorted(set(gpu_indices)):
         lines.append(f'alpasim_gpu_workload_info{{gpu="{gpu_index}"}} 1')
     lines.extend(
         [
@@ -304,7 +293,11 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             pids = discover_pids(server.job_id, server.procfs, server.cgroupfs)
             process_samples = collect_processes(server.procfs, pids)
             duration = time.monotonic() - started
-            MetricsHandler.cache_body = render_metrics(process_samples, duration)
+            MetricsHandler.cache_body = render_metrics(
+                process_samples,
+                duration,
+                server.gpu_indices,
+            )
             MetricsHandler.cache_until = now + server.cache_seconds
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
@@ -321,6 +314,7 @@ class MetricsServer(http.server.HTTPServer):
     procfs: Path
     cgroupfs: Path
     cache_seconds: float
+    gpu_indices: tuple[int, ...]
 
 
 def main() -> None:
@@ -330,6 +324,7 @@ def main() -> None:
     parser.add_argument("--procfs", default="/host/proc", type=Path)
     parser.add_argument("--cgroupfs", default="/host/sys/fs/cgroup", type=Path)
     parser.add_argument("--cache-seconds", default=5.0, type=float)
+    parser.add_argument("--gpu-index", action="append", default=[], type=int)
     args = parser.parse_args()
 
     server = MetricsServer(("0.0.0.0", args.port), MetricsHandler)
@@ -337,6 +332,7 @@ def main() -> None:
     server.procfs = args.procfs
     server.cgroupfs = args.cgroupfs
     server.cache_seconds = args.cache_seconds
+    server.gpu_indices = tuple(args.gpu_index)
     server.serve_forever()
 
 

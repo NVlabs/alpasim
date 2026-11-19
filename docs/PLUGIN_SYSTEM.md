@@ -50,7 +50,7 @@ See [Onboarding — Dependency management](ONBOARDING.md#dependency-management) 
 Plugins are discovered via the `plugins/*` glob in `[tool.uv.workspace] members`. Each plugin has a corresponding extra in the root `pyproject.toml` (e.g. `internal`, `transfuser`). To install core packages plus a plugin:
 
 ```bash
-uv sync --extra all --extra internal      # core + internal plugin
+uv sync --extra all --extra internal      # core + internal plugin (when available)
 uv sync --extra all --extra transfuser    # core + transfuser plugin
 ```
 

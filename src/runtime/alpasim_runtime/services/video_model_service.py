@@ -428,15 +428,15 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
             )
 
         usdz_path = self._usdz_path_from_data_source(cfg)
-        scene_id = cfg.data_source.scene_id
+        clip_id = cfg.data_source.scene_id
 
-        self._register_scene_cameras(scene_id, usdz_path)
+        self._register_clip_cameras(clip_id, usdz_path)
 
         camera_specs, rig_to_camera, initial_frames = (
             build_camera_specs_and_initial_frames(
                 runtime_cameras=cfg.runtime_cameras,
                 camera_catalog=self._camera_catalog,
-                scene_id=scene_id,
+                clip_id=clip_id,
                 usdz_path=usdz_path,
             )
         )
@@ -458,8 +458,8 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
             )
         return usdz_path
 
-    def _register_scene_cameras(self, scene_id: str, usdz_path: str) -> None:
-        """Populate ``CameraCatalog._scene_definitions`` from the USDZ.
+    def _register_clip_cameras(self, clip_id: str, usdz_path: str) -> None:
+        """Populate ``CameraCatalog`` definitions for one USDZ clip.
 
         Parses ``clipgt/calibration_estimate.parquet`` to recover the real
         ftheta intrinsics and rig-to-camera extrinsics that the recorded
@@ -473,21 +473,21 @@ class VideoModelService(ServiceBase[video_model_pb2_grpc.WorldModelServiceStub])
         """
         assert self._camera_catalog is not None
 
-        scene_defs = parse_cameras_from_usdz(usdz_path)
+        camera_definitions = parse_cameras_from_usdz(usdz_path)
 
         for logical_id, override in self._camera_catalog.get_local_overrides().items():
             self._validate_camera_override(override)
-            base = scene_defs.get(logical_id)
+            base = camera_definitions.get(logical_id)
             if base is None:
                 raise ValueError(
                     f"Local camera definition {logical_id!r} has no matching "
                     "camera in USDZ calibration for video_model_config. "
                     "Use simulation_config.cameras to select a subset of the "
-                    f"available cameras: {sorted(scene_defs.keys())}."
+                    f"available cameras: {sorted(camera_definitions.keys())}."
                 )
-            scene_defs[logical_id] = self._apply_override(base, override)
+            camera_definitions[logical_id] = self._apply_override(base, override)
 
-        self._camera_catalog.register_scene_definitions(scene_id, scene_defs)
+        self._camera_catalog.register_clip_definitions(clip_id, camera_definitions)
 
     @staticmethod
     def _apply_override(base: CameraDefinition, override: Any) -> CameraDefinition:

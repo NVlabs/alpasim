@@ -91,8 +91,8 @@ def unified_metrics_df() -> pl.DataFrame:
 
     # Two clips per run
     clips = [
-        {"clip_id": "clip1", "clip_multiplier": 1},
-        {"clip_id": "clip2", "clip_multiplier": 10},
+        {"scene_key": "clip1@t0=AUTO", "clip_multiplier": 1},
+        {"scene_key": "clip2@t0=AUTO", "clip_multiplier": 10},
     ]
 
     # Two rollouts per clip
@@ -116,6 +116,7 @@ def unified_metrics_df() -> pl.DataFrame:
         ("dist_traveled_m", "max", [1.0, 2.0, 3.0]),  # Will be scaled by multipliers
         ("gt_dist_traveled_m", "last", [10.0, 10.0, 10.0]),
         ("dist_to_gt_trajectory", "max", [0.0, 0.0, 0.0]),
+        ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
         ("progress", "last", [0.1, 0.5, 0.8]),
         ("progress_rel_to_total", "last", [0.1, 0.5, 0.8]),
         ("progress_rel", "min", [0.9, 0.8, 0.8]),
@@ -149,7 +150,7 @@ def unified_metrics_df() -> pl.DataFrame:
                                 "valid": True,
                                 "name": metric_name,
                                 "time_aggregation": time_agg,
-                                "clipgt_id": clip["clip_id"],
+                                "scene_key": clip["scene_key"],
                                 "rollout_id": rollout["rollout_id"],
                                 "run_uuid": run["run_uuid"],
                                 "run_name": run["run_name"],
@@ -168,7 +169,12 @@ def trajectory_uid_df() -> pl.DataFrame:
             "rollout_uid": [1, 1, 2, 2],
             "run_name": ["test_run_1", "test_run_1", "test_run_2", "test_run_2"],
             "run_uuid": ["uuid1", "uuid1", "uuid2", "uuid2"],
-            "clipgt_id": ["clip1", "clip2", "clip1", "clip2"],
+            "scene_key": [
+                "clip1@t0=AUTO",
+                "clip2@t0=AUTO",
+                "clip1@t0=AUTO",
+                "clip2@t0=AUTO",
+            ],
             "rollout_id": ["rollout1", "rollout1", "rollout1", "rollout1"],
         }
     )
@@ -181,6 +187,24 @@ def temp_directory() -> Generator[pathlib.Path, None, None]:
         yield pathlib.Path(temp_dir)
 
 
+def test_trajectory_identity_distinguishes_two_t0s_for_one_source() -> None:
+    metrics = pl.DataFrame(
+        {
+            "run_name": ["run", "run"],
+            "run_uuid": ["uuid", "uuid"],
+            "scene_key": ["clip-a@t0=100", "clip-a@t0=200"],
+            "rollout_id": ["rollout", "rollout"],
+            "name": ["metric", "metric"],
+            "values": [1.0, 2.0],
+        }
+    )
+
+    _, identities = add_rollout_and_trajectory_uids(metrics)
+
+    assert identities["scene_key"].n_unique() == 2
+    assert identities["trajectory_uid"].n_unique() == 2
+
+
 @pytest.fixture
 def modified_metrics_df_with_img_black(
     unified_metrics_df: pl.DataFrame,
@@ -188,24 +212,13 @@ def modified_metrics_df_with_img_black(
     """Modified metrics dataframe where one specific rollout has img_is_black = 1.0.
 
     Specifically sets img_is_black = 1.0 for test_run_1 + clip1 + rollout1.
-    This will trigger RemoveTrajectoryWithEvent(img_is_black > 0) to remove that complete trajectory.
-
-    Expected impact:
-    - Original: 8 trajectories (2 runs × 2 clips × 2 rollouts)
-    - Removed: 1 trajectory (test_run_1 + clip1 + rollout1)
-    - Remaining: 7 trajectories
-
-    Rollouts per clip after filtering:
-    - test_run_1 + clip1: 1 rollout (rollout2 remains, rollout1 removed)
-    - test_run_1 + clip2: 2 rollouts (both rollout1 and rollout2 remain)
-    - test_run_2 + clip1: 2 rollouts (both rollout1 and rollout2 remain)
-    - test_run_2 + clip2: 2 rollouts (both rollout1 and rollout2 remain)
+    Default aggregation should retain this trajectory and let downstream metrics score it.
     """
     return unified_metrics_df.with_columns(
         # Set img_is_black = 1.0 for test_run_1 + clip1 + rollout1 only
         pl.when(
             (pl.col("run_name") == "test_run_1")
-            & (pl.col("clipgt_id") == "clip1")
+            & (pl.col("scene_key") == "clip1@t0=AUTO")
             & (pl.col("rollout_id") == "rollout1")
             & (pl.col("name") == "img_is_black")
         )
@@ -236,6 +249,38 @@ class TestUnprocessedMetricsDFs:
         # Load and verify
         loaded_udf = UnprocessedMetricsDFs.load_from(temp_directory)
         assert loaded_udf.unprocessed_df.equals(unified_metrics_df)
+
+    def test_load_upgrades_persisted_clip_identity(
+        self, unified_metrics_df: pl.DataFrame, temp_directory: pathlib.Path
+    ) -> None:
+        legacy_metrics = unified_metrics_df.rename(
+            {"scene_key": "clipgt_id"}
+        ).with_columns(
+            pl.col("clipgt_id").str.replace("@t0=AUTO", "").alias("clipgt_id")
+        )
+        legacy_metrics.write_parquet(temp_directory / "metrics_unprocessed.parquet")
+
+        loaded = UnprocessedMetricsDFs.load_from(temp_directory).unprocessed_df
+
+        assert "clipgt_id" not in loaded.columns
+        assert (
+            loaded["scene_key"].to_list() == unified_metrics_df["scene_key"].to_list()
+        )
+
+    def test_load_upgrades_split_persisted_clip_identity(
+        self, unified_metrics_df: pl.DataFrame, temp_directory: pathlib.Path
+    ) -> None:
+        metrics, identities = add_rollout_and_trajectory_uids(unified_metrics_df)
+        identities = identities.rename({"scene_key": "clipgt_id"}).with_columns(
+            pl.col("clipgt_id").str.replace("@t0=AUTO", "").alias("clipgt_id")
+        )
+        metrics.write_parquet(temp_directory / "metrics_unprocessed.parquet")
+        identities.write_parquet(temp_directory / "trajectory_uid.parquet")
+
+        loaded = UnprocessedMetricsDFs.load_from(temp_directory).unprocessed_df
+
+        assert "clipgt_id" not in loaded.columns
+        assert set(loaded["scene_key"]) == set(unified_metrics_df["scene_key"])
 
     def test_concat_basic(self, unified_metrics_df: pl.DataFrame) -> None:
         """Test concatenating multiple UnprocessedMetricsDFs."""
@@ -302,13 +347,13 @@ class TestUnprocessedMetricsDFs:
 
         # Check run1 trajectories
         run1_trajectories = df_wide_avg_t.filter(pl.col("run_name") == "test_run_1")
-        run1_clip1 = run1_trajectories.filter(pl.col("clipgt_id") == "clip1")
-        run1_clip2 = run1_trajectories.filter(pl.col("clipgt_id") == "clip2")
+        run1_clip1 = run1_trajectories.filter(pl.col("scene_key") == "clip1@t0=AUTO")
+        run1_clip2 = run1_trajectories.filter(pl.col("scene_key") == "clip2@t0=AUTO")
 
         # Check run2 trajectories
         run2_trajectories = df_wide_avg_t.filter(pl.col("run_name") == "test_run_2")
-        run2_clip1 = run2_trajectories.filter(pl.col("clipgt_id") == "clip1")
-        run2_clip2 = run2_trajectories.filter(pl.col("clipgt_id") == "clip2")
+        run2_clip1 = run2_trajectories.filter(pl.col("scene_key") == "clip1@t0=AUTO")
+        run2_clip2 = run2_trajectories.filter(pl.col("scene_key") == "clip2@t0=AUTO")
 
         # Verify all trajectory groups exist (2 rollouts each)
         assert run1_clip1.height == 2
@@ -344,6 +389,43 @@ class TestUnprocessedMetricsDFs:
         assert (
             abs(run_ratio_clip1 - 100.0) < 0.01
         ), f"Run ratio in clip1 should be 100.0, got {run_ratio_clip1}"
+
+    def test_frame_quality_p90_uses_full_rollout(
+        self, unified_metrics_df: pl.DataFrame
+    ) -> None:
+        metadata = unified_metrics_df.select(
+            "run_uuid", "run_name", "scene_key", "rollout_id"
+        ).unique()
+        quality_rows = pl.concat(
+            [
+                metadata.with_columns(
+                    pl.lit(timestamp_us).alias("timestamps_us"),
+                    pl.lit(value).alias("values"),
+                    pl.lit(True).alias("valid"),
+                    pl.lit("frame_quality_score").alias("name"),
+                    pl.lit("p90").alias("time_aggregation"),
+                ).select(unified_metrics_df.columns)
+                for timestamp_us, value in zip(
+                    [1000, 2000, 3000], [1.0, 0.0, 0.0], strict=True
+                )
+            ]
+        )
+        metrics_df = pl.concat(
+            [unified_metrics_df, quality_rows], how="vertical_relaxed"
+        ).with_columns(
+            pl.when(
+                (pl.col("name") == "eval_relevant") & (pl.col("timestamps_us") == 1000)
+            )
+            .then(0.0)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+        processed = aggregate_and_write_metrics_results_txt(metrics_df)
+
+        assert processed.df_wide_avg_t[
+            "frame_quality_score"
+        ].to_list() == pytest.approx([0.8] * 8)
 
     def test_clip_aggregation_preserves_multipliers(
         self, unified_metrics_df: pl.DataFrame
@@ -537,21 +619,22 @@ class TestAggregateAndWriteMetricsResultsTxt:
     def test_force_same_run_uniqueness_requirements(
         self, unified_metrics_df: pl.DataFrame
     ) -> None:
-        """Test force_same_run behavior with unique/duplicate clipgt_id values.
+        """Test force_same_run behavior with unique/duplicate scene_key values.
 
-        Documents that clipgt_id must be unique across run_uuid values, but run_name can be duplicated.
+        Documents that scene_key must be unique across run_uuid values, but run_name can be duplicated.
         """
         base_df = unified_metrics_df.filter(
-            (pl.col("run_name") == "test_run_1") & (pl.col("clipgt_id") == "clip1")
+            (pl.col("run_name") == "test_run_1")
+            & (pl.col("scene_key") == "clip1@t0=AUTO")
         )
 
-        # Case 1: Same run_name, different clipgt_id - should work
+        # Case 1: Same run_name, different scene_key - should work
         valid_df = pl.concat(
             [
                 base_df,
                 base_df.with_columns(
                     pl.col("run_uuid").str.replace("uuid1", "uuid3"),
-                    pl.col("clipgt_id").str.replace("clip1", "clip3"),
+                    pl.col("scene_key").str.replace("clip1@t0=AUTO", "clip3@t0=AUTO"),
                 ),
             ]
         )
@@ -560,7 +643,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
         assert result.combined_run_uuids is not None
         assert len(result.df_wide_avg_t_clip_rollout["run_uuid"].unique()) == 1
 
-        # Case 2: Same clipgt_id - should fail
+        # Case 2: Same scene_key - should fail
         invalid_df = pl.concat(
             [
                 base_df,
@@ -575,14 +658,15 @@ class TestAggregateAndWriteMetricsResultsTxt:
         self, unified_metrics_df: pl.DataFrame, tmp_path: pathlib.Path
     ) -> None:
         base_df = unified_metrics_df.filter(
-            (pl.col("run_name") == "test_run_1") & (pl.col("clipgt_id") == "clip1")
+            (pl.col("run_name") == "test_run_1")
+            & (pl.col("scene_key") == "clip1@t0=AUTO")
         )
         valid_df = pl.concat(
             [
                 base_df,
                 base_df.with_columns(
                     pl.col("run_uuid").str.replace("uuid1", "uuid3"),
-                    pl.col("clipgt_id").str.replace("clip1", "clip3"),
+                    pl.col("scene_key").str.replace("clip1@t0=AUTO", "clip3@t0=AUTO"),
                 ),
             ]
         )
@@ -676,7 +760,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
         metrics_df = unified_metrics_df.with_columns(
             pl.when(
                 (pl.col("run_name") == "test_run_1")
-                & (pl.col("clipgt_id") == "clip1")
+                & (pl.col("scene_key") == "clip1@t0=AUTO")
                 & (pl.col("rollout_id") == "rollout1")
                 & (pl.col("name") == "progress_rel_to_total")
             )
@@ -687,7 +771,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
         metrics_df = metrics_df.with_columns(
             pl.when(
                 (pl.col("run_name") == "test_run_1")
-                & (pl.col("clipgt_id") == "clip1")
+                & (pl.col("scene_key") == "clip1@t0=AUTO")
                 & (pl.col("rollout_id") == "rollout2")
                 & (pl.col("name") == "dist_to_gt_trajectory")
             )
@@ -713,7 +797,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             row
             for row in payload["rollouts"]
             if row["run_name"] == "test_run_1"
-            and row["clipgt_id"] == "clip1"
+            and row["scene_key"] == "clip1@t0=AUTO"
             and row["rollout_id"] == "rollout1"
         ][0]
         assert partial["status"] == "pass"
@@ -728,7 +812,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             row
             for row in payload["rollouts"]
             if row["run_name"] == "test_run_1"
-            and row["clipgt_id"] == "clip1"
+            and row["scene_key"] == "clip1@t0=AUTO"
             and row["rollout_id"] == "rollout2"
         ][0]
         assert diverged["status"] == "pass"
@@ -740,7 +824,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             row
             for row in payload["rollouts"]
             if row["run_name"] == "test_run_1"
-            and row["clipgt_id"] == "clip2"
+            and row["scene_key"] == "clip2@t0=AUTO"
             and row["rollout_id"] == "rollout2"
         ][0]
         assert passed["status"] == "pass"
@@ -757,7 +841,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
         del mock_plot
         target = (
             (pl.col("run_name") == "test_run_1")
-            & (pl.col("clipgt_id") == "clip1")
+            & (pl.col("scene_key") == "clip1@t0=AUTO")
             & (pl.col("rollout_id") == "rollout1")
         )
         metrics_df = unified_metrics_df.with_columns(
@@ -782,7 +866,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             row
             for row in payload["rollouts"]
             if row["run_name"] == "test_run_1"
-            and row["clipgt_id"] == "clip1"
+            and row["scene_key"] == "clip1@t0=AUTO"
             and row["rollout_id"] == "rollout1"
         ][0]
 
@@ -828,6 +912,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             ("img_is_black", "max", [0.0, 0.0, 0.0]),
             ("dist_traveled_m", "last", [0.0, 10.0, 100.0]),
             ("dist_to_gt_trajectory", "max", [0.0, 11.0, 11.0]),
+            ("left_corridor_laterally", "max", [0.0, 0.0, 0.0]),
             ("progress", "last", [0.0, 0.0, 1.0]),
             ("progress_rel_to_total", "last", [0.0, 0.0, 1.0]),
             ("progress_rel", "min", [1.0, 0.0, 1.0]),
@@ -841,7 +926,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
                     "valid": True,
                     "name": name,
                     "time_aggregation": time_aggregation,
-                    "clipgt_id": "long-scene",
+                    "scene_key": "long-scene@t0=AUTO",
                     "rollout_id": "rollout-1",
                     "run_uuid": "run-uuid",
                     "run_name": "run-name",
@@ -887,7 +972,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             failed_rollouts=[
                 {
                     "run_name": "test_run_1",
-                    "clipgt_id": "clip_failed",
+                    "scene_key": "clip_failed@t0=AUTO",
                     "rollout_id": "failed-0",
                     "error": "Runtime failure",
                 }
@@ -904,7 +989,9 @@ class TestAggregateAndWriteMetricsResultsTxt:
         assert unscored["score"] is None
         assert unscored["score_metrics"] is None
         failed = [
-            row for row in payload["rollouts"] if row["clipgt_id"] == "clip_failed"
+            row
+            for row in payload["rollouts"]
+            if row["scene_key"] == "clip_failed@t0=AUTO"
         ][0]
         assert failed["status"] == "fail"
         assert failed["passed"] is False
@@ -926,7 +1013,7 @@ class TestAggregateAndWriteMetricsResultsTxt:
             failed_rollouts=[
                 {
                     "run_name": "test_run_1",
-                    "clipgt_id": "clip_failed",
+                    "scene_key": "clip_failed@t0=AUTO",
                     "rollout_id": "failed-0",
                     "error": "Maximum allowed size exceeded",
                 }
@@ -935,7 +1022,9 @@ class TestAggregateAndWriteMetricsResultsTxt:
 
         payload = json.loads((temp_directory / "results-summary.json").read_text())
         failed = [
-            row for row in payload["rollouts"] if row["clipgt_id"] == "clip_failed"
+            row
+            for row in payload["rollouts"]
+            if row["scene_key"] == "clip_failed@t0=AUTO"
         ][0]
 
         assert failed["status"] == "fail"
@@ -949,6 +1038,8 @@ class TestAggregateAndWriteMetricsResultsTxt:
             "collision_at_fault": None,
             "offroad": None,
             "dist_to_gt_trajectory": None,
+            "lateral_dist_to_gt_trajectory": None,
+            "left_corridor_laterally": None,
             "gt_dist_traveled_m": None,
         }
 
@@ -965,7 +1056,7 @@ class TestProcessedMetricDFs:
     def processed_dfs_with_img_black(
         self, modified_metrics_df_with_img_black: pl.DataFrame
     ) -> ProcessedMetricDFs:
-        """Create processed dataframes with img_black trajectory removed."""
+        """Create processed dataframes with an img_black trajectory retained."""
         return aggregate_and_write_metrics_results_txt(
             modified_metrics_df_with_img_black
         )
@@ -988,7 +1079,7 @@ class TestProcessedMetricDFs:
         # Check that removed rows have valid trajectory metadata
         assert removed["run_uuid"].null_count() == 0
         assert removed["run_name"].null_count() == 0
-        assert removed["clipgt_id"].null_count() == 0
+        assert removed["scene_key"].null_count() == 0
 
         # Should have valid run names from the test data
         valid_run_names = {"test_run_1", "test_run_2"}
@@ -1004,35 +1095,26 @@ class TestProcessedMetricDFs:
         removed_trajectories = processed_dfs.get_removed_trajectories()
         assert removed_trajectories.height == 0
 
-        # Test with modified data where one trajectory has img_is_black > 0
+        # Test with modified data where one trajectory has img_is_black > 0.
+        # Black images are retained by default and scored through normal metrics.
         removed_trajectories_modified = (
             processed_dfs_with_img_black.get_removed_trajectories()
         )
 
-        # Should have exactly 1 removed trajectory: test_run_1 + clip1 + rollout1
-        assert removed_trajectories_modified.height == 1
-
-        # Check that the removed trajectory is exactly the one we expect
-        expected_removed = removed_trajectories_modified.select(
-            "run_name", "clipgt_id", "rollout_id"
-        )
-
-        assert expected_removed["run_name"][0] == "test_run_1"
-        assert expected_removed["clipgt_id"][0] == "clip1"
-        assert expected_removed["rollout_id"][0] == "rollout1"
+        assert removed_trajectories_modified.height == 0
 
         # Verify all required columns are present
         expected_columns = {
             "run_uuid",
             "run_name",
-            "clipgt_id",
+            "scene_key",
             "rollout_id",
         }
         assert set(removed_trajectories_modified.columns).issuperset(expected_columns)
 
         # Verify the remaining trajectories count
-        # Original: 8 trajectories, Removed: 1 trajectory, Remaining: 7 trajectories
-        assert processed_dfs_with_img_black.df_wide_avg_t.shape[0] == 7
+        # Original: 8 trajectories, Removed: 0 trajectories, Remaining: 8 trajectories
+        assert processed_dfs_with_img_black.df_wide_avg_t.shape[0] == 8
 
     def test_get_rollouts_per_clip_quantitative(
         self,
@@ -1048,7 +1130,7 @@ class TestProcessedMetricDFs:
             n_rollouts == 2 for n_rollouts in rollouts_per_clip["n_rollouts"].to_list()
         )
 
-        # Test modified data - one specific clip should have 1 rollout, others should have 2
+        # Test modified data - black-image trajectories are still counted.
         rollouts_per_clip_modified = (
             processed_dfs_with_img_black.get_rollouts_per_clip()
         )
@@ -1056,14 +1138,156 @@ class TestProcessedMetricDFs:
         # Convert to a more convenient format for checking specific values
         rollouts_dict = {}
         for row in rollouts_per_clip_modified.iter_rows(named=True):
-            key = (row["run_name"], row["clipgt_id"])
+            key = (row["run_name"], row["scene_key"])
             rollouts_dict[key] = row["n_rollouts"]
 
-        # Check specific expected values:
-        # test_run_1 + clip1: 1 rollout (rollout1 was removed, rollout2 remains)
-        assert rollouts_dict[("test_run_1", "clip1")] == 1
+        # All clips should still have 2 rollouts.
+        assert rollouts_dict[("test_run_1", "clip1@t0=AUTO")] == 2
+        assert rollouts_dict[("test_run_1", "clip2@t0=AUTO")] == 2
+        assert rollouts_dict[("test_run_2", "clip1@t0=AUTO")] == 2
+        assert rollouts_dict[("test_run_2", "clip2@t0=AUTO")] == 2
 
-        # All other clips should have 2 rollouts
-        assert rollouts_dict[("test_run_1", "clip2")] == 2
-        assert rollouts_dict[("test_run_2", "clip1")] == 2
-        assert rollouts_dict[("test_run_2", "clip2")] == 2
+
+@patch("eval.aggregation.processing.plot_metrics_results")
+def test_all_black_images_retain_cohort_and_image_metric(
+    mock_plot, unified_metrics_df, temp_directory
+):
+    metrics = unified_metrics_df.with_columns(
+        pl.when(pl.col("name") == "img_is_black")
+        .then(1.0)
+        .otherwise(pl.col("values"))
+        .alias("values")
+    )
+    aggregate_and_write_metrics_results_txt(metrics, output_path=str(temp_directory))
+    summary = json.loads((temp_directory / "results-summary.json").read_text())
+    assert len(summary["rollouts"]) == 8
+    assert all(row["metrics"]["img_is_black"] == 1.0 for row in summary["rollouts"])
+
+
+class TestCorridorExcursionScoring:
+    """The corridor rule: sideways exit fails, driving past the end does not.
+
+    Timesteps are 1000/2000/3000 and the corridor cutoff keeps the timestep that
+    trips it, dropping later ones -- so anything happening after the ego leaves
+    the corridor is out of scope for scoring.
+    """
+
+    TARGET = (
+        (pl.col("run_name") == "test_run_1")
+        & (pl.col("scene_key") == "clip1@t0=AUTO")
+        & (pl.col("rollout_id") == "rollout1")
+    )
+
+    def _rollout(self, metrics_df, temp_directory):
+        aggregate_and_write_metrics_results_txt(
+            metrics_df,
+            output_path=str(temp_directory),
+            additional_modifiers=[
+                RemoveTimestepsAfterEvent(pl.col("dist_to_gt_trajectory") >= 4.0)
+            ],
+        )
+        payload = json.loads((temp_directory / "results-summary.json").read_text())
+        return [
+            row
+            for row in payload["rollouts"]
+            if row["run_name"] == "test_run_1"
+            and row["scene_key"] == "clip1@t0=AUTO"
+            and row["rollout_id"] == "rollout1"
+        ][0]
+
+    def _set(self, df, name, expr):
+        return df.with_columns(
+            pl.when(self.TARGET & (pl.col("name") == name))
+            .then(expr)
+            .otherwise(pl.col("values"))
+            .alias("values")
+        )
+
+    def _leaves_corridor_at_2000(self, df):
+        """Ego is >= 4 m from the recording from t=2000 onward."""
+        return self._set(
+            df,
+            "dist_to_gt_trajectory",
+            pl.when(pl.col("timestamps_us") >= 2000).then(6.0).otherwise(0.0),
+        )
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_lateral_exit_fails(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "collision_any", pl.lit(0.0))
+        df = self._set(df, "collision_front", pl.lit(0.0))
+        df = self._set(df, "offroad", pl.lit(0.0))
+        df = self._set(
+            df,
+            "left_corridor_laterally",
+            pl.when(pl.col("timestamps_us") >= 2000).then(1.0).otherwise(0.0),
+        )
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] == "left_corridor_laterally"
+        assert rollout["passed"] is False
+        assert rollout["score"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_forward_exit_does_not_fail(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "collision_any", pl.lit(0.0))
+        df = self._set(df, "collision_front", pl.lit(0.0))
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # left_corridor_laterally stays 0: the ego drove past the end of the GT.
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] is None
+        assert rollout["passed"] is True
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_collision_after_forward_exit_does_not_fail(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # Collision strictly after the corridor was left: t=3000 is dropped.
+        after = pl.when(pl.col("timestamps_us") > 2000).then(1.0).otherwise(0.0)
+        df = self._set(df, "collision_any", after)
+        df = self._set(df, "collision_front", after)
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] is None
+        assert rollout["passed"] is True
+        assert rollout["score_metrics"]["collision_at_fault"] == 0.0
+
+    @patch("eval.aggregation.processing.plot_metrics_results")
+    def test_collision_before_forward_exit_still_fails(
+        self,
+        mock_plot: MagicMock,
+        unified_metrics_df: pl.DataFrame,
+        temp_directory: pathlib.Path,
+    ) -> None:
+        del mock_plot
+        df = self._leaves_corridor_at_2000(unified_metrics_df)
+        df = self._set(df, "offroad", pl.lit(0.0))
+        # Collision before the ego left the corridor: must still count.
+        before = pl.when(pl.col("timestamps_us") < 2000).then(1.0).otherwise(0.0)
+        df = self._set(df, "collision_any", before)
+        df = self._set(df, "collision_front", before)
+
+        rollout = self._rollout(df, temp_directory)
+        assert rollout["failure_reason"] == "collision_at_fault"
+        assert rollout["passed"] is False
+        assert rollout["score"] == 0.0

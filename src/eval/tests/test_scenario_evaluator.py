@@ -44,8 +44,14 @@ def session_metadata() -> RolloutMetadata.SessionMetadata:
     """Create sample session metadata."""
     return RolloutMetadata.SessionMetadata(
         session_uuid="test-uuid-123",
-        scene_id="test-scene",
-        batch_size=1,
+        scene={
+            "source": {
+                "clip": {
+                    "clip_id": "test-scene",
+                    "usdz_uuid": "test-artifact",
+                }
+            }
+        },
         n_sim_steps=10,
         start_timestamp_us=0,
         control_timestep_us=100_000,
@@ -92,6 +98,57 @@ def test_gt_dist_traveled_is_full_recording_distance(
     # modifiers cannot turn a long scene into a short-scene score override.
     assert gt_dist_metric.values == pytest.approx([9.0] * 10)
     assert result.aggregated_metrics["gt_dist_traveled_m"] == pytest.approx(9.0)
+
+
+def test_evaluate_includes_recorded_metric(
+    minimal_eval_input: ScenarioEvalInput,
+    default_eval_config: EvalConfig,
+) -> None:
+    minimal_eval_input.recorded_metrics.append(
+        MetricReturn(
+            name="frame_quality_score",
+            timestamps_us=[100, 200],
+            values=[0.1, 0.9],
+            valid=[True, True],
+            time_aggregation=AggregationType.P90,
+            info='{"source": "frame_quality"}',
+        )
+    )
+
+    result = SimpleScenarioEvaluator(default_eval_config).evaluate(minimal_eval_input)
+
+    metric = next(
+        metric
+        for metric in result.timestep_metrics
+        if metric.name == "frame_quality_score"
+    )
+    assert metric.values == [0.1, 0.9]
+    assert result.aggregated_metrics["frame_quality_score"] == pytest.approx(0.82)
+    assert result.metrics_df is not None
+    assert (
+        result.metrics_df.filter(
+            result.metrics_df["name"] == "frame_quality_score"
+        ).height
+        == 2
+    )
+
+
+def test_evaluate_rejects_recorded_metric_name_collision(
+    minimal_eval_input: ScenarioEvalInput,
+    default_eval_config: EvalConfig,
+) -> None:
+    minimal_eval_input.recorded_metrics.append(
+        MetricReturn(
+            name="collision_any",
+            timestamps_us=[100],
+            values=[0.0],
+            valid=[True],
+            time_aggregation=AggregationType.MAX,
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate metric names.*collision_any"):
+        SimpleScenarioEvaluator(default_eval_config).evaluate(minimal_eval_input)
 
 
 def test_first_driven_timestamp_uses_render_anchor(
@@ -236,6 +293,24 @@ class TestScenarioEvalResult:
             assert "timestamps_us" in result.metrics_df.columns
             assert "values" in result.metrics_df.columns
             assert "valid" in result.metrics_df.columns
+            assert result.metrics_df["scene_key"].unique().to_list() == [
+                "test-scene@t0=AUTO"
+            ]
+
+    def test_metrics_df_uses_structured_scene_key(
+        self, minimal_eval_input: ScenarioEvalInput, default_eval_config: EvalConfig
+    ) -> None:
+        metadata = minimal_eval_input.session_metadata
+        metadata.scene.source.clip.clip_id = "clip-a"
+        metadata.scene.source.clip.usdz_uuid = "artifact-a"
+        metadata.scene.policy_start_us = 123
+
+        result = SimpleScenarioEvaluator(default_eval_config).evaluate(
+            minimal_eval_input
+        )
+
+        assert "clipgt_id" not in result.metrics_df.columns
+        assert result.metrics_df["scene_key"].unique().to_list() == ["clip-a@t0=123"]
 
 
 class TestAggregation:
@@ -276,6 +351,17 @@ class TestAggregation:
         )
 
         assert metric.aggregate() == 0.9
+
+    def test_aggregate_p90(self) -> None:
+        metric = MetricReturn(
+            name="test_p90",
+            timestamps_us=[1000, 2000, 3000, 4000, 5000],
+            values=[0.0, 0.25, 0.5, 0.75, 1.0],
+            valid=[True] * 5,
+            time_aggregation=AggregationType.P90,
+        )
+
+        assert metric.aggregate() == pytest.approx(0.9)
 
     def test_aggregate_with_invalid_values(self) -> None:
         """Test that invalid values are excluded from aggregation."""
@@ -354,8 +440,7 @@ def _build_rollout_metadata(simulation_data: dict[str, Any]) -> RolloutMetadata:
     # Copy session metadata
     sm = simulation_data["session_metadata"]
     metadata.session_metadata.session_uuid = sm.session_uuid
-    metadata.session_metadata.scene_id = sm.scene_id
-    metadata.session_metadata.batch_size = sm.batch_size
+    metadata.session_metadata.scene.CopyFrom(sm.scene)
     metadata.session_metadata.n_sim_steps = sm.n_sim_steps
     metadata.session_metadata.start_timestamp_us = sm.start_timestamp_us
     metadata.session_metadata.control_timestep_us = sm.control_timestep_us
@@ -491,8 +576,14 @@ class TestRuntimeVsPostEvalEquivalence:
         # Session metadata
         session_metadata = RolloutMetadata.SessionMetadata(
             session_uuid="test-uuid-runtime-vs-posteval",
-            scene_id="test-scene-comparison",
-            batch_size=1,
+            scene={
+                "source": {
+                    "clip": {
+                        "clip_id": "test-scene-comparison",
+                        "usdz_uuid": "test-artifact",
+                    }
+                }
+            },
             n_sim_steps=n_points,
             start_timestamp_us=0,
             control_timestep_us=100_000,

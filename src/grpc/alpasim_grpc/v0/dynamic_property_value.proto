@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 NVIDIA Corporation
+
+syntax = "proto3";
+
+package common;
+
+// The enum values below are a stable wire contract consumed downstream by number:
+// existing values must not be renumbered.
+
+////////////////////////////////////////////////////////////////////////////////
+// Dynamic property types
+////////////////////////////////////////////////////////////////////////////////
+
+enum VehicleLight {
+  // Default/unspecified value. Not a valid authored light.
+  VEHICLE_LIGHT_UNSPECIFIED = 0;
+
+  // Left turn signal.
+  VEHICLE_LIGHT_LEFT_BLINKER = 1;
+
+  // Right turn signal.
+  VEHICLE_LIGHT_RIGHT_BLINKER = 2;
+
+  // Hazard flashers.
+  VEHICLE_LIGHT_HAZARD = 3;
+
+  // Brake lights.
+  VEHICLE_LIGHT_BRAKE = 4;
+
+  // Reverse lights.
+  VEHICLE_LIGHT_REVERSE = 5;
+
+  // Low-beam headlights.
+  VEHICLE_LIGHT_LOW_BEAM = 6;
+
+  // High-beam headlights.
+  VEHICLE_LIGHT_HIGH_BEAM = 7;
+
+  // Firetruck emergency lights.
+  VEHICLE_LIGHT_FIRETRUCK = 8;
+
+  // Police vehicle emergency lights.
+  VEHICLE_LIGHT_POLICE_VEHICLE = 9;
+
+  // Construction truck warning lights.
+  VEHICLE_LIGHT_CONSTRUCTION_TRUCK = 10;
+
+  // Tow truck warning lights.
+  VEHICLE_LIGHT_TOW_TRUCK = 11;
+
+  // School bus warning lights.
+  VEHICLE_LIGHT_SCHOOL_BUS = 12;
+}
+
+enum VehicleExtrusion {
+  // Default/unspecified value. Not a valid authored extrusion.
+  VEHICLE_EXTRUSION_UNSPECIFIED = 0;
+
+  // Vehicle door.
+  VEHICLE_EXTRUSION_VEHICLE_DOOR = 1;
+
+  // School bus stop sign.
+  VEHICLE_EXTRUSION_SCHOOL_BUS_STOP_SIGN = 2;
+}
+
+enum PedestrianPosture {
+  // Default/unspecified value. Not a valid authored posture.
+  PEDESTRIAN_POSTURE_UNSPECIFIED = 0;
+
+  // Pedestrian standing upright.
+  PEDESTRIAN_POSTURE_STANDING = 1;
+
+  // Pedestrian bent over at the waist.
+  PEDESTRIAN_POSTURE_BENT_OVER = 2;
+
+  // Pedestrian sitting.
+  PEDESTRIAN_POSTURE_SITTING = 3;
+
+  // Pedestrian crouching.
+  PEDESTRIAN_POSTURE_CROUCHING = 4;
+
+  // Pedestrian lying prone.
+  PEDESTRIAN_POSTURE_PRONE = 5;
+}
+
+enum PedestrianMovement {
+  // Default/unspecified value. Not a valid authored movement.
+  PEDESTRIAN_MOVEMENT_UNSPECIFIED = 0;
+
+  // Pedestrian still, not moving.
+  PEDESTRIAN_MOVEMENT_STILL = 1;
+
+  // Pedestrian walking.
+  PEDESTRIAN_MOVEMENT_WALKING = 2;
+
+  // Pedestrian crawling.
+  PEDESTRIAN_MOVEMENT_CRAWLING = 3;
+
+  // Pedestrian running.
+  PEDESTRIAN_MOVEMENT_RUNNING = 4;
+
+  // Pedestrian jumping.
+  PEDESTRIAN_MOVEMENT_JUMPING = 5;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Dynamic property value
+////////////////////////////////////////////////////////////////////////////////
+
+// One dynamic property of an actor or obstacle: a single (property, value) pair, such as a
+// vehicle light set on or off. Consumers require both a property and a value to be set.
+message DynamicPropertyValue {
+  // The value to set. Exactly one of the following representations.
+  oneof value {
+    // Boolean value. For vehicle lights, false selects the light's default off state and
+    // true selects its default on state.
+    bool boolean = 1;
+
+    // Integer value.
+    int64 integer = 2;
+
+    // Real number value.
+    double real = 3;
+
+    // Real number value normalized to the range [0.0, 1.0].
+    double ratio = 4;
+
+    // String value. Selects a named state of the control (for example a named emergency
+    // light animation).
+    string text = 5;
+  }
+
+  // The property that the value sets. Exactly one of the following.
+  oneof property {
+    // Vehicle light set by this property.
+    VehicleLight vehicle_light = 6;
+
+    // Vehicle extrusion set by this property.
+    VehicleExtrusion vehicle_extrusion = 7;
+
+    // Pedestrian posture set by this property.
+    PedestrianPosture pedestrian_posture = 8;
+
+    // Pedestrian movement set by this property.
+    PedestrianMovement pedestrian_movement = 9;
+  }
+}

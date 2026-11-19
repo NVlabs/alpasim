@@ -15,6 +15,7 @@ from alpasim_runtime.route_generator import (
 from alpasim_utils.artifact import Artifact
 from alpasim_utils.geometry import Polyline, Pose
 from tests.fixtures import sample_artifact  # noqa: F401
+from trajdata.maps.vec_map_elements import Polyline as MapPolyline
 
 COS_THETA = math.cos(math.radians(30))
 SIN_THETA = math.sin(math.radians(30))
@@ -219,9 +220,56 @@ def test_route_generator_passed_end(rig_waypoints_in_local):
     assert np.all(np.isnan(route_rig.waypoints))
 
 
+def test_route_generator_map_uses_recorded_heading_when_ego_stops():
+    forward_lane = MagicMock(
+        id="forward",
+        center=MapPolyline(np.array([[0.0, 0.0, 0.0, 0.0], [100.0, 0.0, 0.0, 0.0]])),
+        next_lanes=set(),
+    )
+    opposing_lane = MagicMock(
+        id="opposing",
+        center=MapPolyline(
+            np.array([[100.0, 1.0, 0.0, math.pi], [0.0, 1.0, 0.0, math.pi]])
+        ),
+        next_lanes=set(),
+    )
+    vector_map = MagicMock()
+    vector_map.get_current_lane.side_effect = lambda point, max_dist: [
+        forward_lane if math.cos(point[3]) > 0.0 else opposing_lane
+    ]
+    vector_map.get_road_lane.side_effect = {
+        forward_lane.id: forward_lane,
+        opposing_lane.id: opposing_lane,
+    }.__getitem__
+
+    recorded_waypoints_in_local = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [1.989, 0.0, 0.0],
+            [1.989, 0.0, 0.0],
+        ]
+    )
+    recorded_quaternions_in_local = np.tile(IDENTITY_QUAT, (5, 1))
+
+    route_generator = RouteGeneratorMap(
+        recorded_waypoints_in_local,
+        vector_map,
+        recorded_quaternions_in_local=recorded_quaternions_in_local,
+    )
+    route_rig = route_generator.generate_route(
+        0, _make_pose(recorded_waypoints_in_local[-1])
+    )
+
+    assert route_rig.waypoints[-1, 0] > 70.0
+
+
 def test_route_generator_map(sample_artifact):  # noqa: F811
     route_generator = RouteGeneratorMap(
-        sample_artifact.rig.trajectory.positions, sample_artifact.map
+        sample_artifact.rig.trajectory.positions,
+        sample_artifact.map,
+        recorded_quaternions_in_local=sample_artifact.rig.trajectory.quaternions,
     )
 
     pose_local_to_rig = _make_pose(np.array([0.0, 0.0, 0.0]))
@@ -282,7 +330,11 @@ def test_route_generator_map_sanity_off_route():
     # expect exception when the trajectory is far from route
     # in this case, this is because the vehicle drove off the covered map
     with pytest.raises(ValueError) as e:
-        RouteGeneratorMap(artifact.rig.trajectory.positions, artifact.map)
+        RouteGeneratorMap(
+            artifact.rig.trajectory.positions,
+            artifact.map,
+            recorded_quaternions_in_local=artifact.rig.trajectory.quaternions,
+        )
     assert "sanity check" in str(e.value)
 
 

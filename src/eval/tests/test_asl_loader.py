@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage
+from alpasim_grpc.v0.frame_quality_pb2 import FrameQualityResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_utils import logs
 from conftest import SimpleScenarioEvaluator, create_test_eval_config
@@ -23,8 +25,8 @@ def _create_rollout_metadata() -> RolloutMetadata:
 
     # Session metadata
     metadata.session_metadata.session_uuid = "test-uuid-123"
-    metadata.session_metadata.scene_id = "test-scene"
-    metadata.session_metadata.batch_size = 1
+    metadata.session_metadata.scene.source.clip.clip_id = "test-scene"
+    metadata.session_metadata.scene.source.clip.usdz_uuid = "test-artifact"
     metadata.session_metadata.n_sim_steps = 10
     metadata.session_metadata.start_timestamp_us = 0
     metadata.session_metadata.control_timestep_us = 100_000  # 100ms
@@ -103,6 +105,31 @@ async def minimal_asl_file(tmp_path: Path) -> Path:
             actor_poses = _create_actor_poses(timestamp_us, x_position=float(i))
             await log_writer.on_message(LogEntry(actor_poses=actor_poses))
 
+        await log_writer.on_message(
+            LogEntry(
+                driver_camera_image=RolloutCameraImage(
+                    session_uuid="test-uuid-123",
+                    camera_image=RolloutCameraImage.CameraImage(
+                        logical_id="camera_front_wide_120fov",
+                        frame_end_us=100_000,
+                        image_bytes=b"image",
+                    ),
+                )
+            )
+        )
+        await log_writer.on_message(
+            LogEntry(
+                frame_quality_response=FrameQualityResponse(
+                    session_uuid="test-uuid-123",
+                    camera_logical_id="camera_front_wide_120fov",
+                    timestamp_us=100_000,
+                    score=0.75,
+                    checkpoint_id="v1",
+                    checkpoint_sha256="abc",
+                )
+            )
+        )
+
     return asl_path
 
 
@@ -130,6 +157,27 @@ class TestLoadScenarioEvalInputFromAsl:
         assert isinstance(result, ScenarioEvalInput)
 
     @pytest.mark.asyncio
+    async def test_loads_recorded_metric_with_provenance(
+        self, minimal_asl_file: Path, default_eval_config: EvalConfig
+    ) -> None:
+        result = await load_scenario_eval_input_from_asl(
+            asl_file_path=str(minimal_asl_file),
+            cfg=default_eval_config,
+            artifacts={},
+            run_metadata={"run_uuid": "test-run", "run_name": "test"},
+        )
+
+        metric = result.recorded_metrics[0]
+        assert metric.name == "frame_quality_score"
+        assert metric.timestamps_us == [100_000]
+        assert metric.values == [0.75]
+        assert metric.info == (
+            '{"metadata": {"camera_logical_id": "camera_front_wide_120fov", '
+            '"checkpoint_id": "v1", "checkpoint_sha256": "abc"}, '
+            '"source": "frame_quality"}'
+        )
+
+    @pytest.mark.asyncio
     async def test_session_metadata_populated(
         self, minimal_asl_file: Path, default_eval_config: EvalConfig
     ) -> None:
@@ -142,7 +190,7 @@ class TestLoadScenarioEvalInputFromAsl:
         )
 
         assert result.session_metadata.session_uuid == "test-uuid-123"
-        assert result.session_metadata.scene_id == "test-scene"
+        assert result.session_metadata.scene.source.clip.clip_id == "test-scene"
         assert result.session_metadata.n_sim_steps == 10
         assert result.session_metadata.control_timestep_us == 100_000
 

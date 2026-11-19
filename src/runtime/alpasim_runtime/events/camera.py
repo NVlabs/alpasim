@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -15,6 +16,7 @@ from alpasim_runtime.events.base import Event, EventPriority, EventQueue
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.force_gt_frame_cache import ForceGtFrameKey
 from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.frame_quality_service import FrameQualityService
 from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_utils import geometry
@@ -80,7 +82,7 @@ async def _render_frames(
                 traffic_trajectories=_traffic_trajectories(state),
                 trigger=trigger,
                 camera=camera,
-                scene_id=state.unbound.scene_id,
+                clip_id=state.unbound.scene.source.source_id,
                 image_format=state.unbound.image_format,
                 ego_mask_rig_config_id=state.unbound.ego_mask_rig_config_id,
             )
@@ -97,7 +99,7 @@ async def _render_frames(
             camera_triggers,
             ego_trajectory=state.ego_trajectory,
             traffic_trajectories=_traffic_trajectories(state),
-            scene_id=state.unbound.scene_id,
+            clip_id=state.unbound.scene.source.source_id,
             image_format=state.unbound.image_format,
             ego_mask_rig_config_id=state.unbound.ego_mask_rig_config_id,
         )
@@ -107,10 +109,13 @@ async def _render_or_replay(
     state: RolloutState,
     sensorsim: SensorsimService,
     driver: DriverService,
+    frame_quality: FrameQualityService,
     camera_triggers: list[tuple[RuntimeCamera, Clock.Trigger]],
 ) -> None:
-    """Submit each camera frame to the driver, serving it from the force-GT cache
-    when possible and rendering (then caching) otherwise.
+    """Submit each camera frame to the driver and frame-quality service.
+
+    Serve frames from the force-GT cache when possible and render (then cache)
+    them otherwise.
 
     Caching applies only when every frame in the group is a force-GT frame (has a
     key). A full cache replay carries no renderer payload; freshly rendered frames
@@ -126,7 +131,12 @@ async def _render_or_replay(
     is_cacheable = cache is not None and all(k is not None for k in keys.values())
 
     cached_frames = (
-        {cam.logical_id: cache.get(keys[cam.logical_id]) for cam, _ in camera_triggers}
+        await asyncio.to_thread(
+            lambda: {
+                cam.logical_id: cache.get(keys[cam.logical_id])
+                for cam, _ in camera_triggers
+            }
+        )
         if is_cacheable
         else {}
     )
@@ -144,11 +154,16 @@ async def _render_or_replay(
     else:
         images, driver_data = await _render_frames(state, sensorsim, camera_triggers)
         if is_cacheable:
-            for image in images:
-                cache.put(keys[image.camera_logical_id], image.image_bytes)
+
+            def cache_images() -> None:
+                for image in images:
+                    cache.put(keys[image.camera_logical_id], image.image_bytes)
+
+            await asyncio.to_thread(cache_images)
 
     for image in images:
         state.step_context.track_task(driver.submit_image(image))
+        state.step_context.track_task(frame_quality.submit_frame(image))
     state.data_sensorsim_to_driver = driver_data
 
 
@@ -168,12 +183,14 @@ class CameraFrameEvent(Event):
         trigger: Clock.Trigger,
         sensorsim: SensorsimService,
         driver: DriverService,
+        frame_quality: FrameQualityService,
     ):
         super().__init__(timestamp_us=trigger.time_range_us.stop)
         self.camera = camera
         self.trigger = trigger
         self.sensorsim = sensorsim
         self.driver = driver
+        self.frame_quality = frame_quality
 
     def description(self) -> str:
         return (
@@ -189,6 +206,7 @@ class CameraFrameEvent(Event):
                 rollout_state,
                 self.sensorsim,
                 self.driver,
+                self.frame_quality,
                 [(self.camera, self.trigger)],
             )
 
@@ -208,6 +226,7 @@ class CameraFrameEvent(Event):
                     timestamp_us=self.timestamp_us,
                     sensorsim=self.sensorsim,
                     driver=self.driver,
+                    frame_quality=self.frame_quality,
                 )
             )
 
@@ -229,6 +248,7 @@ class CameraFrameEvent(Event):
                 trigger=next_trigger,
                 sensorsim=self.sensorsim,
                 driver=self.driver,
+                frame_quality=self.frame_quality,
             )
         )
 
@@ -243,10 +263,12 @@ class CameraRenderFlushEvent(Event):
         timestamp_us: int,
         sensorsim: SensorsimService,
         driver: DriverService,
+        frame_quality: FrameQualityService,
     ):
         super().__init__(timestamp_us=timestamp_us)
         self.sensorsim = sensorsim
         self.driver = driver
+        self.frame_quality = frame_quality
 
     def description(self) -> str:
         return f"CameraRenderFlushEvent(now={self.timestamp_us:_}us)"
@@ -261,7 +283,11 @@ class CameraRenderFlushEvent(Event):
             return
 
         await _render_or_replay(
-            rollout_state, self.sensorsim, self.driver, camera_triggers
+            rollout_state,
+            self.sensorsim,
+            self.driver,
+            self.frame_quality,
+            camera_triggers,
         )
 
 
@@ -275,6 +301,7 @@ def make_initial_sensorsim_render_event(
     runtime_cameras: list[RuntimeCamera],
     renderer_service: Any,
     driver: DriverService,
+    frame_quality: FrameQualityService,
     broadcaster: MessageBroadcaster,
 ) -> list[Event]:
     """Built-in factory for initial sensorsim camera frame events.
@@ -295,6 +322,7 @@ def make_initial_sensorsim_render_event(
             trigger=trigger,
             sensorsim=renderer_service,
             driver=driver,
+            frame_quality=frame_quality,
         )
         for camera in runtime_cameras
         for trigger in [camera.clock.ith_trigger(0)]

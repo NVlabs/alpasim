@@ -26,7 +26,6 @@ class TestVehicleModelParameters:
         assert params.rear_cornering_stiffness > 0
         assert params.steering_time_constant > 0
         assert params.acceleration_time_constant > 0
-        assert params.kinematic_threshold_speed > 0
 
     def test_custom_parameters(self):
         """Custom parameters should be settable."""
@@ -160,6 +159,8 @@ class TestVehicleModelMethods:
         assert model.state[0] == x_before
         assert model.state[1] == y_before
         assert model.state[2] == yaw_before
+
+        assert model.accelerations[0] == pytest.approx(2.0)
 
 
 class TestVehicleModelAdvance:

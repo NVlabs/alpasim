@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-import alpasim_utils.logs as logs
+import aiofiles
 import pytest
 import pytest_asyncio
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
+from alpasim_utils import logs
 
 
 @pytest.fixture
@@ -41,8 +42,8 @@ async def test_LogWriter_write(tmp_path, valid_actor_poses):
         await log_writer.on_message(LogEntry(actor_poses=valid_actor_poses))
 
     # verify that the data was written
-    with open(tmp_path / "test_log.asl", "rb") as f:
-        data = f.read()
+    async with aiofiles.open(tmp_path / "test_log.asl", "rb") as f:
+        data = await f.read()
         log_entry = LogEntry()
         # note that the first 4 bytes are the size of the message. This seems like
         # something that might be revisited later, e.g. to move to a magic number
@@ -55,6 +56,14 @@ async def test_LogWriter_write(tmp_path, valid_actor_poses):
         )
 
 
+def test_clip_id_from_session_metadata() -> None:
+    metadata = RolloutMetadata.SessionMetadata()
+    metadata.scene.source.clip.clip_id = "clipgt-a"
+    metadata.scene.source.clip.usdz_uuid = "uuid-a"
+
+    assert logs.clip_id_from_session_metadata(metadata) == "clipgt-a"
+
+
 @pytest_asyncio.fixture
 async def sample_log_file(tmp_path, valid_actor_poses):
     file_path = tmp_path / "sample_log.asl"
@@ -62,7 +71,8 @@ async def sample_log_file(tmp_path, valid_actor_poses):
     async with log_writer:
         # write out the session metadata
         metadata = RolloutMetadata()
-        metadata.session_metadata.scene_id = "test_scene"
+        metadata.session_metadata.scene.source.clip.clip_id = "test-clip"
+        metadata.session_metadata.scene.source.clip.usdz_uuid = "test-uuid"
         await log_writer.on_message(LogEntry(rollout_metadata=metadata))
 
         # write out a handful of actor poses

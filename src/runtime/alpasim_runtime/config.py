@@ -18,12 +18,14 @@ BASE_SERVICE_NAMES = (
     "trafficsim",
     "controller",
 )
-CORE_SERVICE_NAMES = (*BASE_SERVICE_NAMES, "renderer")
+OPTIONAL_SERVICE_NAMES = ("frame_quality",)
+ROLLOUT_SERVICE_NAMES = (*BASE_SERVICE_NAMES, "renderer")
+CORE_SERVICE_NAMES = (*ROLLOUT_SERVICE_NAMES, *OPTIONAL_SERVICE_NAMES)
 
 
 @dataclass
 class UsdzProviderConfig:
-    """Configuration for the USDZ artifact-backed scene provider."""
+    """Configuration for the USDZ artifact-backed data-source provider."""
 
     data_dir: str | None = None
     # Max worker-local USDZ artifact cache size.
@@ -42,7 +44,7 @@ class TrajdataDatasetConfig:
 
 @dataclass
 class TrajdataProviderConfig:
-    """Configuration for a trajdata-backed scene provider."""
+    """Configuration for a trajdata-backed data-source provider."""
 
     cache_location: str = MISSING
     desired_dt: float = 0.1
@@ -54,8 +56,8 @@ class TrajdataProviderConfig:
 
 
 @dataclass
-class SceneProviderConfig:
-    """Runtime scene provider configuration for one backend family."""
+class DataSourceProviderConfig:
+    """Runtime data-source provider configuration for one backend family."""
 
     kind: str = "usdz"  # Literal["usdz", "trajdata"]
     usdz: UsdzProviderConfig | None = field(default_factory=UsdzProviderConfig)
@@ -100,6 +102,9 @@ class NetworkSimulatorConfig:
     trafficsim: EndpointAddresses = MISSING
     controller: EndpointAddresses = MISSING
     renderer: EndpointAddresses = MISSING
+    frame_quality: EndpointAddresses = field(
+        default_factory=lambda: EndpointAddresses(endpoints=[])
+    )
 
 
 @dataclass
@@ -297,6 +302,21 @@ class ForceGtFrameCacheConfig:
 
 
 @dataclass
+class NavInstructionConfig:
+    """Select the source of the turn-by-turn text the runtime sends to the driver.
+
+    ``none`` sends no navigation (drivers that need it are unconditioned).
+    ``geometry`` classifies the generated route into a turn or straight-ahead
+    text each step. ``recorded`` looks up per-session route indices by ego
+    position; clips without records fail as invalid scenes.
+    """
+
+    source: str = "none"  # "none", "geometry" or "recorded"
+    # Navigation version root; suite subtrees contain ``<bare_clip_id>.pkl`` files.
+    route_index_dir: str | None = None
+
+
+@dataclass
 class SimulationConfig:
     """
     Shared simulation parameters — applies to all scenes.
@@ -307,10 +327,6 @@ class SimulationConfig:
 
     control_timestep_us: int = 100_000
     pose_reporting_interval_us: int = 0  # 0 = no intermediate reporting
-    # Global default µs to skip from the start of each recording so the rollout
-    # begins that far into the clip. SceneConfig.start_time_offset_us overrides
-    # this per scene. 0 = start at the clip's first frame.
-    start_time_offset_us: int = 0
     force_gt_duration_us: int = 500_000  # 0.5s
     skip_driver_during_force_gt: bool = False
     # Shared on-disk cache of deterministic force-GT camera frames, reused across
@@ -337,15 +353,22 @@ class SimulationConfig:
     image_format: str = "jpeg"  # Literal["jpeg", "png"]
     # Rig/directory in ego-hoods to use for ego masking. If None, no ego masking will be done.
     ego_mask_rig_config_id: str | None = None
+    # YAML file mapping source clip IDs to banks/cameras; unlisted clips use the default.
+    ego_mask_overrides_file: str | None = None
     planner_delay_us: int = (
         0  # models time delays from image capture to planner output to controller
     )
 
     route_generator_type: RouteGeneratorType = RouteGeneratorType.MAP
     route_start_offset_m: float = 0.0
+    nav_instruction: NavInstructionConfig = field(default_factory=NavInstructionConfig)
 
     # Whether to send optional messages to the driver
     send_recording_ground_truth: bool = False
+    send_vectorized_observation: bool = False
+
+    # Whether to persist the messages exchanged during each rollout.
+    write_asl: bool = True
 
     # Actors that appear for less than this amount of time will be dropped
     # before the simulation starts. Set to 0 to disable filtering.
@@ -356,14 +379,21 @@ class SimulationConfig:
 
 
 @dataclass
-class SceneConfig:
-    """Scene to simulate and number of rollouts to run for it."""
+class ClipDataSourceConfig:
+    """Configuration for one clip-backed DataSource."""
 
-    scene_id: str = MISSING
+    clip_id: str = MISSING
+    usdz_uuid: str = MISSING
+
+
+@dataclass
+class SceneConfig:
+    """Configuration projection of one complete scene."""
+
+    source: ClipDataSourceConfig = MISSING
+    # Integer recording-relative timestamp or the literal AUTO.
+    policy_start_us: int | str = MISSING
     n_rollouts: int | None = None  # None = use SimulationConfig.n_rollouts
-    # None = use SimulationConfig.start_time_offset_us. µs to skip from the
-    # recording start so the rollout begins that far into the clip.
-    start_time_offset_us: int | None = None
 
 
 @dataclass
@@ -375,6 +405,9 @@ class UserEndpointConfig:
     trafficsim: SingleUserEndpointConfig = MISSING
     controller: SingleUserEndpointConfig = MISSING
     renderer: SingleUserEndpointConfig = MISSING
+    frame_quality: SingleUserEndpointConfig = field(
+        default_factory=lambda: SingleUserEndpointConfig(skip=True)
+    )
 
     sensorsim_cache_size: int | None = None  # Scene cache size for sensorsim
     startup_timeout_s: int = 2 * 60  # 2 minutes by default
@@ -390,29 +423,29 @@ class RuntimePrometheusConfig:
 
 
 @dataclass
-class SceneAffineDispatchConfig:
-    """Cache-aware routing of renderer jobs to GPUs with the scene loaded."""
+class ClipAffineDispatchConfig:
+    """Cache-aware routing of renderer jobs to GPUs with the clip loaded."""
 
     # When True, the scheduler routes renderer jobs to GPUs that already
-    # have the requested scene cached, avoiding cold-load penalties.  Requires
+    # have the requested clip cached, avoiding cold-load penalties.  Requires
     # an NRE build with the get_loaded_scenes RPC (renderer=internal_nre;
     # public NRE drops don't have it yet).  The remaining settings in this
     # section only apply when enabled.
     enabled: bool = False
 
     # Interval in seconds for periodically re-syncing the renderer pool's
-    # local scene cache from NRE via get_loaded_scenes.  None disables
+    # local clip cache from NRE via get_loaded_scenes.  None disables
     # periodic refresh.
     cache_refresh_interval_s: float | None = 3.0
 
-    # Maximum loaded or loading renderer locations created for one scene.
-    max_renderers_per_scene: int = 2
+    # Maximum loaded or loading renderer locations created for one clip.
+    max_renderers_per_clip: int = 2
 
-    # Maximum distinct scenes loading or executing on one renderer before it
+    # Maximum distinct clips loading or executing on one renderer before it
     # becomes ineligible for cold dispatch.  Keeps the working set within the
     # renderer's NRE backend cache.  None disables the cap.  (Multiple rollouts
-    # of the same scene can still be dispatched to the same renderer.)
-    max_scenes_per_renderer: int | None = None
+    # of the same clip can still be dispatched to the same renderer.)
+    max_clips_per_renderer: int | None = None
 
 
 @dataclass
@@ -437,11 +470,11 @@ class UserSimulatorConfig:
 
     renderer: RendererConfig = MISSING
 
-    # Runtime scene provider configuration.
-    scene_provider: SceneProviderConfig = MISSING
+    # Runtime data-source provider configuration.
+    data_source_provider: DataSourceProviderConfig = MISSING
 
-    scene_affine_dispatch: SceneAffineDispatchConfig = field(
-        default_factory=SceneAffineDispatchConfig
+    clip_affine_dispatch: ClipAffineDispatchConfig = field(
+        default_factory=ClipAffineDispatchConfig
     )
 
     prometheus: RuntimePrometheusConfig = MISSING

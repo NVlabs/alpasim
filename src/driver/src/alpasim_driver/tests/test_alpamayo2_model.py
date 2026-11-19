@@ -88,7 +88,8 @@ class _StubInferenceModel:
                 ]
             ]
         )
-        return positions, rotations, torch.zeros_like(positions[..., 0]), {"cot": cot}
+        extra = {"cot": cot}
+        return positions, rotations, torch.zeros_like(positions[..., 0]), extra
 
 
 def _poses() -> list[PoseAtTime]:
@@ -128,6 +129,7 @@ def _prediction_input(previous_plan: object | None) -> PredictionInput:
         inference_seed=0,
         previous_plan=previous_plan,
         route=None,
+        navigation=None,
     )
 
 
@@ -218,6 +220,7 @@ def test_stale_camera_keeps_images_but_uses_latest_ego_as_planning_t0(
         inference_seed=0,
         previous_plan=None,
         route=None,
+        navigation=None,
     )
     model = _model(_candidates())
     captured_camera_images: dict[str, object] = {}

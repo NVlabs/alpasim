@@ -32,7 +32,7 @@ from alpasim_controller.mpc_controller import (
     MPCGains,
     MPCImplementation,
 )
-from alpasim_controller.mpc_impl import LinearMPC, NonlinearMPC
+from alpasim_controller.mpc_impl import SQPMPC, LinearMPC, NonlinearMPC
 from alpasim_controller.system import System, create_system
 from alpasim_controller.vehicle_model import VehicleModel
 
@@ -48,4 +48,5 @@ __all__ = [
     "ControllerOutput",
     "LinearMPC",
     "NonlinearMPC",
+    "SQPMPC",
 ]

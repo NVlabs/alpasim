@@ -6,9 +6,11 @@
 This subpackage contains the concrete MPC controller implementations:
 - LinearMPC: Fast linear MPC using OSQP
 - NonlinearMPC: Accurate nonlinear MPC using do_mpc/CasADi
+- SQPMPC: Sequential quadratic programming MPC using CasADi and OSQP
 """
 
 from alpasim_controller.mpc_impl.linear_mpc import LinearMPC
 from alpasim_controller.mpc_impl.nonlinear_mpc import NonlinearMPC
+from alpasim_controller.mpc_impl.sqp_mpc import SQPMPC
 
-__all__ = ["LinearMPC", "NonlinearMPC"]
+__all__ = ["LinearMPC", "NonlinearMPC", "SQPMPC"]

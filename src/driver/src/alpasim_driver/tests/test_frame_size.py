@@ -11,7 +11,7 @@ from typing import cast
 
 import numpy as np
 import pytest
-from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage
+from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage, VectorizedObservation
 from PIL import Image
 
 from ..main import EgoDriverService, Session
@@ -27,6 +27,7 @@ class _Session:
     def __init__(self) -> None:
         self.frame_caches = {CAMERA_ID: object()}
         self.frames: list[np.ndarray] = []
+        self.vectorized_observation = None
 
     def rectify_image(self, logical_id: str, image: Image.Image) -> Image.Image:
         return image
@@ -60,6 +61,16 @@ def _request(width: int, height: int) -> RolloutCameraImage:
             logical_id=CAMERA_ID, frame_end_us=1, image_bytes=buffer.getvalue()
         ),
     )
+
+
+def test_vectorized_observation_is_accepted_for_base_driver() -> None:
+    service, session = _service(None)
+    request = VectorizedObservation(session_uuid="session")
+    request.timestamp_us = 123
+
+    service.submit_vectorized_observation(request, None)
+
+    assert session.vectorized_observation.timestamp_us == 123
 
 
 def test_a_render_below_the_minimum_is_refused() -> None:

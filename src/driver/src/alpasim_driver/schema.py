@@ -49,6 +49,10 @@ class ModelConfig:
     cfg_guidance_weight: float | None = None
     force_determinism: bool = False  # Alpamayo models only
     num_trajectory_samples: int = 1  # Alpamayo models only
+    # Alpamayo models only. Exact expert graphs are captured lazily for observed
+    # signatures and fall back to eager after this bounded graph cache fills.
+    diffusion_expert_cuda_graph: bool = False
+    diffusion_expert_cuda_graph_max_graphs: int = 4
     # Where camera JPEGs are decoded.  ``cuda`` leaves the frames on the
     # device, so the model's preprocessing resizes there too (Alpamayo models
     # only; the others reach for numpy and will refuse a device frame).

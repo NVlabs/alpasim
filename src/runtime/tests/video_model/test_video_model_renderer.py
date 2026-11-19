@@ -9,14 +9,18 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Quat, Trajectory, Vec3
 from alpasim_grpc.v0.video_model_pb2 import DynamicWorldState
 from alpasim_runtime.config import SimulationConfig, VideoModelConfig
 from alpasim_runtime.events.base import EventQueue
+from alpasim_runtime.events.state import StepContext
 from alpasim_runtime.events.video_model.prefetch import (
+    VideoModelFrameEvent,
     VideoModelPrefetchEvent,
     make_initial_video_model_render_event,
 )
@@ -24,6 +28,7 @@ from alpasim_runtime.services.service_base import SessionInfo
 from alpasim_runtime.services.session_configs import RendererSessionConfig
 from alpasim_runtime.services.video_model_service import VideoModelService
 from alpasim_runtime.types import Clock, RuntimeCamera
+from alpasim_utils.types import ImageWithMetadata
 
 
 @pytest.mark.asyncio
@@ -141,6 +146,41 @@ def _trajectory(timestamps_us: list[int]) -> Trajectory:
             for t_us in timestamps_us
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_video_model_frame_does_not_wait_for_quality_before_driver() -> None:
+    frame = ImageWithMetadata(
+        start_timestamp_us=100_000,
+        end_timestamp_us=133_333,
+        image_bytes=b"frame",
+        camera_logical_id="camera_front",
+    )
+    release_quality = asyncio.Event()
+
+    async def score_frame(_: ImageWithMetadata) -> None:
+        await release_quality.wait()
+
+    driver = SimpleNamespace(submit_image=AsyncMock())
+    frame_quality = SimpleNamespace(submit_frame=AsyncMock(side_effect=score_frame))
+    state = SimpleNamespace(last_camera_frame_us={}, step_context=StepContext())
+    event = VideoModelFrameEvent(
+        timestamp_us=100_000,
+        frame=frame,
+        camera_logical_id="camera_front",
+        driver=driver,
+        frame_quality=frame_quality,
+    )
+
+    try:
+        await asyncio.wait_for(event.handle(state, EventQueue()), timeout=1)
+    finally:
+        release_quality.set()
+        await state.step_context.drain_outstanding_tasks()
+
+    driver.submit_image.assert_awaited_once_with(frame)
+    frame_quality.submit_frame.assert_awaited_once_with(frame)
+    assert state.last_camera_frame_us == {"camera_front": 100_000}
 
 
 def test_video_model_rejects_control_timestep_that_differs_from_chunk() -> None:
@@ -298,6 +338,7 @@ def test_initial_video_model_chunk_starts_after_initial_frame() -> None:
         runtime_cameras=[],
         renderer_service=renderer_service,
         driver=SimpleNamespace(),
+        frame_quality=SimpleNamespace(),
         broadcaster=SimpleNamespace(),
     )
 
@@ -331,5 +372,6 @@ def test_initial_video_model_event_validates_control_timestep() -> None:
             runtime_cameras=[],
             renderer_service=renderer_service,
             driver=SimpleNamespace(),
+            frame_quality=SimpleNamespace(),
             broadcaster=SimpleNamespace(),
         )

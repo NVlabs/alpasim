@@ -14,6 +14,10 @@ FROM nvcr.io/nvidia/k8s/dcgm-exporter:4.4.1-4.6.0-ubuntu22.04@sha256:b7a4241c608
 ARG TARGETARCH
 FROM base-${TARGETARCH}
 
+# The CUDA base image ships compute,utility. Use all so the GPU's JPEG
+# engine is exposed; without it nvJPEG decodes half a level dark.
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=dcgm-exporter /usr/bin/dcgm-exporter /usr/bin/dcgm-exporter
 COPY --from=dcgm-exporter /etc/dcgm-exporter /etc/dcgm-exporter
@@ -57,7 +61,8 @@ WORKDIR /repo
 
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
     --mount=type=cache,target=/root/.cache/uv \
-    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all --extra recipes'
+    sh -c 'if [ -f /root/.netrc ]; then export NETRC=/root/.netrc; fi && uv sync --extra all --extra recipes --extra transfuser'
+RUN uv run --no-sync python third_party/alpamayo-transformers5/apply_patches.py
 
 ARG PYTORCH_VERSION=2.8.0+cu128
 ARG TORCH_CLUSTER_VERSION=1.6.3

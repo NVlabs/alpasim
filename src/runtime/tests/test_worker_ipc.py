@@ -5,8 +5,10 @@
 Unit tests for worker IPC types.
 """
 
+import logging
 import pickle
 from multiprocessing import Queue
+from typing import Literal
 from unittest.mock import MagicMock
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
@@ -20,6 +22,14 @@ from alpasim_runtime.worker.ipc import (
     WorkerArgs,
     _ShutdownSentinel,
 )
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
+
+
+def _scene(clip_id: str, policy_start_us: int | Literal["AUTO"] = T0_AUTO) -> Scene:
+    return Scene(
+        ClipDataSource(clip_id, f"uuid-for-{clip_id}"),
+        policy_start_us,
+    )
 
 
 def _make_endpoints() -> ServiceEndpoints:
@@ -41,28 +51,32 @@ class TestPendingRolloutJob:
         job = PendingRolloutJob(
             request_id="req-1",
             job_id="test-123",
-            scene_id="test-scene",
+            scene=_scene("test-scene"),
             rollout_spec_index=2,
         )
 
         assert job.job_id == "test-123"
-        assert job.scene_id == "test-scene"
+        assert job.scene.source.source_id == "test-scene"
+        assert job.scene.scene_key == "test-scene@t0=AUTO"
         assert job.rollout_spec_index == 2
+        assert job.scene.policy_start_us == T0_AUTO
 
     def test_pickling(self):
         """PendingRolloutJob should be picklable."""
         job = PendingRolloutJob(
             request_id="req-1",
             job_id="test-123",
-            scene_id="test-scene",
+            scene=_scene("test-scene", 3_000_000),
             rollout_spec_index=1,
         )
         pickled = pickle.dumps(job)
         unpickled = pickle.loads(pickled)
 
         assert unpickled.job_id == job.job_id
-        assert unpickled.scene_id == job.scene_id
+        assert unpickled.scene == job.scene
+        assert unpickled.scene.scene_key == "test-scene@t0=3000000"
         assert unpickled.rollout_spec_index == job.rollout_spec_index
+        assert unpickled.scene.policy_start_us == 3_000_000
         assert unpickled.retry_attempt == 0
 
 
@@ -75,13 +89,14 @@ class TestAssignedRolloutJob:
         job = AssignedRolloutJob(
             request_id="req-1",
             job_id="test-123",
-            scene_id="test-scene",
+            scene=_scene("test-scene"),
             rollout_spec_index=0,
             endpoints=ep,
             dispatch_kind="fifo",
             scheduler_wait_seconds=0.0,
         )
         assert job.endpoints.driver.address == "driver:50051"
+        assert job.scene.policy_start_us == T0_AUTO
 
     def test_pickling(self):
         """AssignedRolloutJob should be picklable for multiprocessing Queue."""
@@ -89,7 +104,7 @@ class TestAssignedRolloutJob:
         job = AssignedRolloutJob(
             request_id="req-1",
             job_id="test-123",
-            scene_id="test-scene",
+            scene=_scene("test-scene", 3_000_000),
             rollout_spec_index=0,
             endpoints=ep,
             dispatch_kind="fifo",
@@ -102,6 +117,7 @@ class TestAssignedRolloutJob:
         assert unpickled.job_id == job.job_id
         assert unpickled.endpoints.driver.address == "driver:50051"
         assert unpickled.endpoints.physics.skip is False
+        assert unpickled.scene == _scene("test-scene", 3_000_000)
 
 
 class TestServiceEndpoints:
@@ -228,6 +244,7 @@ class TestWorkerArgs:
             log_dir="/tmp/logs",
             eval_config=MagicMock(),
             telemetry_port=9200,
+            log_level=logging.INFO,
             version_ids=version_ids,
         )
         assert args.version_ids is version_ids

@@ -2,6 +2,8 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import asyncio
+import io
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,8 @@ from alpasim_grpc.v0.video_model_pb2 import (
     VideoChunkReturn,
 )
 from alpasim_runtime.simulate.__main__ import create_arg_parser, run_simulation
+from alpasim_utils.logs import LogWriter
+from PIL import Image as PILImage
 
 import grpc
 import grpc.aio
@@ -30,7 +34,9 @@ _TINY_JPEG = (
     b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00\x01\x00\x01\x00\x00\xff\xd9"
 )
 _SENSORSIM_SCENE_ID = "clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71"
+_MOCK_EGO_MASK_RIG_CONFIG_ID = "hyperion_8_1"
 _VIDEO_MODEL_SCENE_ID = "clipgt-0b10bce8-61f1-4350-8577-cf3c9493ffc3"
+_VIDEO_MODEL_UUID = "162a328d-c9d1-4d39-bcc9-9ddffc2d142e"
 _MOCK_CAMERA_IDS = (
     "camera_front_wide_120fov",
     "camera_front_tele_30fov",
@@ -95,7 +101,15 @@ class _FakeSensorsimServicer(sensorsim_pb2_grpc.SensorsimServiceServicer):
 
     async def get_available_ego_masks(self, request: Empty, context):
         del request, context
-        return sensorsim_pb2.AvailableEgoMasksReturn()
+        response = sensorsim_pb2.AvailableEgoMasksReturn()
+        for logical_id in _MOCK_CAMERA_IDS:
+            response.ego_mask_metadata.add(
+                ego_mask_id=sensorsim_pb2.EgoMaskId(
+                    rig_config_id=_MOCK_EGO_MASK_RIG_CONFIG_ID,
+                    camera_logical_id=logical_id,
+                )
+            )
+        return response
 
     async def render_rgb(self, request: sensorsim_pb2.RGBRenderRequest, context):
         del context
@@ -150,7 +164,7 @@ def _write_sensorsim_mock_configs(
     base_user_config = yaml.safe_load(
         (_MOCK_DATA_DIR / "user-config.yaml").read_text(encoding="utf-8")
     )
-    base_user_config["scene_provider"]["usdz"]["data_dir"] = str(_MOCK_DATA_DIR)
+    base_user_config["data_source_provider"]["usdz"]["data_dir"] = str(_MOCK_DATA_DIR)
     base_user_config["endpoints"]["renderer"]["skip"] = False
     base_user_config["endpoints"]["renderer"]["n_concurrent_rollouts"] = 1
     base_user_config["prometheus"] = {
@@ -225,6 +239,13 @@ async def test_sensorsim_mocks_with_fake_server(tmp_path: Path):
     assert {
         request.camera_intrinsics.logical_id for request in servicer.render_requests
     } == set(_MOCK_CAMERA_IDS)
+    for request in servicer.render_requests:
+        assert request.insert_ego_mask
+        assert request.ego_mask_id.rig_config_id == _MOCK_EGO_MASK_RIG_CONFIG_ID
+        assert (
+            request.ego_mask_id.camera_logical_id
+            == request.camera_intrinsics.logical_id
+        )
 
 
 @pytest.mark.asyncio
@@ -266,6 +287,16 @@ async def test_sensorsim_mocks_batch_render(tmp_path: Path):
         for item in request.items
     }
     assert rendered_cameras == set(_MOCK_CAMERA_IDS)
+    for batch in servicer.batch_render_requests:
+        for item in batch.items:
+            assert item.request.insert_ego_mask
+            assert (
+                item.request.ego_mask_id.rig_config_id == _MOCK_EGO_MASK_RIG_CONFIG_ID
+            )
+            assert (
+                item.request.ego_mask_id.camera_logical_id
+                == item.request.camera_intrinsics.logical_id
+            )
 
 
 class _FakeWorldModelServicer(video_model_pb2_grpc.WorldModelServiceServicer):
@@ -333,8 +364,18 @@ def _write_video_model_mock_configs(
     base_user_config = yaml.safe_load(
         (_MOCK_DATA_DIR / "user-config.yaml").read_text(encoding="utf-8")
     )
-    base_user_config["scene_provider"]["usdz"]["data_dir"] = str(_VIDEO_MODEL_DATA_DIR)
-    base_user_config["scenes"] = [{"scene_id": _VIDEO_MODEL_SCENE_ID}]
+    base_user_config["data_source_provider"]["usdz"]["data_dir"] = str(
+        _VIDEO_MODEL_DATA_DIR
+    )
+    base_user_config["scenes"] = [
+        {
+            "source": {
+                "clip_id": _VIDEO_MODEL_SCENE_ID,
+                "usdz_uuid": _VIDEO_MODEL_UUID,
+            },
+            "policy_start_us": "AUTO",
+        }
+    ]
     base_user_config.pop("extra_cameras", None)
     base_user_config["endpoints"]["renderer"]["skip"] = False
     base_user_config["endpoints"]["renderer"]["n_concurrent_rollouts"] = 1
@@ -387,7 +428,25 @@ def _write_video_model_mock_configs(
 
 
 @pytest.mark.asyncio
-async def test_video_model_mocks(tmp_path: Path):
+@pytest.mark.parametrize("fail_close", [False, True])
+async def test_video_model_mocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_close: bool
+):
+    image = io.BytesIO()
+    PILImage.new("RGB", (512, 320), color=(128, 128, 128)).save(image, format="JPEG")
+    monkeypatch.setattr(__name__ + "._TINY_JPEG", image.getvalue())
+
+    original_close = LogWriter.__aexit__
+
+    async def close_log(self, *args):
+        assert not list(tmp_path.glob("rollouts/**/metrics.parquet"))
+        assert not list(tmp_path.glob("rollouts/**/_complete"))
+        await original_close(self, *args)
+        if fail_close:
+            raise OSError("log close failed")
+
+    monkeypatch.setattr(LogWriter, "__aexit__", close_log)
+
     servicer = _FakeWorldModelServicer()
     server, address = await _start_fake_video_model_server(servicer)
     try:
@@ -396,6 +455,19 @@ async def test_video_model_mocks(tmp_path: Path):
             address,
             telemetry_worker_port=0,
         )
+
+        user_path = Path(configs["user_config"])
+        user = yaml.safe_load(user_path.read_text())
+        user["prometheus"]["url"] = None
+        user["max_rollout_retries"] = 0
+        user_path.write_text(yaml.safe_dump(user))
+        eval_path = Path(configs["eval_config"])
+        config = yaml.safe_load(eval_path.read_text())
+        config.update(enabled=True, allow_aggregation_with_failed_rollouts=True)
+        config["aggregation_modifiers"]["remove_preengagement_timesteps"] = False
+        config["scene_score"] = {"enabled": True}
+        config["scorers"]["open_loop_collision"] = {"horizon_s": 3.0}
+        eval_path.write_text(yaml.safe_dump(config))
 
         _write_run_metadata(tmp_path, "test_video_model_mocks")
 
@@ -422,3 +494,16 @@ async def test_video_model_mocks(tmp_path: Path):
     assert servicer.render_requests
     assert servicer.close_session_request is not None
     assert servicer.close_session_request.session_id == "fake-video-model-session"
+    [asl] = tmp_path.glob("rollouts/**/rollout.asl")
+    assert asl.stat().st_size > 0
+    assert (asl.parent / "metrics.parquet").exists() == (not fail_close)
+    assert (asl.parent / "_complete").exists() == (not fail_close)
+    summary = json.loads((tmp_path / "aggregate/results-summary.json").read_text())
+    [row] = summary["rollouts"]
+    assert row["rollout_id"] == asl.parent.name
+    assert row["status"] == ("fail" if fail_close else "pass")
+    if not fail_close:
+        assert row["score"] > 0
+    else:
+        assert row["score"] == 0
+        assert "log close failed" in row["failure_reason"]

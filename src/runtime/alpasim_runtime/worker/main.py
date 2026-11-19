@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import multiprocessing as mp
 import os
 import sys
 import traceback
@@ -30,14 +29,20 @@ from alpasim_grpc.v0 import runtime_pb2
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import RendererKind, UserSimulatorConfig
+from alpasim_runtime.data_source_loader import (
+    DataSourceLoader,
+    build_data_source_loader,
+)
+from alpasim_runtime.ego_masks import EgoMaskOverride
 from alpasim_runtime.errors import RolloutError
 from alpasim_runtime.event_loop import create_event_rollout
 from alpasim_runtime.event_loop_idle_profiler import install_event_loop_idle_profiler
 from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache
 from alpasim_runtime.gc_pressure_profiler import setup_gc_pressure_profiler
-from alpasim_runtime.scene_loader import SceneLoader, build_scene_loader
+from alpasim_runtime.nav_route import NavRouteLibrary
 from alpasim_runtime.services.controller_service import ControllerService
 from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.frame_quality_service import FrameQualityService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
@@ -48,13 +53,13 @@ from alpasim_runtime.telemetry.telemetry_context import (
     try_get_context,
 )
 from alpasim_runtime.unbound_rollout import UnboundRollout
+from alpasim_runtime.worker.eval_pool import create_eval_executor
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
     JobResult,
     WorkerArgs,
     _ShutdownSentinel,
 )
-from alpasim_utils.scene_data_source import SceneDataSource
 from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.schema import EvalConfig
@@ -70,19 +75,23 @@ def _is_orphaned(parent_pid: int) -> bool:
 async def run_single_rollout(
     job: AssignedRolloutJob,
     user_config: UserSimulatorConfig,
-    data_source: SceneDataSource,
+    data_source_loader: DataSourceLoader,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
     eval_config: EvalConfig,
     eval_executor: ProcessPoolExecutor,
     force_gt_frame_cache: ForceGtFrameCache | None = None,
+    nav_routes: NavRouteLibrary | None = None,
+    ego_mask_overrides: dict[str, EgoMaskOverride] | None = None,
 ) -> JobResult:
     """Execute one rollout with the addresses assigned by the parent."""
     ep = job.endpoints
     rollout: UnboundRollout | None = None
 
     try:
+        data_source = data_source_loader.get_data_source(job.scene.source.source_id)
+
         # Create lightweight service objects (just channel + stub, no pool)
         driver = DriverService(
             ep.driver.address,
@@ -99,6 +108,10 @@ async def run_single_rollout(
         controller = ControllerService(
             ep.controller.address,
             skip=ep.controller.skip,
+        )
+        frame_quality = FrameQualityService(
+            ep.frame_quality.address,
+            skip=ep.frame_quality.skip,
         )
 
         # Resolve the renderer service from the typed runtime config.
@@ -130,14 +143,16 @@ async def run_single_rollout(
             functools.partial(
                 UnboundRollout.create,
                 simulation_config=user_config.simulation_config,
-                scene_id=job.scene_id,
+                scene=job.scene,
                 version_ids=version_ids,
                 data_source=data_source,
                 rollouts_dir=rollouts_dir,
                 session_uuid=job.session_uuid,
-                start_time_offset_us=job.start_time_offset_us,
                 session_seed=job.session_seed,
                 renderer_service=renderer_service,
+                ego_history_bytes=job.ego_history_bytes,
+                ego_mask_overrides=ego_mask_overrides,
+                nav_routes=nav_routes,
             ),
         )
 
@@ -149,6 +164,7 @@ async def run_single_rollout(
             physics=physics,
             trafficsim=traffic,
             controller=controller,
+            frame_quality=frame_quality,
             camera_catalog=camera_catalog,
             eval_config=eval_config,
             eval_executor=eval_executor,
@@ -172,7 +188,7 @@ async def run_single_rollout(
         module_logger.warning(
             "Rollout FAILED: job=%s scene=%s uuid=%s error=%s\n%s",
             job.job_id,
-            rollout.scene_id if rollout else "N/A",
+            rollout.scene.scene_key if rollout else "N/A",
             rollout.rollout_uuid if rollout else "N/A",
             exc,
             tb,
@@ -199,12 +215,14 @@ async def run_worker_loop(
     result_queue: Queue,
     num_consumers: int,
     user_config: UserSimulatorConfig,
-    scene_loader: SceneLoader,
+    data_source_loader: DataSourceLoader,
     camera_catalog: CameraCatalog,
     version_ids: RolloutMetadata.VersionIds,
     rollouts_dir: str,
     eval_config: EvalConfig,
     parent_pid: int | None = None,
+    nav_routes: NavRouteLibrary | None = None,
+    ego_mask_overrides: dict[str, EgoMaskOverride] | None = None,
 ) -> int:
     """
     Core job processing loop with concurrent consumers.
@@ -215,13 +233,15 @@ async def run_worker_loop(
         result_queue: Queue to push JobResult to.
         num_consumers: Number of concurrent consumer tasks.
         user_config: User simulator configuration.
-        scene_loader: Worker-local SceneLoader for loading scenes by scene_id.
+        data_source_loader: Worker-local loader for materializing data sources.
         camera_catalog: Camera catalog for sensorsim.
         version_ids: Canonical version IDs from the parent process.
         rollouts_dir: Directory for rollout outputs.
         eval_config: Evaluation configuration.
         parent_pid: If None, running inline - skip orphan detection.
                     If set, running in subprocess - exit if parent dies.
+        ego_mask_overrides: Clip selections loaded by the parent before dispatch.
+        nav_routes: Route indices for navigation instructions; None disables them.
 
     Returns:
         Number of rollouts completed by this worker.
@@ -257,11 +277,9 @@ async def run_worker_loop(
 
     # Create a process pool for offloading CPU-bound eval computation.
     # One slot per consumer so no consumer blocks waiting for a pool slot.
-    # spawn (not fork) so we don't fork with live gRPC client threads.
-    eval_executor = ProcessPoolExecutor(
-        max_workers=num_consumers,
-        mp_context=mp.get_context("spawn"),
-    )
+    # Workers are spawned eagerly so the pool survives /dev/shm semaphore
+    # cleanup between now and the first evaluation; see eval_pool.py.
+    eval_executor = create_eval_executor(max_workers=num_consumers)
 
     async def job_consumer() -> None:
         """
@@ -310,13 +328,15 @@ async def run_worker_loop(
                 result = await run_single_rollout(
                     job=job,
                     user_config=user_config,
-                    data_source=scene_loader.get_data_source(job.scene_id),
+                    data_source_loader=data_source_loader,
                     camera_catalog=camera_catalog,
                     version_ids=version_ids,
                     rollouts_dir=rollouts_dir,
                     eval_config=eval_config,
                     eval_executor=eval_executor,
                     force_gt_frame_cache=force_gt_frame_cache,
+                    ego_mask_overrides=ego_mask_overrides,
+                    nav_routes=nav_routes,
                 )
             finally:
                 if telemetry_ctx is not None:
@@ -360,7 +380,7 @@ async def worker_async_main(args: WorkerArgs) -> None:
 
     # Load user config (for scenarios, endpoints, etc.)
     user_config = typed_parse_config(args.user_config_path, UserSimulatorConfig)
-    scene_loader = build_scene_loader(user_config)
+    data_source_loader = build_data_source_loader(user_config)
 
     txt_logs_dir = os.path.join(args.log_dir, "txt-logs")
     rollouts_dir = os.path.join(args.log_dir, "rollouts")
@@ -383,7 +403,7 @@ async def worker_async_main(args: WorkerArgs) -> None:
     for logger_name in ["alpasim_runtime", "alpasim_utils", "alpasim_grpc"]:
         pkg_logger = logging.getLogger(logger_name)
         pkg_logger.handlers.clear()
-        pkg_logger.setLevel(logging.INFO)
+        pkg_logger.setLevel(args.log_level)
         pkg_logger.addHandler(file_handler)
         pkg_logger.addHandler(console_handler)
         pkg_logger.propagate = False  # Don't propagate to root logger
@@ -410,12 +430,14 @@ async def worker_async_main(args: WorkerArgs) -> None:
             result_queue=args.result_queue,
             num_consumers=args.num_consumers,
             user_config=user_config,
-            scene_loader=scene_loader,
+            data_source_loader=data_source_loader,
             camera_catalog=camera_catalog,
             version_ids=args.version_ids,
             rollouts_dir=rollouts_dir,
             eval_config=args.eval_config,
             parent_pid=args.parent_pid,
+            ego_mask_overrides=args.ego_mask_overrides,
+            nav_routes=args.nav_routes,
         )
 
     module_logger.info("Worker %d exiting", args.worker_id)

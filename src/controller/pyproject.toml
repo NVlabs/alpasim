@@ -4,15 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim_controller"
-version = "0.89.0"
+version = "1.24.0"
 description = "A simple, open source controller + vehicle model"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy",
+    "casadi<3.8",
     "do_mpc",
     "pytest",
     "matplotlib",
-    "osqp",
+    "osqp>=1.0.4",
     "scipy",
     "pyyaml",
     "alpasim_grpc",
@@ -26,6 +27,7 @@ authors = [
 [project.entry-points."alpasim.mpc"]
 linear = "alpasim_controller.mpc_impl.linear_mpc:LinearMPC"
 nonlinear = "alpasim_controller.mpc_impl.nonlinear_mpc:NonlinearMPC"
+sqp = "alpasim_controller.mpc_impl.sqp_mpc:SQPMPC"
 
 [tool.setuptools.packages.find]
 include = [ "alpasim_controller", "benchmark", "tests" ]

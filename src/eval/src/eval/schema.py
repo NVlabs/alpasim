@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -139,6 +139,18 @@ class ImageScorerConfig:
 
 
 @dataclass
+class FrameQualityScorerConfig:
+    camera_logical_id: str = "camera_front_wide_120fov"
+    rpc_timeout_s: float = 60.0
+
+    def __post_init__(self) -> None:
+        if self.rpc_timeout_s <= 0:
+            raise ValueError(
+                f"rpc_timeout_s must be positive, got {self.rpc_timeout_s}"
+            )
+
+
+@dataclass
 class OpenLoopCollisionScorerConfig:
     # Horizon in seconds: how far into each planned trajectory to check for
     # collisions against surrounding agents' recorded trajectories.
@@ -151,6 +163,9 @@ class ScorersConfig:
     plan_deviation: PlanDeviationScorerConfig = MISSING
     image: ImageScorerConfig = MISSING
     open_loop_collision: OpenLoopCollisionScorerConfig = MISSING
+    frame_quality: FrameQualityScorerConfig = field(
+        default_factory=FrameQualityScorerConfig
+    )
 
 
 @dataclass

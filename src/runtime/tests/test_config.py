@@ -3,9 +3,14 @@
 
 """Tests for runtime configuration helpers."""
 
+from dataclasses import fields
+from pathlib import Path
+
 import pytest
 from alpasim_runtime import config
-from alpasim_runtime.scene_loader import trajdata_provider_config_to_params
+from alpasim_runtime.data_source_loader import trajdata_provider_config_to_params
+from alpasim_utils.yaml_utils import typed_parse_config
+from omegaconf import OmegaConf
 
 
 def test_rollout_retry_default() -> None:
@@ -17,6 +22,39 @@ def test_usdz_provider_config_defaults() -> None:
 
     assert cfg.data_dir == "/data/usdz"
     assert cfg.artifact_cache_size is None
+
+
+def test_runtime_schema_keeps_data_source_provider_config_key() -> None:
+    schema = OmegaConf.structured(config.UserSimulatorConfig)
+
+    assert "data_source_provider" in schema.keys()
+    assert "scene_provider" not in schema.keys()
+    assert "clip_provider" not in schema.keys()
+    assert "clip_affine_dispatch" in schema.keys()
+    field_types = {
+        field.name: field.type for field in fields(config.UserSimulatorConfig)
+    }
+    assert field_types["data_source_provider"] is config.DataSourceProviderConfig
+    assert field_types["clip_affine_dispatch"] is config.ClipAffineDispatchConfig
+
+
+def test_generated_user_config_parses_data_source_and_clip_affinity() -> None:
+    user_config = typed_parse_config(
+        Path(__file__).parent / "data" / "mock" / "user-config.yaml",
+        config.UserSimulatorConfig,
+    )
+
+    assert user_config.data_source_provider.kind == "usdz"
+    assert user_config.clip_affine_dispatch.enabled is False
+    assert len(user_config.scenes) == 1
+
+
+def test_clip_affine_dispatch_config_defaults() -> None:
+    cfg = config.UserSimulatorConfig().clip_affine_dispatch
+
+    assert cfg.enabled is False
+    assert cfg.max_renderers_per_clip == 2
+    assert cfg.max_clips_per_renderer is None
 
 
 def test_trajdata_provider_config_to_trajdata_params() -> None:
@@ -93,5 +131,5 @@ def test_trajdata_provider_config_requires_dataset() -> None:
         cache_location="/tmp/cache",
     )
 
-    with pytest.raises(ValueError, match=r"scene_provider\.trajdata\.dataset"):
+    with pytest.raises(ValueError, match=r"data_source_provider\.trajdata\.dataset"):
         trajdata_provider_config_to_params(cfg)

@@ -79,8 +79,14 @@ def off_cadence_simulation_result() -> SimulationResult:
     return SimulationResult(
         session_metadata=RolloutMetadata.SessionMetadata(
             session_uuid="test-session",
-            scene_id="test-scene",
-            batch_size=1,
+            scene={
+                "source": {
+                    "clip": {
+                        "clip_id": "test-scene",
+                        "usdz_uuid": "test-artifact",
+                    }
+                }
+            },
             n_sim_steps=len(pose_timestamps),
             start_timestamp_us=0,
             control_timestep_us=200_000,

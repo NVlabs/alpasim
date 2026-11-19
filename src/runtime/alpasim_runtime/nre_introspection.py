@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""NRE server introspection for scene-affine dispatch.
+"""NRE server introspection for clip-affine dispatch.
 
 Requires an NRE build that implements the ``GetLoadedScenes`` RPC
 (added in NRE MR !3709).  Returns ``None`` on transient gRPC failures so
-callers can distinguish "query failed" from "genuinely no cached scenes".
+callers can distinguish "query failed" from "genuinely no cached clips".
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import grpc.aio
 logger = logging.getLogger(__name__)
 
 _INTROSPECTION_TIMEOUT_S = 15.0
-_SCENE_PREFETCH_TIMEOUT_S = 300.0
+_CLIP_PREFETCH_TIMEOUT_S = 300.0
 
 
 class IntrospectionNotSupportedError(Exception):
@@ -32,7 +32,7 @@ class IntrospectionNotSupportedError(Exception):
     pass
 
 
-async def _query_loaded_scene_state(
+async def _query_loaded_clip_state(
     stub: SensorsimServiceStub,
     address: str,
     *,
@@ -45,9 +45,9 @@ async def _query_loaded_scene_state(
         if raise_on_unimplemented and exc.code() == grpc.StatusCode.UNIMPLEMENTED:
             raise IntrospectionNotSupportedError(
                 f"NRE server at {address} does not support GetLoadedScenes "
-                f"(UNIMPLEMENTED). Scene-affine dispatch requires an NRE image "
+                f"(UNIMPLEMENTED). Clip-affine dispatch requires an NRE image "
                 f"with this RPC. Either upgrade the NRE image or set "
-                f"scene_affine_dispatch.enabled=false."
+                f"clip_affine_dispatch.enabled=false."
             ) from exc
         logger.warning("get_loaded_scenes failed on %s: %s", address, exc.details())
         return None
@@ -56,51 +56,52 @@ async def _query_loaded_scene_state(
         return None
 
 
-async def get_loaded_scenes(
+async def get_loaded_clips(
     address: str,
     *,
     raise_on_unimplemented: bool = False,
 ) -> dict[str, int] | None:
-    """Query an NRE server for its currently loaded scene counts.
+    """Query an NRE server for its currently loaded clip counts.
 
-    Returns a ``{scene_id: loaded_instance_count}`` dict on success, or
+    Returns a ``{clip_id: loaded_instance_count}`` dict on success, or
     ``None`` if the RPC call fails for a transient reason (so callers can
-    distinguish "no cached scenes" from "query failed").
+    distinguish "no cached clips" from "query failed").
 
     Args:
         address: gRPC address of the NRE server.
         raise_on_unimplemented: If True, raises ``IntrospectionNotSupportedError``
             when the server returns UNIMPLEMENTED instead of silently returning None.
-            Use at startup to fail fast when scene-affine dispatch is enabled but
+            Use at startup to fail fast when clip-affine dispatch is enabled but
             the NRE image doesn't support introspection.
     """
     channel = grpc.aio.insecure_channel(address)
     try:
         stub = SensorsimServiceStub(channel)
-        state = await _query_loaded_scene_state(
+        state = await _query_loaded_clip_state(
             stub,
             address,
             raise_on_unimplemented=raise_on_unimplemented,
         )
         if state is None:
             return None
+        # NRE's wire schema names the clip ID scene_id.
         return {entry.scene_id: entry.loaded_instance_count for entry in state.scenes}
     finally:
         await channel.close()
 
 
-async def prefetch_scene(address: str, scene_id: str) -> None:
-    """Load one scene into NRE's reusable backend cache without rendering."""
+async def prefetch_clip(address: str, clip_id: str) -> None:
+    """Load one clip into NRE's reusable backend cache without rendering."""
     channel = grpc.aio.insecure_channel(address)
     started = time.monotonic()
     try:
         stub = SensorsimServiceStub(channel)
-        before = await _query_loaded_scene_state(stub, address)
+        before = await _query_loaded_clip_state(stub, address)
         if before is None:
             logger.warning(
-                "Scene prefetch skipped because NRE cache state is unavailable: "
-                "scene_id=%s renderer=%s",
-                scene_id,
+                "Clip prefetch skipped because NRE cache state is unavailable: "
+                "clip_id=%s renderer=%s",
+                clip_id,
                 address,
             )
             return
@@ -109,7 +110,7 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
             (
                 entry.loaded_instance_count
                 for entry in before.scenes
-                if entry.scene_id == scene_id
+                if entry.scene_id == clip_id
             ),
             0,
         )
@@ -120,19 +121,19 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
         capacity = before.loaded_instance_capacity
         if before_count > 0:
             logger.info(
-                "Scene prefetch skipped because scene is already loaded: "
-                "scene_id=%s renderer=%s cache_instances=%d",
-                scene_id,
+                "Clip prefetch skipped because clip is already loaded: "
+                "clip_id=%s renderer=%s cache_instances=%d",
+                clip_id,
                 address,
                 before_count,
             )
             return
         if capacity > 0 and loaded_instances >= capacity and reusable_instances == 0:
             logger.info(
-                "Scene prefetch skipped because NRE cache is fully in use: "
-                "scene_id=%s renderer=%s loaded_instances=%d "
+                "Clip prefetch skipped because NRE cache is fully in use: "
+                "clip_id=%s renderer=%s loaded_instances=%d "
                 "reusable_instances=%d capacity=%d",
-                scene_id,
+                clip_id,
                 address,
                 loaded_instances,
                 reusable_instances,
@@ -141,10 +142,10 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
             return
 
         logger.info(
-            "Scene prefetch NRE load starting: scene_id=%s renderer=%s "
+            "Clip prefetch NRE load starting: clip_id=%s renderer=%s "
             "cache_instances_before=%d loaded_instances=%d reusable_instances=%d "
             "capacity=%d",
-            scene_id,
+            clip_id,
             address,
             before_count,
             loaded_instances,
@@ -152,11 +153,12 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
             capacity,
         )
         response = await stub.get_available_cameras(
-            AvailableCamerasRequest(scene_id=scene_id),
-            timeout=_SCENE_PREFETCH_TIMEOUT_S,
+            # NRE's wire schema names the clip ID ``scene_id``.
+            AvailableCamerasRequest(scene_id=clip_id),
+            timeout=_CLIP_PREFETCH_TIMEOUT_S,
             wait_for_ready=True,
         )
-        after = await _query_loaded_scene_state(stub, address)
+        after = await _query_loaded_clip_state(stub, address)
         after_count = (
             None
             if after is None
@@ -164,16 +166,16 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
                 (
                     entry.loaded_instance_count
                     for entry in after.scenes
-                    if entry.scene_id == scene_id
+                    if entry.scene_id == clip_id
                 ),
                 0,
             )
         )
         logger.info(
-            "Scene prefetch NRE load complete: scene_id=%s renderer=%s "
+            "Clip prefetch NRE load complete: clip_id=%s renderer=%s "
             "duration_s=%.3f cache_instances_before=%d cache_instances_after=%s "
             "camera_count=%d",
-            scene_id,
+            clip_id,
             address,
             time.monotonic() - started,
             before_count,
@@ -182,8 +184,8 @@ async def prefetch_scene(address: str, scene_id: str) -> None:
         )
     except Exception:
         logger.exception(
-            "Scene prefetch NRE load failed: scene_id=%s renderer=%s duration_s=%.3f",
-            scene_id,
+            "Clip prefetch NRE load failed: clip_id=%s renderer=%s duration_s=%.3f",
+            clip_id,
             address,
             time.monotonic() - started,
         )

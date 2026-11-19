@@ -19,7 +19,8 @@ three types of messages:
 > :green_book: `RolloutCameraImage` requests allow for assembling an `.mp4` video out of an `.asl`
 > log.
 
-> :warning: The simulation header doesn't specify the `usdz` file uuid.
+> :green_book: The simulation header records the source clip ID, pinned USDZ UUID,
+> and policy-start selector even if the `.asl` file is renamed.
 
 ### Reading asl logs
 
@@ -45,7 +46,14 @@ results in
 rollout_metadata {
   session_metadata {
     session_uuid: "a5823758-a782-11ef-aa43-0242c0a89003"
-    scene_id: "clipgt-3055a5c9-53e8-4e20-b41a-19c0f917b081"
+    scene {
+      source {
+        clip {
+          clip_id: "clipgt-3055a5c9-53e8-4e20-b41a-19c0f917b081"
+          usdz_uuid: "00000000-0000-0000-0000-000000000000"
+        }
+      }
+    }
     batch_size: 1
     n_sim_steps: 120
     start_timestamp_us: 1689697803493732

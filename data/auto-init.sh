@@ -17,13 +17,15 @@ model_labels=(
   "AR1 (HuggingFace, nvidia/Alpamayo-R1-10B)"
   "A1.5 (HuggingFace, nvidia/Alpamayo-1.5-10B)"
   "A2 Super (HuggingFace, nvidia/Alpamayo2-Super)"
+  "A2 Edge (HuggingFace, nvidia/Alpamayo2-Edge)"
 )
-model_states=( 1 0 0 0 )
+model_states=( 1 0 0 0 0 )
 model_commands=(
   '"${SCRIPT_DIR}/download_vavam_assets.sh" --model vavam-b'
-  'uv run huggingface-cli download nvidia/Alpamayo-R1-10B'
-  'uv run huggingface-cli download nvidia/Alpamayo-1.5-10B && uv run huggingface-cli download nvidia/Cosmos-Reason2-8B'
-  'uv run huggingface-cli download nvidia/Alpamayo2-Super'
+  'uv run hf download nvidia/Alpamayo-R1-10B'
+  'uv run hf download nvidia/Alpamayo-1.5-10B && uv run hf download nvidia/Cosmos-Reason2-8B'
+  'uv run hf download nvidia/Alpamayo2-Super'
+  'uv run hf download nvidia/Alpamayo2-Edge'
 )
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,9 @@
 # Alpasim core library
 This folder contains gRPC definitions for interoperation between alpasim components and certain common utility functions.
 
+The [scene data model](../../docs/DESIGN.md#scene-data-model) defines the domain vocabulary represented
+by the runtime discovery and rollout APIs.
+
 Refer to [CONTRIBUTING.md](../../CONTRIBUTING.md#coordinate-systems) for the coordinate frame conventions shared across the runtime and gRPC APIs.
 
 ## gRPC APIs

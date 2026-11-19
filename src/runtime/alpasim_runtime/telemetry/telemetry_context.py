@@ -53,6 +53,7 @@ HISTOGRAM_BUCKETS = {
         10,
     ),
     "scheduler_wait": (0.01, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300),
+    "frame_quality_drain": (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
 }
 
 
@@ -82,6 +83,9 @@ class TelemetryContext:
     _rollout_duration: Histogram = field(init=False)
     _step_duration: Histogram = field(init=False)
     _observation_barrier: Histogram = field(init=False)
+    _frame_quality_pending_requests: Gauge = field(init=False)
+    _frame_quality_backpressure: Counter = field(init=False)
+    _frame_quality_drain: Histogram = field(init=False)
 
     # Simulation summary metrics
     _rollouts: Counter = field(init=False)
@@ -158,6 +162,23 @@ class TelemetryContext:
             WORKER_LABELS,
             buckets=HISTOGRAM_BUCKETS["observation_barrier"],
             registry=self.registry,
+        ).labels(**worker_labels)
+        self._frame_quality_pending_requests = worker_gauge(
+            "alpasim_frame_quality_pending_requests",
+            "Unfinished frame quality RPCs for the active rollout",
+        )
+        self._frame_quality_backpressure = Counter(
+            "alpasim_frame_quality_backpressure",
+            "Times rollout submission waited at the pending-request bound",
+            registry=self.registry,
+            labelnames=WORKER_LABELS,
+        ).labels(**worker_labels)
+        self._frame_quality_drain = Histogram(
+            "alpasim_frame_quality_drain_seconds",
+            "Wall time spent draining frame quality requests at rollout end",
+            registry=self.registry,
+            labelnames=WORKER_LABELS,
+            buckets=HISTOGRAM_BUCKETS["frame_quality_drain"],
         ).labels(**worker_labels)
 
         # Pre-register simulation summary metrics
@@ -261,6 +282,18 @@ class TelemetryContext:
     def record_observation_barrier(self, duration_seconds: float) -> None:
         """Record one wait at the pre-drive observation barrier."""
         self._observation_barrier.observe(duration_seconds)
+
+    def record_frame_quality_pending_requests(self, count: int) -> None:
+        """Record unfinished quality RPCs for the active rollout."""
+        self._frame_quality_pending_requests.set(count)
+
+    def record_frame_quality_backpressure(self) -> None:
+        """Record one wait caused by the per-rollout pending-request bound."""
+        self._frame_quality_backpressure.inc()
+
+    def record_frame_quality_drain(self, duration_seconds: float) -> None:
+        """Record rollout-end quality drain wall time."""
+        self._frame_quality_drain.observe(duration_seconds)
 
     def record_rollout_finished(self, status: str) -> None:
         """Record one terminal rollout status in the live simulation summary."""

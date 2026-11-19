@@ -67,6 +67,7 @@ class TestDetectLayout:
         assert layout.job_dirs == [tmp_path]
         assert layout.image == "nvcr.io/test/image:1.0"
         assert layout.scene_cache == "/lustre/nre-artifacts"
+        assert layout.external_artifact_mounts == []
 
     def test_array_job(self, tmp_path: pathlib.Path) -> None:
         _make_array_job(tmp_path, n_tasks=3)
@@ -170,6 +171,32 @@ class TestRunSlurm:
         assert index_file.exists()
         lines = index_file.read_text().strip().split("\n")
         assert len(lines) == 3
+
+    @patch("eval.reeval.subprocess.run")
+    def test_single_job_mounts_external_scene_artifacts(
+        self, mock_run, tmp_path: pathlib.Path
+    ) -> None:
+        _make_single_job(tmp_path)
+        wizard_config_path = tmp_path / "wizard-config.yaml"
+        wizard_cfg = yaml.safe_load(wizard_config_path.read_text())
+        external_mount = "/lustre/external:/mnt/external:ro"
+        wizard_cfg["scenes"]["external_artifact_mounts"] = [external_mount]
+        wizard_config_path.write_text(yaml.dump(wizard_cfg))
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="Submitted batch job 12345\n", stderr=""
+        )
+
+        from eval.reeval import run_slurm
+
+        layout = detect_layout(tmp_path)
+        assert layout.external_artifact_mounts == [external_mount]
+
+        assert run_slurm(layout, partition="cpu_short", account="my_account") == 0
+        eval_script = (tmp_path / "reeval_scripts" / "submit_eval.sh").read_text()
+        assert (
+            "/lustre/nre-artifacts:/mnt/nre-data,"
+            "/lustre/external:/mnt/external:ro" in eval_script
+        )
 
     def test_slurm_missing_account_raises(self, tmp_path: pathlib.Path) -> None:
         _make_single_job(tmp_path)

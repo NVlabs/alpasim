@@ -1,0 +1,12 @@
+# @package _global_
+# Anonymized V5 navigation for public scenes: GPS-free per-clip route indices read by
+# the recorded-navigation lookup. data/nav/README.md lists the scenes they cover.
+
+defines:
+  route_data: "${repo-relative:'data/nav/v5_anonymized'}"
+
+runtime:
+  simulation_config:
+    nav_instruction:
+      source: recorded
+      route_index_dir: /mnt/route

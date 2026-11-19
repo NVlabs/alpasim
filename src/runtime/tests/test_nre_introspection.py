@@ -11,8 +11,8 @@ import pytest
 from alpasim_grpc.v0.sensorsim_pb2 import LoadedSceneEntry, LoadedScenesReturn
 from alpasim_runtime.nre_introspection import (
     IntrospectionNotSupportedError,
-    get_loaded_scenes,
-    prefetch_scene,
+    get_loaded_clips,
+    prefetch_clip,
 )
 
 import grpc
@@ -31,19 +31,19 @@ def _make_aio_rpc_error(
     )
 
 
-class TestGetLoadedScenes:
-    """Tests for get_loaded_scenes."""
+class TestGetLoadedClips:
+    """Tests for get_loaded_clips."""
 
     @pytest.mark.asyncio
     async def test_parses_response_correctly(self):
-        """Successful response should be parsed into {scene_id: count} dict."""
+        """Successful response should be parsed into {clip_id: count} dict."""
         mock_channel = AsyncMock()
 
         entry_a = MagicMock()
-        entry_a.scene_id = "scene-A"
+        entry_a.scene_id = "clip-A"
         entry_a.loaded_instance_count = 3
         entry_b = MagicMock()
-        entry_b.scene_id = "scene-B"
+        entry_b.scene_id = "clip-B"
         entry_b.loaded_instance_count = 1
 
         mock_response = MagicMock()
@@ -62,9 +62,9 @@ class TestGetLoadedScenes:
                 return_value=mock_stub,
             ),
         ):
-            result = await get_loaded_scenes("gpu-0:50052")
+            result = await get_loaded_clips("gpu-0:50052")
 
-        assert result == {"scene-A": 3, "scene-B": 1}
+        assert result == {"clip-A": 3, "clip-B": 1}
         mock_channel.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -88,7 +88,7 @@ class TestGetLoadedScenes:
                 return_value=mock_stub,
             ),
         ):
-            result = await get_loaded_scenes("gpu-0:50052")
+            result = await get_loaded_clips("gpu-0:50052")
             assert result is None
 
     @pytest.mark.asyncio
@@ -110,7 +110,7 @@ class TestGetLoadedScenes:
                 return_value=mock_stub,
             ),
         ):
-            result = await get_loaded_scenes("gpu-0:50052")
+            result = await get_loaded_clips("gpu-0:50052")
             assert result is None
 
     @pytest.mark.asyncio
@@ -133,7 +133,7 @@ class TestGetLoadedScenes:
             ),
         ):
             with pytest.raises(IntrospectionNotSupportedError):
-                await get_loaded_scenes("gpu-0:50052", raise_on_unimplemented=True)
+                await get_loaded_clips("gpu-0:50052", raise_on_unimplemented=True)
 
     @pytest.mark.asyncio
     async def test_transient_error_returns_none_even_with_raise_flag(self):
@@ -156,15 +156,15 @@ class TestGetLoadedScenes:
                 return_value=mock_stub,
             ),
         ):
-            result = await get_loaded_scenes("gpu-0:50052", raise_on_unimplemented=True)
+            result = await get_loaded_clips("gpu-0:50052", raise_on_unimplemented=True)
             assert result is None
 
 
 @pytest.mark.asyncio
-async def test_prefetch_scene_loads_backend_and_reports_cache_transition(
+async def test_prefetch_clip_loads_backend_and_reports_cache_transition(
     caplog,
 ) -> None:
-    """Camera discovery loads the scene backend without rendering a frame."""
+    """Camera discovery loads the clip backend without rendering a frame."""
     mock_channel = AsyncMock()
     mock_stub = MagicMock()
     mock_stub.get_loaded_scenes = AsyncMock(
@@ -173,7 +173,7 @@ async def test_prefetch_scene_loads_backend_and_reports_cache_transition(
             LoadedScenesReturn(
                 scenes=[
                     LoadedSceneEntry(
-                        scene_id="scene-A",
+                        scene_id="clip-A",
                         loaded_instance_count=1,
                         reusable_instance_count=1,
                     )
@@ -197,10 +197,10 @@ async def test_prefetch_scene_loads_backend_and_reports_cache_transition(
         ),
         caplog.at_level("INFO"),
     ):
-        await prefetch_scene("gpu-0:50052", "scene-A")
+        await prefetch_clip("gpu-0:50052", "clip-A")
 
     mock_stub.get_available_cameras.assert_awaited_once()
-    assert "scene_id=scene-A" in caplog.text
+    assert "clip_id=clip-A" in caplog.text
     assert "cache_instances_before=0" in caplog.text
     assert "cache_instances_after=1" in caplog.text
     assert "camera_count=2" in caplog.text
@@ -208,7 +208,7 @@ async def test_prefetch_scene_loads_backend_and_reports_cache_transition(
 
 
 @pytest.mark.asyncio
-async def test_prefetch_scene_skips_when_cache_instances_are_all_in_use(caplog) -> None:
+async def test_prefetch_clip_skips_when_cache_instances_are_all_in_use(caplog) -> None:
     """Prefetch does not displace backends serving active rollouts."""
     mock_channel = AsyncMock()
     mock_stub = MagicMock()
@@ -216,7 +216,7 @@ async def test_prefetch_scene_skips_when_cache_instances_are_all_in_use(caplog) 
         return_value=LoadedScenesReturn(
             scenes=[
                 LoadedSceneEntry(
-                    scene_id="scene-active",
+                    scene_id="clip-active",
                     loaded_instance_count=2,
                     reusable_instance_count=0,
                 )
@@ -237,7 +237,7 @@ async def test_prefetch_scene_skips_when_cache_instances_are_all_in_use(caplog) 
         ),
         caplog.at_level("INFO"),
     ):
-        await prefetch_scene("gpu-0:50052", "scene-next")
+        await prefetch_clip("gpu-0:50052", "clip-next")
 
     mock_stub.get_available_cameras.assert_not_awaited()
     assert "cache is fully in use" in caplog.text
@@ -246,7 +246,7 @@ async def test_prefetch_scene_skips_when_cache_instances_are_all_in_use(caplog) 
 
 
 @pytest.mark.asyncio
-async def test_prefetch_scene_allows_prefetch_when_cache_capacity_is_unknown(
+async def test_prefetch_clip_allows_prefetch_when_cache_capacity_is_unknown(
     caplog,
 ) -> None:
     """Proto3 default capacity of zero means unknown, not exhausted."""
@@ -257,7 +257,7 @@ async def test_prefetch_scene_allows_prefetch_when_cache_capacity_is_unknown(
             LoadedScenesReturn(
                 scenes=[
                     LoadedSceneEntry(
-                        scene_id="scene-active",
+                        scene_id="clip-active",
                         loaded_instance_count=1,
                         reusable_instance_count=0,
                     )
@@ -266,12 +266,12 @@ async def test_prefetch_scene_allows_prefetch_when_cache_capacity_is_unknown(
             LoadedScenesReturn(
                 scenes=[
                     LoadedSceneEntry(
-                        scene_id="scene-active",
+                        scene_id="clip-active",
                         loaded_instance_count=1,
                         reusable_instance_count=0,
                     ),
                     LoadedSceneEntry(
-                        scene_id="scene-next",
+                        scene_id="clip-next",
                         loaded_instance_count=1,
                         reusable_instance_count=1,
                     ),
@@ -294,7 +294,7 @@ async def test_prefetch_scene_allows_prefetch_when_cache_capacity_is_unknown(
         ),
         caplog.at_level("INFO"),
     ):
-        await prefetch_scene("gpu-0:50052", "scene-next")
+        await prefetch_clip("gpu-0:50052", "clip-next")
 
     mock_stub.get_available_cameras.assert_awaited_once()
     assert "cache is fully in use" not in caplog.text
@@ -303,7 +303,7 @@ async def test_prefetch_scene_allows_prefetch_when_cache_capacity_is_unknown(
 
 
 @pytest.mark.asyncio
-async def test_prefetch_scene_skips_when_cache_state_is_unavailable(caplog) -> None:
+async def test_prefetch_clip_skips_when_cache_state_is_unavailable(caplog) -> None:
     """Prefetch fails safe when active cache use cannot be determined."""
     mock_channel = AsyncMock()
     mock_stub = MagicMock()
@@ -323,7 +323,7 @@ async def test_prefetch_scene_skips_when_cache_state_is_unavailable(caplog) -> N
         ),
         caplog.at_level("WARNING"),
     ):
-        await prefetch_scene("gpu-0:50052", "scene-next")
+        await prefetch_clip("gpu-0:50052", "clip-next")
 
     mock_stub.get_available_cameras.assert_not_awaited()
     assert "cache state is unavailable" in caplog.text

@@ -12,6 +12,7 @@ import logging
 import torch
 from alpamayo1_5 import helper
 
+from ..schema import ModelConfig
 from .alpamayo1_5_model import Alpamayo15Model
 from .alpamayo_base import configure_deterministic_runtime
 from .trajectory_selection import TrajectorySelectionStrategy
@@ -47,6 +48,15 @@ def _load_recipes_chat_template():
 
 class Alpamayo15RecipesSFTModel(Alpamayo15Model):
     """Run an Alpamayo Recipes 1.5 SFT checkpoint in the native driver."""
+
+    @classmethod
+    def _variant_init_kwargs(cls, model_cfg: ModelConfig) -> dict[str, object]:
+        if model_cfg.diffusion_expert_cuda_graph:
+            logger.warning(
+                "Alpamayo Recipes 1.5 SFT does not support diffusion expert CUDA graphs; "
+                "using eager expert forwards"
+            )
+        return {"cfg_guidance_weight": model_cfg.cfg_guidance_weight}
 
     def __init__(
         self,

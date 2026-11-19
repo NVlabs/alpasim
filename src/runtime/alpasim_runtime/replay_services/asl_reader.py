@@ -25,7 +25,7 @@ from typing import Any, Callable, Deque, Dict, List, Tuple, Type, Union
 from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage
 from alpasim_grpc.v0.sensorsim_pb2 import RGBRenderRequest
-from alpasim_utils.logs import async_read_pb_log
+from alpasim_utils.logs import async_read_pb_log, clip_id_from_session_metadata
 from google.protobuf import json_format
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message
@@ -160,6 +160,16 @@ SERVICE_EXCHANGES = {
         ExchangeConfig(
             method="submit_route",
             request_entry="route_request",
+            response=common_pb2.Empty,
+        ),
+        ExchangeConfig(
+            method="submit_vectorized_observation",
+            request_entry="vectorized_observation",
+            response=common_pb2.Empty,
+        ),
+        ExchangeConfig(
+            method="submit_navigation",
+            request_entry="navigation_instruction",
             response=common_pb2.Empty,
         ),
         ExchangeConfig(
@@ -610,13 +620,15 @@ class ASLReader:
         return request_dict
 
     def get_map_id(self) -> str:
-        """Get the scene ID from the ASL metadata"""
-        scene_id = self.asl_metadata["rollout_metadata"].session_metadata.scene_id
+        """Get the ClipGT ID from the ASL metadata."""
+        clip_id = clip_id_from_session_metadata(
+            self.asl_metadata["rollout_metadata"].session_metadata
+        )
         pattern = r"^clipgt-([0-9a-fA-F-]{36})$"
-        match = re.match(pattern, scene_id)
+        match = re.match(pattern, clip_id)
         if match is None:
             raise ValueError(
-                f"Scene ID '{scene_id}' does not match expected pattern 'clipgt-<uuid>'"
+                f"Clip ID '{clip_id}' does not match expected pattern 'clipgt-<uuid>'"
             )
         return match.group(1)  # Map id (without clipgt prefix)
 

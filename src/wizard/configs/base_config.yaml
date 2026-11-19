@@ -9,7 +9,9 @@ defaults:
   - topology: null # Must be overridden (e.g., topology=1gpu)
   - trafficsim: disabled # Disabled unless an implementation is selected (e.g., trafficsim=catk)
   - controller: default # Defaults to linear MPC; override with controller=nonlinear etc.
+  - frame_quality: disabled # Optional live frame-quality scoring
   - renderer: null # Optional override
+  - nav_instruction: null # Optional override of the driver's navigation source
   - optional scenes_catalog: internal # auto-override when internal plugin installed
   - optional image_defaults: internal # auto-override when internal plugin installed
 
@@ -28,24 +30,32 @@ defines:
 
   # defaults will work out of the box \/
   drivers: "${defines.filesystem}/drivers"
-  sensordata: "${defines.filesystem}/nre-artifacts"
   trafficsim_models: "${defines.filesystem}/trafficsim-models"
+  route_data: "${repo-relative:'data/empty-route'}" # Recorded-navigation groups select their data root
 
   renderer_entrypoint: "/app/internal/scripts/pycena/runtime/pycena_nrm_full"
   nre_max_workers: 4
-  # Maximum backends a single scene ID may occupy inside one NRE server
-  # (concurrent rollouts of the same scene each check out a backend; one render
+  # Maximum backends a single clip ID may occupy inside one NRE server
+  # (concurrent rollouts of the same clip each check out a backend; one render
   # request covers all cameras). Requests beyond the cap queue on the NRE side
   # instead of spawning more backends. Must be <= nre_cache_size; size the cache
-  # as nre_cache_size >= min(n_concurrent_rollouts, max_scenes_per_renderer)
+  # as nre_cache_size >= min(n_concurrent_rollouts, max_clips_per_renderer)
   # * nre_max_backends_per_scene. Only consumed by renderer images whose command
   # passes --max-backends-per-scene (e.g. renderer=internal_nre).
   nre_max_backends_per_scene: 1
   helper: scripts
   vscode: sources/remote-vscode-server
-  physics_cache_size: 16 # should match or exceed concurrent scenes to avoid cache thrashing
+  physics_cache_size: 16 # should match or exceed concurrent clips to avoid cache thrashing
 
 # \/ the wizard.* section defines properties global to all alpasim modules
+ego_hoods:
+  banks: "${repo-relative:'data/nre-artifacts/ego-hoods'}" # Mounted into the renderer
+  # Clip ID -> carline bank map. When set, the wizard re-renders the carline hoods
+  # listed in the transform specs into each selected scene's camera and writes the
+  # banks to `banks`.
+  carlines: null
+  transforms: []
+
 wizard:
   # Name of the run, used to identify the run in the databases. If null, will
   # use the SLURM job name if set.
@@ -54,6 +64,9 @@ wizard:
   # docker-compose and `DOCKER` for local runs via "raw" docker or `NONE` for
   # only generating the configs.
   run_method: "DOCKER_COMPOSE"
+  # Optional slots assigned to this Wizard from the GPUs available to its process.
+  # Service GPU slots are relative to this subset. Null uses the full allocation.
+  gpu_slots: null
 
   # directory path to log the results of this run. ??? indicates it is mandatory to override this via cmdline args
   log_dir: ???
@@ -113,20 +126,27 @@ wizard:
     file_sd_dir: "${defines.filesystem}/prometheus/file-sd"
 
 scenes:
-  # Selection method (set one of these two)
-  scene_ids:
+  # Select clips directly, checked-in suites by ID, or explicit suite configs.
+  # These modes are exclusive.
+  clip_ids:
     - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554 # default OSS scene from huggingface (26.01 dataset)
-  test_suite_id: null # Test suite ID to use (from suites_csv)
+  suite_ids: null
+  suite_configs: null
+  # Resolve named groups independently, then serve their exact-scene union.
+  # Mutually exclusive with the selectors above.
+  suite_groups: {}
+  exclude_clip_ids: [] # Clip IDs to remove after resolving clip_ids or suite_configs
 
   # Limit the number of scenes to run (0 or negative means no limit)
   limit_to_first_n: 0
 
   # Paths
   scene_cache: "${defines.filesystem}/nre-artifacts"
-  scenes_csv:
-    - "${repo-relative:'data/scenes/sim_scenes.csv'}"
-  suites_csv:
-    - "${repo-relative:'data/scenes/sim_suites.csv'}"
+  clip_catalog_csvs:
+    - "${repo-relative:'data/scenes/clip_catalog.csv'}"
+    - "${repo-relative:'data/scenes/clip_catalog_2505.csv'}"
+  scene_suite_dirs:
+    - "${repo-relative:'data/scenes/scene_suites'}"
 
 # \/ services.* defines the individual components of the simulation. Each of them is deployed from an image so the layout of
 # each item is similar. For the services that pull in local code (e.g., controller, runtime, eval) we mount the repo-relative
@@ -139,7 +159,7 @@ services:
     # \/ volumes lets us mount host (ORD/local) containers to the running container
     volumes:
       - "${scenes.scene_cache}:/mnt/nre-data"
-      - "${defines.sensordata}/ego-hoods:/mnt/ego-hoods"
+      - "${ego_hoods.banks}:/mnt/ego-hoods"
     # \/ environments lets you set environment variables inside the container
     environments:
       # Pyxis/enroot sets HOME to /home/$USER on Slurm. In the NRE image,
@@ -147,9 +167,9 @@ services:
       # cache creation fails unless HOME resolves to a writable container path.
       - HOME=/tmp
       - XDG_CACHE_HOME=/tmp/.cache
-      # this may not be necessary but at least on COLOSSUS by default pytorch had really stupid
-      # configuration running to excessively parallelizing everything
+      # Limit CPU-side thread fan-out inside renderer containers.
       - OMP_NUM_THREADS=1
+      - PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.9
     # \/ command is like docker entrypoint + command combined
     command:
       - "${defines.renderer_entrypoint}"
@@ -188,14 +208,14 @@ services:
       - "${repo-relative:'src'}:/repo/src"
       - "${repo-relative:'plugins'}:/repo/plugins"
     environments:
-      - WARP_CACHE_PATH='/mnt/warp'
+      - WARP_CACHE_PATH=/mnt/warp
     command:
       - "uv run physics_server"
       - "--host=0.0.0.0" # again, default container IP
       - "--port={port}" # arbitrary, needs to be updated in runtime-config.yaml
       - "--artifact-glob=/mnt/nre-data/{sceneset}/**/*.usdz"
       - "--use-ground-mesh=true"
-      - "--cache-size=${defines.physics_cache_size}" # should match or exceed concurrent scenes to avoid cache thrashing
+      - "--cache-size=${defines.physics_cache_size}" # should match or exceed concurrent clips to avoid cache thrashing
       - "--log-level=${wizard.log_level}"
 
   trafficsim:
@@ -233,6 +253,7 @@ services:
       - "${or:${wizard.array_job_dir},${wizard.log_dir}}:/mnt/array_job_dir"
       - "${repo-relative:'src'}:/repo/src"
       - "${repo-relative:'plugins'}:/repo/plugins"
+      - "${defines.route_data}:/mnt/route:ro"
     gpus: null # uses no GPUs
     command:
       - "uv run python -m alpasim_runtime.simulate"
@@ -259,10 +280,10 @@ runtime:
   # Number of times to retry a rollout after a failed attempt.
   max_rollout_retries: 2
 
-  # Scene provider configuration for a single backend family.
-  scene_provider:
+  # Data-source provider configuration for a single backend family.
+  data_source_provider:
     kind: usdz
-    # USDZ artifact-backed scene provider (NuRec artifacts)
+    # USDZ artifact-backed data-source provider (NuRec artifacts)
     usdz:
       # Set automatically by the wizard for artifact-backed runs.
       # Example generated value: "/mnt/nre-data/scenesets/abc123" or "/mnt/nre-data"
@@ -289,7 +310,7 @@ runtime:
   # Enable cubic spline smoothing for trajectories
   smooth_trajectories: true
   endpoints:
-    # Cache size used by the scene cache monitor to ensure enough capacity
+    # Cache size used by the clip cache monitor to ensure enough capacity
     sensorsim_cache_size: ${defines.nre_cache_size}
     renderer:
       n_concurrent_rollouts: 1
@@ -302,7 +323,6 @@ runtime:
     video_model_config: null
 
   enable_autoresume: false
-
   simulation_config:
     n_sim_steps: 200 # how many steps to simulate in a rollout
     n_rollouts: 1 # how many rollouts to simulate for that scenario
@@ -322,6 +342,8 @@ runtime:
       # string to override the auto fingerprint or to force a fresh cache.
       extra_key: null
     send_recording_ground_truth: false # Disable sending ground truth data to the driver
+    send_vectorized_observation: false # Enable sending vector map and obstacle observations to the driver
+    write_asl: true # Persist messages exchanged during each rollout to rollout.asl
     # Which sensorsim bundled-render RPC to use (NONE = one render_rgb per camera).
     # Options: NONE | BATCH_RENDER_RGB (NRE) | RENDER_AGGREGATED (ODL).
     render_bundling: BATCH_RENDER_RGB
@@ -330,6 +352,9 @@ runtime:
     pose_reporting_interval_us: 0 # 0 = controller reports only the final pose
 
     ego_mask_rig_config_id: "hyperion_8_1" # which rig/directory in ego-hoods to use for ego masking
+    # Optional YAML map. Unlisted clips use the default bank; listed clips get
+    # patches only on selected cameras, with no mask on their other cameras.
+    ego_mask_overrides_file: null
     planner_delay_us: 0
 
     # Actors present shorter than this (in micro-seconds) are ignored. Set to 0 to disable.
@@ -341,6 +366,13 @@ runtime:
 
     route_generator_type: "MAP" # "NONE", "MAP", or "RECORDED"
     route_start_offset_m: 0.0 # Along-route distance ahead of ego where submitted routes start
+    # Turn-by-turn text sent to the driver each policy step.
+    # none: no navigation RPC. geometry: turn/straight text classified from the
+    # generated route (needs a route generator). recorded: position-based session
+    # records; every clip needs a route index.
+    nav_instruction:
+      source: none # none, geometry or recorded
+      route_index_dir: null # version root containing <bare_clip_id>.pkl files in suite subtrees
 
     vehicle: null # use values from the .usdz file (original dimensions)
 
@@ -397,6 +429,9 @@ eval:
       camera_logical_id: camera_front_wide_120fov
     open_loop_collision:
       horizon_s: 3.0
+    frame_quality:
+      camera_logical_id: camera_front_wide_120fov
+      rpc_timeout_s: 60.0
 
   aggregation_modifiers:
     max_dist_to_gt_trajectory: 4.0

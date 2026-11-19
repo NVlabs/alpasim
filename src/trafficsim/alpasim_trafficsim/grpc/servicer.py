@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from alpasim_grpc.v0 import common_pb2, traffic_pb2, traffic_pb2_grpc
-from alpasim_runtime.errors import UnknownSceneError
-from alpasim_runtime.scene_loader import ArtifactSceneProvider, SceneLoader
+from alpasim_runtime.data_source_loader import (
+    ArtifactDataSourceProvider,
+    DataSourceLoader,
+)
+from alpasim_runtime.errors import UnknownClipError
 from alpasim_trafficsim.catk.scene_adapter import (
     CATKSceneAdapter,
     preprocess_runtime_map,
@@ -100,8 +103,8 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
         if self._prediction_steps < 1:
             raise ValueError("catk.loader.prediction_steps must be at least 1")
         self._minimum_history_length = self._loader_cfg.num_history_steps
-        self._scene_loader = SceneLoader(
-            ArtifactSceneProvider.from_path(
+        self._data_source_loader = DataSourceLoader(
+            ArtifactDataSourceProvider.from_path(
                 usdz_folder,
                 smooth_trajectories=False,
             )
@@ -156,9 +159,10 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
             return common_pb2.SessionRequestStatus()
 
         try:
-            data_source = self._scene_loader.get_data_source(request.scene_id)
+            # TrafficService's wire schema names the clip ID scene_id.
+            data_source = self._data_source_loader.get_data_source(request.scene_id)
             base_env_data = self._scene_adapter.load(data_source)
-        except (KeyError, ValueError, FileNotFoundError, UnknownSceneError) as exc:
+        except (KeyError, ValueError, FileNotFoundError, UnknownClipError) as exc:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(
                 f"scene_id {request.scene_id!r} could not be loaded: {exc}"
@@ -469,7 +473,9 @@ class TrafficServiceServicer(traffic_pb2_grpc.TrafficServiceServicer):
         context: grpc.ServicerContext,
     ) -> common_pb2.AvailableScenesReturn:
         del request, context
-        return common_pb2.AvailableScenesReturn(scene_ids=self._scene_loader.scene_ids)
+        return common_pb2.AvailableScenesReturn(
+            scene_ids=self._data_source_loader.source_ids
+        )
 
     def shut_down(self, request, context):
         context.add_callback(self._shut_down)

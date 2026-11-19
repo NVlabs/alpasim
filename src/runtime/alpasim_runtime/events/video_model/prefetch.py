@@ -22,6 +22,7 @@ from alpasim_runtime.broadcaster import MessageBroadcaster
 from alpasim_runtime.events.base import Event, EventQueue
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.frame_quality_service import FrameQualityService
 from alpasim_runtime.services.video_model_service import ChunkResult, VideoModelService
 from alpasim_runtime.types import RuntimeCamera
 from alpasim_runtime.video_model.utils import (
@@ -48,6 +49,7 @@ class VideoModelFrameEvent(Event):
         frame: ImageWithMetadata,
         camera_logical_id: str,
         driver: DriverService,
+        frame_quality: FrameQualityService,
         should_submit_to_driver: bool = True,
     ):
         """Initialize a pre-rendered frame event.
@@ -58,6 +60,7 @@ class VideoModelFrameEvent(Event):
             frame: Image payload and metadata returned by the video model.
             camera_logical_id: Logical camera stream to update in rollout state.
             driver: Driver service that receives the image observation.
+            frame_quality: Frame-quality service that scores selected images.
             should_submit_to_driver: Whether to forward this frame to the
                 driver. Debug streams can update freshness without becoming
                 policy inputs.
@@ -66,6 +69,7 @@ class VideoModelFrameEvent(Event):
         self.frame = frame
         self.camera_logical_id = camera_logical_id
         self.driver = driver
+        self.frame_quality = frame_quality
         self.should_submit_to_driver = should_submit_to_driver
 
     def description(self) -> str:
@@ -89,6 +93,10 @@ class VideoModelFrameEvent(Event):
         """
         del queue
         if self.should_submit_to_driver:
+            assert (
+                state.step_context is not None
+            ), "StepContext must exist before frame submit"
+            state.step_context.track_task(self.frame_quality.submit_frame(self.frame))
             await self.driver.submit_image(self.frame)
         state.last_camera_frame_us[self.camera_logical_id] = self.timestamp_us
 
@@ -125,6 +133,7 @@ class VideoModelPrefetchEvent(Event):
         broadcaster: MessageBroadcaster,
         runtime_cameras: list[RuntimeCamera],
         driver: DriverService,
+        frame_quality: FrameQualityService,
     ):
         """Initialize a chunk prefetch event.
 
@@ -139,6 +148,7 @@ class VideoModelPrefetchEvent(Event):
                 request/response logging.
             runtime_cameras: Runtime camera config for the active rollout.
             driver: Driver service that receives scheduled frame events.
+            frame_quality: Frame-quality service that scores selected frames.
         """
         super().__init__(timestamp_us=timestamp_us)
         self.chunk_start_us = chunk_start_us
@@ -148,6 +158,7 @@ class VideoModelPrefetchEvent(Event):
         self.broadcaster = broadcaster
         self.runtime_cameras = runtime_cameras
         self.driver = driver
+        self.frame_quality = frame_quality
 
     def description(self) -> str:
         """Return a short event-queue description.
@@ -197,7 +208,7 @@ class VideoModelPrefetchEvent(Event):
         if self.is_first_chunk:
             logger.info(
                 "SCENE_LOAD_TIMING scene=%s phase=first_prefetch_total elapsed=%.3fs",
-                state.unbound.scene_id,
+                state.unbound.scene.source.source_id,
                 time.perf_counter() - prefetch_t0,
             )
 
@@ -218,6 +229,7 @@ class VideoModelPrefetchEvent(Event):
                 broadcaster=self.broadcaster,
                 runtime_cameras=self.runtime_cameras,
                 driver=self.driver,
+                frame_quality=self.frame_quality,
             )
         )
 
@@ -231,6 +243,7 @@ class VideoModelPrefetchEvent(Event):
                         frame=frame,
                         camera_logical_id=cam_id,
                         driver=self.driver,
+                        frame_quality=self.frame_quality,
                         should_submit_to_driver=submit,
                     )
                 )
@@ -248,6 +261,7 @@ class VideoModelPrefetchEvent(Event):
                             frame=frame,
                             camera_logical_id=frame.camera_logical_id,
                             driver=self.driver,
+                            frame_quality=self.frame_quality,
                             should_submit_to_driver=submit,
                         )
                     )
@@ -285,6 +299,7 @@ def make_initial_video_model_render_event(
     runtime_cameras: list[RuntimeCamera],
     renderer_service: Any,
     driver: DriverService,
+    frame_quality: FrameQualityService,
     broadcaster: MessageBroadcaster,
 ) -> Event:
     """Factory for the initial video-model prefetch event.
@@ -308,6 +323,7 @@ def make_initial_video_model_render_event(
         runtime_cameras: Runtime camera definitions for the active rollout.
         renderer_service: Active :class:`VideoModelService` instance.
         driver: Driver service receiving scheduled frame events.
+        frame_quality: Frame-quality service receiving selected rendered frames.
         broadcaster: Rollout broadcaster, reserved for future logging.
 
     Returns:
@@ -338,4 +354,5 @@ def make_initial_video_model_render_event(
         broadcaster=broadcaster,
         runtime_cameras=runtime_cameras,
         driver=driver,
+        frame_quality=frame_quality,
     )

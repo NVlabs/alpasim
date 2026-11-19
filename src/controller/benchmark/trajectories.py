@@ -28,6 +28,8 @@ class TrajectoryPoint:
     y: float  # position in local frame [m]
     yaw: float  # heading [rad]
     vx: float  # longitudinal velocity [m/s]
+    acceleration: float = 0.0  # longitudinal acceleration [m/s²]
+    curvature: float = 0.0  # path curvature [1/m]
 
 
 @dataclass
@@ -274,6 +276,8 @@ class TrajectoryGenerator:
                     y=0.0,
                     yaw=0.0,
                     vx=speed,
+                    acceleration=0.0,
+                    curvature=0.0,
                 )
             )
 
@@ -326,6 +330,8 @@ class TrajectoryGenerator:
                     y=y,
                     yaw=yaw,
                     vx=speed,
+                    acceleration=0.0,
+                    curvature=direction / radius,
                 )
             )
 
@@ -348,6 +354,8 @@ class TrajectoryGenerator:
         points = []
         n_steps = int(self.TRAJECTORY_DURATION_S * 1e6 / self.DT_US)
         ramp_steps = n_steps // 2
+        dt_s = self.DT_US / 1e6
+        ramp_acceleration = (v_end - v_start) / (ramp_steps * dt_s)
 
         x = 0.0
         for i in range(n_steps + 1):
@@ -367,13 +375,14 @@ class TrajectoryGenerator:
                     y=0.0,
                     yaw=0.0,
                     vx=vx,
+                    acceleration=ramp_acceleration if i < ramp_steps else 0.0,
+                    curvature=0.0,
                 )
             )
 
             # Integrate position
             if i < n_steps:
-                dt = self.DT_US / 1e6
-                x += vx * dt
+                x += vx * dt_s
 
         sim_steps = int(self.SIMULATION_DURATION_S * 1e6 / self.DT_US)
         return ReferenceTrajectory(
@@ -397,6 +406,9 @@ class TrajectoryGenerator:
         points = []
         n_steps = int(self.TRAJECTORY_DURATION_S * 1e6 / self.DT_US)
         ramp_steps = n_steps // 2
+        dt_s = self.DT_US / 1e6
+        ramp_acceleration = (v_end - v_start) / (ramp_steps * dt_s)
+        curvature = direction / radius
 
         x, y, yaw = 0.0, 0.0, 0.0
 
@@ -417,16 +429,17 @@ class TrajectoryGenerator:
                     y=y,
                     yaw=yaw,
                     vx=vx,
+                    acceleration=ramp_acceleration if i < ramp_steps else 0.0,
+                    curvature=curvature,
                 )
             )
 
             # Integrate for next step
             if i < n_steps:
-                dt = self.DT_US / 1e6
                 angular_rate = direction * vx / radius
-                yaw += angular_rate * dt
-                x += vx * math.cos(yaw) * dt
-                y += vx * math.sin(yaw) * dt
+                yaw += angular_rate * dt_s
+                x += vx * math.cos(yaw) * dt_s
+                y += vx * math.sin(yaw) * dt_s
 
         sim_steps = int(self.SIMULATION_DURATION_S * 1e6 / self.DT_US)
         return ReferenceTrajectory(
@@ -459,6 +472,9 @@ class TrajectoryGenerator:
         n_steps = int(self.TRAJECTORY_DURATION_S * 1e6 / self.DT_US)
         stop_steps = n_steps // 2  # First half is stopped
         accel_steps = n_steps - stop_steps  # Second half accelerates
+        dt_s = self.DT_US / 1e6
+        acceleration = v_end / (accel_steps * dt_s)
+        curvature = direction / radius
 
         x, y, yaw = 0.0, 0.0, 0.0
 
@@ -480,16 +496,17 @@ class TrajectoryGenerator:
                     y=y,
                     yaw=yaw,
                     vx=vx,
+                    acceleration=acceleration if stop_steps <= i < n_steps else 0.0,
+                    curvature=curvature,
                 )
             )
 
             # Integrate for next step
             if i < n_steps and vx > 0:
-                dt = self.DT_US / 1e6
                 angular_rate = direction * vx / radius
-                yaw += angular_rate * dt
-                x += vx * math.cos(yaw) * dt
-                y += vx * math.sin(yaw) * dt
+                yaw += angular_rate * dt_s
+                x += vx * math.cos(yaw) * dt_s
+                y += vx * math.sin(yaw) * dt_s
 
         sim_steps = int(self.SIMULATION_DURATION_S * 1e6 / self.DT_US)
         return ReferenceTrajectory(
@@ -524,6 +541,9 @@ class TrajectoryGenerator:
         constant_steps = n_steps // 4  # First 25% at constant speed
         decel_steps = n_steps // 2  # 25% to 75% decelerating
         # Remaining 25% at stop
+        dt_s = self.DT_US / 1e6
+        deceleration = -v_start / (decel_steps * dt_s)
+        curvature = direction / radius
 
         x, y, yaw = 0.0, 0.0, 0.0
 
@@ -548,16 +568,21 @@ class TrajectoryGenerator:
                     y=y,
                     yaw=yaw,
                     vx=vx,
+                    acceleration=(
+                        deceleration
+                        if constant_steps <= i < constant_steps + decel_steps
+                        else 0.0
+                    ),
+                    curvature=curvature if i <= constant_steps + decel_steps else 0.0,
                 )
             )
 
             # Integrate for next step
             if i < n_steps and vx > 0:
-                dt = self.DT_US / 1e6
                 angular_rate = direction * vx / radius
-                yaw += angular_rate * dt
-                x += vx * math.cos(yaw) * dt
-                y += vx * math.sin(yaw) * dt
+                yaw += angular_rate * dt_s
+                x += vx * math.cos(yaw) * dt_s
+                y += vx * math.sin(yaw) * dt_s
 
         sim_steps = int(self.SIMULATION_DURATION_S * 1e6 / self.DT_US)
         return ReferenceTrajectory(

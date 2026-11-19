@@ -61,7 +61,7 @@ class CATKSceneAdapter:
         self._cache_size = cache_size
 
     def load(self, data_source) -> dict:
-        """Load CATK env data from an artifact-like scene data source.
+        """Load CATK env data from an artifact-like clip data source.
 
         The generic SceneDataSource protocol exposes rig, traffic object, map,
         and metadata properties. The CATK adapter converts those scene-level
@@ -76,12 +76,12 @@ class CATKSceneAdapter:
                 "traffic_objects, map, and metadata."
             )
         source_path = getattr(data_source, "source", "")
-        scene_id = str(getattr(data_source, "scene_id", Path(str(source_path)).stem))
-        cache_key = f"{scene_id}:{source_path}"
+        clip_id = str(getattr(data_source, "scene_id", Path(str(source_path)).stem))
+        cache_key = f"{clip_id}:{source_path}"
         if cache_key in self._cache:
             return copy.deepcopy(self._cache[cache_key])
 
-        env_data = self._build_env_data_from_artifact(data_source, scene_id=scene_id)
+        env_data = self._build_env_data_from_artifact(data_source, clip_id=clip_id)
         self._remember(cache_key, env_data)
         return copy.deepcopy(env_data)
 
@@ -96,7 +96,7 @@ class CATKSceneAdapter:
     def _build_env_data_from_artifact(
         self,
         artifact,
-        scene_id: str | None = None,
+        clip_id: str | None = None,
     ) -> dict:
         curr_t = self._num_history_steps - 1
         dt_us = int(round(self.motion_stepsize * 1_000_000))
@@ -115,13 +115,12 @@ class CATKSceneAdapter:
             map_resample_interval_m=self._map_resample_interval_m,
         )
 
-        final_scene_id = (
-            scene_id if scene_id is not None else artifact.metadata.scene_id
-        )
+        final_clip_id = clip_id if clip_id is not None else artifact.metadata.scene_id
 
         metadata = {
             **obstacle_class_metadata(),
-            "scene_id": final_scene_id,
+            # CATK's metadata schema names the clip ID scene_id.
+            "scene_id": final_clip_id,
             "frame_rate": int(1.0 / self.motion_stepsize),
             "t0_us": t0_us,
             "map_source": "trajdata_vector_map",
@@ -294,6 +293,14 @@ def _track_id_as_int(track_id: str, fallback_idx: int) -> int:
 
 
 def _class_id_from_label(label: str) -> int:
+    """Map a raw ``label_class`` string onto an ``OBSTACLE_CLASS_NAME_TO_ID`` id.
+
+    Matching is by exact class name first, then by a set of known synonyms per class.
+    Anything unrecognised falls through to ``others``, which CATK sees as
+    ``AGENT_TYPE_OTHER``; ``token_processor`` builds no token table for that type, so
+    such an agent ends up with an all-zero table and cannot move. Prefer extending the
+    synonym sets here over letting a new label reach the fallback.
+    """
     normalized = str(label).lower()
     class_name_to_id = OBSTACLE_CLASS_NAME_TO_ID
     if normalized in class_name_to_id:
@@ -302,11 +309,15 @@ def _class_id_from_label(label: str) -> int:
         return class_name_to_id["car"]
     if normalized in {"person", "pedestrian"} or normalized.startswith("person"):
         return class_name_to_id["pedestrian"]
-    if normalized in {"bicycle", "bike", "cyclist", "cycle"} or normalized.startswith(
-        "cycle"
-    ):
+    if normalized in {
+        "bicycle",
+        "bike",
+        "cyclist",
+        "cycle",
+        "rider",
+    } or normalized.startswith("cycle"):
         return class_name_to_id["cyclist"]
-    if normalized in {"truck", "bus", "trailer", "other_vehicle"}:
+    if normalized in {"truck", "bus", "trailer", "other_vehicle", "heavy_truck"}:
         return class_name_to_id["truck"]
     return class_name_to_id["others"]
 

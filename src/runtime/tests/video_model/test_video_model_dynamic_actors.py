@@ -243,6 +243,7 @@ async def test_video_model_prefetch_passes_traffic_objects_as_dynamic_state() ->
         broadcaster=SimpleNamespace(),
         runtime_cameras=[],
         driver=SimpleNamespace(),
+        frame_quality=SimpleNamespace(),
     )
 
     await event.handle(state, EventQueue())  # type: ignore[arg-type]

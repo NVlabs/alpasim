@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from alpasim_wizard.context import TelemetryPorts, WizardContext
-from alpasim_wizard.deployment.slurm import SlurmDeployment
-from alpasim_wizard.schema import DebugFlags, RunMode
+from alpasim_wizard.context import (
+    TelemetryPorts,
+    WizardContext,
+    discover_gpu_allocation,
+)
+from alpasim_wizard.deployment.slurm import SlurmDeployment, mps_daemon
+from alpasim_wizard.schema import DebugFlags, RunMethod, RunMode
 
 
 def _context(
@@ -20,6 +25,7 @@ def _context(
     *,
     dry_run: bool = False,
     enable_mps: bool = False,
+    gpu_allocation: tuple[int, ...] = (0, 1),
 ) -> WizardContext:
     cfg = SimpleNamespace(
         wizard=SimpleNamespace(
@@ -32,6 +38,7 @@ def _context(
             sqshcaches=[],
             slurm_cpu_bind_none=False,
             enable_mps=enable_mps,
+            mps_pipe_dir="/tmp/nvidia-mps-123" if enable_mps else None,
             debug_flags=DebugFlags(use_localhost=False),
         )
     )
@@ -45,8 +52,8 @@ def _context(
             process_exporter=6102,
             dcgm_exporter=6103,
         ),
-        artifact_list=[],
-        num_gpus=0,
+        gpu_allocation=gpu_allocation,
+        scene_list=[],
     )
 
 
@@ -55,12 +62,14 @@ def _deployment(
     *,
     dry_run: bool = False,
     enable_mps: bool = False,
+    gpu_allocation: tuple[int, ...] = (0, 1),
 ) -> SlurmDeployment:
     deployment = SlurmDeployment.__new__(SlurmDeployment)
     deployment.context = _context(
         tmp_path,
         dry_run=dry_run,
         enable_mps=enable_mps,
+        gpu_allocation=gpu_allocation,
     )
     return deployment
 
@@ -83,21 +92,85 @@ def _slurm_container(deployment: SlurmDeployment, gpu: int | None) -> SimpleName
     )
 
 
-@pytest.mark.parametrize(
-    ("gpu", "expected"),
-    [
-        (0, "export CUDA_VISIBLE_DEVICES=0;"),
-        (2, "export CUDA_VISIBLE_DEVICES=2;"),
-        (None, None),
-    ],
-)
-def test_slurm_run_exports_explicit_gpu_zero(
+def test_slurm_prepares_host_process_exporter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path)
+    exporter = MagicMock()
+    monkeypatch.setattr(deployment, "_host_process_exporter", exporter)
+
+    with ExitStack() as stack:
+        deployment._prepare_deployment(stack)
+
+    exporter.assert_called_once_with()
+
+
+def test_slurm_gpu_allocation_prefers_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SLURM_STEP_GPUS", "4,6")
+    monkeypatch.setenv("SLURM_JOB_GPUS", "0,1,2,3")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+
+    assert discover_gpu_allocation(RunMethod.SLURM) == (4, 6)
+
+
+def test_slurm_gpu_allocation_falls_back_to_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SLURM_STEP_GPUS", raising=False)
+    monkeypatch.setenv("SLURM_JOB_GPUS", "2,5")
+
+    assert discover_gpu_allocation(RunMethod.SLURM_ENROOT) == (2, 5)
+
+
+def test_slurm_gpu_allocation_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SLURM_STEP_GPUS", raising=False)
+    monkeypatch.delenv("SLURM_JOB_GPUS", raising=False)
+
+    with pytest.raises(KeyError, match=r"SLURM_JOB_GPUS"):
+        discover_gpu_allocation(RunMethod.SLURM)
+
+
+def test_local_gpu_allocation_uses_host_device_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr("alpasim_wizard.context.detect_gpus", lambda: 3)
+
+    assert discover_gpu_allocation(RunMethod.DOCKER_COMPOSE) == (0, 1, 2)
+
+
+def test_local_gpu_allocation_rejects_cuda_visible_devices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,5")
+
+    with pytest.raises(RuntimeError, match="local Wizard run"):
+        discover_gpu_allocation(RunMethod.DOCKER_COMPOSE)
+
+
+@pytest.mark.parametrize(
+    ("gpu_allocation", "gpu", "expected"),
+    [
+        ((4, 5, 6, 7), 0, "export CUDA_VISIBLE_DEVICES=4;"),
+        ((4, 5, 6, 7), 2, "export CUDA_VISIBLE_DEVICES=6;"),
+        ((2, 5), 1, "export CUDA_VISIBLE_DEVICES=5;"),
+        ((0, 1, 2, 3), 2, "export CUDA_VISIBLE_DEVICES=2;"),
+        ((), None, None),
+    ],
+)
+def test_slurm_run_maps_gpu_slots_to_the_wizard_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gpu_allocation: tuple[int, ...],
     gpu: int | None,
     expected: str | None,
 ) -> None:
-    deployment = _deployment(tmp_path)
+    deployment = _deployment(tmp_path, gpu_allocation=gpu_allocation)
     monkeypatch.setattr(
         "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
         lambda image, caches: f"{image}.sqsh",
@@ -111,6 +184,20 @@ def test_slurm_run_exports_explicit_gpu_zero(
         assert "CUDA_VISIBLE_DEVICES" not in command
     else:
         assert expected in command
+
+
+def test_slurm_run_rejects_gpu_slot_outside_the_wizard_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = _deployment(tmp_path, gpu_allocation=(4, 5))
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: f"{image}.sqsh",
+    )
+
+    with pytest.raises(RuntimeError, match=r"GPU slot 2.*2-GPU allocation"):
+        deployment._to_slurm_run(_slurm_container(deployment, gpu=2), RunMode.ONESHOT)
 
 
 def test_slurm_run_isolates_submit_environment_except_job_id_unless_requested(
@@ -331,7 +418,7 @@ def test_mps_daemon_start_and_stop_commands(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deployment = _deployment(tmp_path, enable_mps=True)
+    wizard_cfg = _context(tmp_path, enable_mps=True).cfg.wizard
     commands = []
 
     def fake_dispatch(command, *, log_dir, dry_run):
@@ -344,8 +431,8 @@ def test_mps_daemon_start_and_stop_commands(
         fake_dispatch,
     )
 
-    deployment._start_mps_daemon()
-    deployment._stop_mps_daemon()
+    with mps_daemon(wizard_cfg):
+        assert len(commands) == 1
 
     start, stop, cleanup = commands
     assert "nvidia-cuda-mps-control -d" in start
@@ -359,7 +446,7 @@ def test_mps_pipe_dir_cleanup_runs_when_daemon_shutdown_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deployment = _deployment(tmp_path, enable_mps=True)
+    wizard_cfg = _context(tmp_path, enable_mps=True).cfg.wizard
     commands = []
 
     def fake_dispatch(command, *, log_dir, dry_run):
@@ -374,9 +461,10 @@ def test_mps_pipe_dir_cleanup_runs_when_daemon_shutdown_fails(
         fake_dispatch,
     )
 
-    deployment._stop_mps_daemon()
+    with mps_daemon(wizard_cfg):
+        pass
 
-    assert commands == [
+    assert commands[1:] == [
         "echo quit | CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps-123 "
         "nvidia-cuda-mps-control",
         "rm -rf /tmp/nvidia-mps-123",

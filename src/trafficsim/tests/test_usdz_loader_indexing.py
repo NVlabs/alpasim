@@ -10,7 +10,10 @@ import numpy as np
 import pytest
 import torch
 import yaml
-from alpasim_runtime.scene_loader import ArtifactSceneProvider, SceneLoader
+from alpasim_runtime.data_source_loader import (
+    ArtifactDataSourceProvider,
+    DataSourceLoader,
+)
 from alpasim_trafficsim.catk.map_adapter import build_env_map_from_vector_map
 from alpasim_trafficsim.catk.scene_adapter import CATKSceneAdapter
 from alpasim_utils.artifact import Artifact
@@ -33,21 +36,21 @@ def _metadata_yaml(scene_id: str) -> str:
     )
 
 
-def test_runtime_scene_loader_indexes_nested_usdz_files(tmp_path) -> None:
+def test_runtime_data_source_loader_indexes_nested_usdz_files(tmp_path) -> None:
     nested_dir = tmp_path / "all-usdzs"
     nested_dir.mkdir()
     usdz_path = nested_dir / "scene.usdz"
     with zipfile.ZipFile(usdz_path, "w") as zf:
         zf.writestr("metadata.yaml", _metadata_yaml("clipgt-test-scene"))
 
-    scene_loader = SceneLoader(
-        ArtifactSceneProvider.from_path(
+    data_source_loader = DataSourceLoader(
+        ArtifactDataSourceProvider.from_path(
             tmp_path,
             smooth_trajectories=False,
         )
     )
 
-    assert "clipgt-test-scene" in scene_loader.scene_ids
+    assert "clipgt-test-scene" in data_source_loader.source_ids
 
 
 def test_vector_map_adapter_resamples_before_catk_segmentation() -> None:

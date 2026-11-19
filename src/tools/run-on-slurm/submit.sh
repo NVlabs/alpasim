@@ -8,9 +8,12 @@
 # Usage:
 #   sbatch [sbatch_opts] submit.sh deploy=<target> topology=<layout> driver=<model> [hydra_overrides...]
 #
+# deploy, topology and driver may also come from a preset (+exp/presets=...);
+# the wizard reports any that are missing.
+#
 # Examples:
 #   sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam
-#   sbatch submit.sh deploy=ord topology=8gpu_12rollouts driver=alpamayo1 controller=ndas trafficsim=internal
+#   sbatch submit.sh deploy=<target> topology=8gpu_12rollouts driver=alpamayo1 controller=nonlinear trafficsim=catk
 #   sbatch --account=<account> --partition=gtc_demo --gpus-per-node=4 submit.sh deploy=ipp5 topology=1gpu driver=alpamayo1
 
 #SBATCH --account av_alpamayo_sim
@@ -38,20 +41,6 @@ if [[ -z "$DESCRIPTION" ]]; then
     DESCRIPTION="unspecified"
 fi
 
-# Verify required config groups are present in arguments
-ALL_ARGS="$*"
-MISSING=()
-[[ "$ALL_ARGS" =~ deploy=[^\ ]+ ]]   || MISSING+=("deploy=<target>    (e.g., ord)")
-[[ "$ALL_ARGS" =~ topology=[^\ ]+ ]] || MISSING+=("topology=<layout>  (e.g., 8gpu_64rollouts, 8gpu_12rollouts)")
-[[ "$ALL_ARGS" =~ driver=[^\ ]+ ]]   || MISSING+=("driver=<model>     (e.g., vavam, alpamayo1, alpamayo1_5)")
-if [ ${#MISSING[@]} -gt 0 ]; then
-    echo "Error: missing required config groups:"
-    for m in "${MISSING[@]}"; do echo "  $m"; done
-    echo ""
-    echo "Example: sbatch submit.sh deploy=ord topology=8gpu_64rollouts driver=vavam"
-    exit 1
-fi
-
 # All script arguments are forwarded as Hydra overrides
 HYDRA_ARGS=("$@")
 
@@ -69,6 +58,9 @@ else
     UNIQUE_JOB_ID="${SLURM_ARRAY_JOB_ID}${SLURM_ARRAY_TASK_ID:+_$SLURM_ARRAY_TASK_ID}"
 fi
 SCRIPT_PATH=$(scontrol show job "${UNIQUE_JOB_ID}" | awk -F= '/Command=/{print $2}')
+# Some sbatch wrappers stage a copy under /tmp/sbatch-$USER that mirrors the original
+# path; strip this prefix because the copy may be absent on compute nodes.
+SCRIPT_PATH=${SCRIPT_PATH#/tmp/sbatch-$(whoami)}
 
 SCRIPT_DIR=$(readlink -f "$(dirname $SCRIPT_PATH)")
 REPO_ROOT_DIR=$(readlink -f "${SCRIPT_DIR}/../../..")

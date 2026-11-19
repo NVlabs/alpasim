@@ -24,8 +24,10 @@ from alpasim_runtime.config import UserSimulatorConfig
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
 from alpasim_runtime.daemon.engine import DaemonEngine
 from alpasim_runtime.runtime_context import parse_simulator_config
+from alpasim_runtime.scene_registry import scene_from_config
 from alpasim_runtime.telemetry.plot_metrics import generate_metrics_plot
 from alpasim_runtime.validation import validate_array_job_config
+from alpasim_utils.types import scene_from_proto, scene_to_proto
 from alpasim_utils.yaml_utils import typed_parse_config
 
 from eval.aggregation.failed_rollouts import FailedRollout
@@ -33,6 +35,10 @@ from eval.aggregation.main import run_aggregation_from_runtime
 from eval.schema import EvalConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _rollout_spec_scene_key(spec: runtime_pb2.RolloutSpec) -> str:
+    return scene_from_proto(spec.scene).scene_key
 
 
 def get_run_name(log_dir: str) -> str:
@@ -55,7 +61,7 @@ def _failed_rollouts_from_returns(
             FailedRollout(
                 run_name=run_name,
                 run_uuid=None,
-                clipgt_id=rollout_return.rollout_spec.scenario_id,
+                scene_key=_rollout_spec_scene_key(rollout_return.rollout_spec),
                 rollout_id=rollout_return.rollout_uuid or f"failed-{idx}",
                 error=rollout_return.error,
             )
@@ -156,41 +162,35 @@ def build_simulation_request(
     rollout_specs = []
     total_rollouts = 0
 
-    for scene in user_config.scenes:
+    for scene_config in user_config.scenes:
+        scene = scene_from_config(scene_config)
         n_rollouts_to_dispatch = (
-            scene.n_rollouts
-            if scene.n_rollouts is not None
+            scene_config.n_rollouts
+            if scene_config.n_rollouts is not None
             else user_config.simulation_config.n_rollouts
         )
-        start_time_offset_us = (
-            scene.start_time_offset_us
-            if scene.start_time_offset_us is not None
-            else user_config.simulation_config.start_time_offset_us
-        )
-
         # Handle autoresume: skip already-completed rollouts
         if user_config.enable_autoresume:
-            remove_incomplete_rollouts(rollouts_dir, scene.scene_id)
+            remove_incomplete_rollouts(rollouts_dir, scene.scene_key)
             num_finished_rollouts = find_num_complete_rollouts(
-                rollouts_dir, scene.scene_id
+                rollouts_dir,
+                scene.scene_key,
             )
             if num_finished_rollouts > 0:
                 logger.info(
                     f"Found {num_finished_rollouts} already completed rollouts for "
-                    f"scene_id={scene.scene_id}"
+                    f"scene={scene.scene_key!r}"
                 )
                 n_rollouts_to_dispatch -= num_finished_rollouts
 
         if n_rollouts_to_dispatch <= 0:
             continue
 
-        rollout_specs.append(
-            runtime_pb2.RolloutSpec(
-                scenario_id=scene.scene_id,
-                nr_rollouts=n_rollouts_to_dispatch,
-                start_time_offset_us=start_time_offset_us,
-            )
+        rollout_spec = runtime_pb2.RolloutSpec(
+            nr_rollouts=n_rollouts_to_dispatch,
+            scene=scene_to_proto(scene),
         )
+        rollout_specs.append(rollout_spec)
         total_rollouts += n_rollouts_to_dispatch
 
     logger.info("Built %d jobs to execute", total_rollouts)
@@ -240,7 +240,11 @@ async def run_simulation(args: argparse.Namespace) -> bool:
             )
             logger.error("%d jobs failed:", len(failed))
             for rr in failed[:3]:
-                logger.error("  Scene %s: %s", rr.rollout_spec.scenario_id, rr.error)
+                logger.error(
+                    "  Scene %s: %s",
+                    _rollout_spec_scene_key(rr.rollout_spec),
+                    rr.error,
+                )
             if len(failed) > 3:
                 logger.error("  ... and %d more", len(failed) - 3)
 
@@ -319,6 +323,7 @@ if __name__ == "__main__":
         level=getattr(logging, args.log_level.upper(), None),
         format="%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s",
         datefmt="%H:%M:%S",
+        force=True,
     )
 
     if args.serve:

@@ -19,6 +19,7 @@ from typing import Any
 
 import polars as pl
 from alpasim_utils.artifact import Artifact
+from alpasim_utils.logs import clip_id_from_session_metadata
 from alpasim_utils.paths import extract_ids_from_path
 from omegaconf import OmegaConf
 from tqdm import tqdm
@@ -80,13 +81,13 @@ def process_asl_file(
 
     # Video rendering (if enabled) - save next to ASL file (unified path structure)
     if cfg.video.render_video:
-        clipgt_id, rollout_id = extract_ids_from_path(asl_file_path)
+        _, rollout_id = extract_ids_from_path(asl_file_path)
         render_video_from_eval_result(
             scenario_input=scenario_input,
             metrics_df=result.metrics_df,
             cfg=cfg,
             output_dir=rollout_dir,
-            clipgt_id=clipgt_id,
+            clipgt_id=clip_id_from_session_metadata(scenario_input.session_metadata),
             rollout_id=rollout_id,
         )
     else:

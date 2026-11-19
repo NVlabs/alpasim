@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from alpasim_utils.artifact import Artifact
-from alpasim_utils.logs import async_read_pb_log
+from alpasim_utils.logs import async_read_pb_log, clip_id_from_session_metadata
 
 from eval.accumulator import EvalDataAccumulator
 from eval.data import ScenarioEvalInput
@@ -37,7 +37,7 @@ async def load_scenario_eval_input_from_asl(
     Args:
         asl_file_path: Path to the ASL file to load.
         cfg: Evaluation configuration.
-        artifacts: Dictionary of scene artifacts (maps, etc.) keyed by scene_id.
+        artifacts: Artifacts (maps, etc.) keyed by clip ID.
         run_metadata: Run metadata containing run_uuid and run_name.
 
     Returns:
@@ -50,12 +50,11 @@ async def load_scenario_eval_input_from_asl(
     async for message in async_read_pb_log(asl_file_path):
         accumulator.handle_message(message)
 
-    # Get vec_map from artifacts using scene_id from accumulated metadata
     vec_map = None
     if accumulator.session_metadata is not None:
-        scene_id = accumulator.session_metadata.scene_id
-        if scene_id in artifacts:
-            vec_map = artifacts[scene_id].map
+        clip_id = clip_id_from_session_metadata(accumulator.session_metadata)
+        if clip_id in artifacts:
+            vec_map = artifacts[clip_id].map
 
     # Build and return ScenarioEvalInput
     return accumulator.build_scenario_eval_input(

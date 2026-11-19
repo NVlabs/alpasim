@@ -485,7 +485,9 @@ def main(artifact_name, preview_route, no_block):
             artifacts = Artifact.discover_from_glob(artifact_name)
             artifact = artifacts[list(artifacts.keys())[0]]
             route_generator = RouteGeneratorMap(
-                artifact.rig.trajectory.positions, artifact.map
+                artifact.rig.trajectory.positions,
+                artifact.map,
+                recorded_quaternions_in_local=artifact.rig.trajectory.quaternions,
             )
             for i in range(
                 100

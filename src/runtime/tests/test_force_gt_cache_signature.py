@@ -48,6 +48,7 @@ def _unbound(**overrides) -> SimpleNamespace:
     base = dict(
         image_format=2,  # JPEG
         ego_mask_rig_config_id="hyperion_8_1",
+        ego_mask_camera_logical_ids=None,
         physics_update_mode=PhysicsUpdateMode.EGO_ONLY,
         force_gt_duration_us=1_700_000,
         control_timestep_us=100_000,
@@ -83,6 +84,8 @@ def test_signature_is_deterministic() -> None:
     "overrides",
     [
         {"image_format": 1},
+        {"ego_mask_rig_config_id": "clip-bank-new-content"},
+        {"ego_mask_camera_logical_ids": ["cam_front"]},
         {"physics_update_mode": PhysicsUpdateMode.NONE},
         {"force_gt_duration_us": 2_000_000},
         {"force_gt_frame_cache_extra_key": "renderer-xyz"},
@@ -97,3 +100,13 @@ def test_signature_changes_with_resolution_and_smoothing() -> None:
     bigger = {"cam_front": _camera_definition(res_h=640, res_w=1024)}
     assert _signature() != _signature(camera_definitions=bigger)
     assert _signature() != _signature(smooth_trajectories=False)
+
+
+def test_camera_selection_order_does_not_change_cache_identity() -> None:
+    """A bank/subset change invalidates cached pixels, but list ordering does not."""
+    assert _signature(
+        unbound=_unbound(ego_mask_camera_logical_ids=["a", "b"])
+    ) == _signature(unbound=_unbound(ego_mask_camera_logical_ids=["b", "a"]))
+    assert _signature(
+        unbound=_unbound(ego_mask_camera_logical_ids=["a"])
+    ) != _signature(unbound=_unbound(ego_mask_camera_logical_ids=["a", "b"]))

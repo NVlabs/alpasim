@@ -23,6 +23,8 @@
 !e2e_challenge/starter_kit/
 !e2e_challenge/starter_kit/**
 !pyproject.toml
+!third_party/
+!third_party/alpamayo-transformers5/**
 
 # Exclude specific runtime directories/files we don't need
 src/runtime/build.env

@@ -25,8 +25,18 @@ Each service has two key parameters:
 services:
   renderer:
     replicas_per_container: 4 # Number of service replicas per container
-    gpus: [0, 1, 2, 3] # GPUs to create containers on
+    gpus: [0, 1, 2, 3] # Wizard-allocation slots to create containers on
 ```
+
+GPU values are always slots within the Wizard's allocation. For Slurm runs, request GPUs from the
+scheduler and use slots `0..N-1` here regardless of their physical device IDs. Do not set
+`CUDA_VISIBLE_DEVICES` or `NVIDIA_VISIBLE_DEVICES` in `services.*.environments`; deployment owns
+the translation from slots to devices.
+
+When a Wizard shares its Slurm step's GPUs with another workload, set
+`wizard.gpu_slots` to the ordered subset it owns, for example `[2, 3]`.
+Services then use slots `[0, 1]` within that subset. The Slurm step must request
+all shared GPUs because a binding mask cannot select devices outside the step.
 
 **How it works**:
 

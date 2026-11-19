@@ -14,7 +14,9 @@ This directory contains all subdirectories which we will need to mount to the va
     * The output directory for logs produced by the runtime in `.asl` format (size-delimited protobuf files)
 5. `drivers`
     * Local driver assets (e.g. AR1 checkpoints). The wizard creates this dir if missing when using `deploy=local`.
+6. `nav`
+    * GPS-free navigation route indices for public scenes, mounted at `/mnt/route` by `nav_instruction=v5_anonymized`. See [nav/README.md](nav/README.md) for the scenes covered.
 
-**HuggingFace models (e.g. Alpamayo):** Set the `HF_HOME` environment variable to control where models are cached (defaults to `~/.cache/huggingface`). Download a gated model with `huggingface-cli download nvidia/Alpamayo2-Super` after `huggingface-cli login`; the wizard mounts the HF cache into the driver container.
+**HuggingFace models (e.g. Alpamayo):** Set the `HF_HOME` environment variable to control where models are cached (defaults to `~/.cache/huggingface`). Download a gated model with `uv run hf download nvidia/Alpamayo2-Super` after `uv run hf auth login`; the wizard mounts the HF cache into the driver container.
 
-The `auto-init.sh` script automatically downloads example files necessary in each subdirectory and prompts you to choose which model(s) to download, including VaVAM-B, Alpamayo 1, 1.5, and 2 Super.
+The `auto-init.sh` script automatically downloads example files necessary in each subdirectory and prompts you to choose which model(s) to download, including VaVAM-B, Alpamayo 1, 1.5, 2 Super, and 2 Edge.

@@ -14,16 +14,18 @@ from alpasim_grpc.v0 import logging_pb2, runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
 from alpasim_runtime.config import RendererKind
 from alpasim_runtime.daemon.scheduler import DaemonScheduler, DaemonUnavailableError
-from alpasim_runtime.errors import UnknownSceneError
-from alpasim_runtime.nre_introspection import prefetch_scene as prefetch_nre_scene
+from alpasim_runtime.data_source_loader import DataSourceLoader
+from alpasim_runtime.errors import UnknownClipError, UnknownSceneError
+from alpasim_runtime.nre_introspection import prefetch_clip as prefetch_nre_clip
 from alpasim_runtime.runtime_context import (
     RuntimeContext,
     build_runtime_context,
     compute_num_consumers_per_worker,
 )
-from alpasim_runtime.scene_loader import SceneLoader
+from alpasim_runtime.scene_registry import SceneRegistry
 from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
 from alpasim_runtime.worker.runtime import WorkerRuntime, start_worker_runtime
+from alpasim_utils.types import T0_AUTO, Scene, scene_from_proto, scene_to_proto
 
 from eval.data import AggregationType
 
@@ -37,6 +39,7 @@ _AGGREGATION_TYPE_TO_PROTO: dict[
     AggregationType.MAX: runtime_pb2.TIME_AGGREGATION_MAX,
     AggregationType.MIN: runtime_pb2.TIME_AGGREGATION_MIN,
     AggregationType.LAST: runtime_pb2.TIME_AGGREGATION_LAST,
+    AggregationType.P90: runtime_pb2.TIME_AGGREGATION_P90,
 }
 
 
@@ -112,7 +115,6 @@ def _build_scene_metadata_info(metadata) -> runtime_pb2.SceneMetadata:
         version_string=metadata.version_string,
         training_date=metadata.training_date,
         dataset_hash=metadata.dataset_hash,
-        uuid=metadata.uuid,
         camera_ids=metadata.sensors.camera_ids,
         lidar_ids=metadata.sensors.lidar_ids,
         start_time_us=int(metadata.time_range.start),
@@ -125,18 +127,25 @@ def build_runtime_info(
     version_ids: logging_pb2.RolloutMetadata.VersionIds,
 ) -> runtime_pb2.RuntimeInfo:
     """Build a RuntimeInfo proto from the daemon startup context."""
+    data_source_info_by_id = {
+        info.source.source_id: info
+        for info in runtime_context.data_source_loader.data_source_infos
+    }
+    scenes = []
+    for scene in runtime_context.scene_registry.scenes:
+        scene_info = scene_to_proto(scene)
+        scene_info.metadata.CopyFrom(
+            _build_scene_metadata_info(
+                data_source_info_by_id[scene.source.source_id].metadata
+            )
+        )
+        scenes.append(scene_info)
+
     return runtime_pb2.RuntimeInfo(
         max_supported_concurrent_rollouts=runtime_context.max_in_flight,
         nr_workers=runtime_context.config.user.nr_workers,
         renderer_type=runtime_context.config.user.renderer.kind.value,
-        scenes=[
-            runtime_pb2.SceneInfo(
-                scene_id=scene.scene_id,
-                provider_kind=scene.provider_kind,
-                metadata=_build_scene_metadata_info(scene.metadata),
-            )
-            for scene in runtime_context.scene_loader.scene_infos
-        ],
+        scenes=scenes,
         service_capacities=[
             runtime_pb2.ServiceCapacity(
                 service_name=service_name,
@@ -163,7 +172,8 @@ class InvalidRequestError(ValueError):
 def build_pending_jobs_from_request(
     request: runtime_pb2.SimulationRequest,
     request_id: str,
-    has_scene: Callable[[str], bool],
+    resolve_scene: Callable[[Scene], Scene],
+    resolve_fork_scene: Callable[[Scene], Scene] | None = None,
 ) -> list[PendingRolloutJob]:
     """Expand a SimulationRequest into individual PendingRolloutJob entries.
 
@@ -173,27 +183,41 @@ def build_pending_jobs_from_request(
     Args:
         request: The simulation request to expand.
         request_id: Identifier stamped onto every job for result routing.
-        has_scene: Callable that returns True for known scene_ids.
-
     Raises:
-        UnknownSceneError: If a spec references an unknown scene_id.
+        UnknownSceneError: If a spec references an unconfigured scene address.
     """
     jobs: list[PendingRolloutJob] = []
     for spec_index, spec in enumerate(request.rollout_specs):
-        if not has_scene(spec.scenario_id):
-            raise UnknownSceneError(spec.scenario_id)
+        try:
+            requested = scene_from_proto(spec.scene)
+            if spec.HasField("ego_history"):
+                if not spec.scene.HasField("policy_start_us"):
+                    raise ValueError("ego_history requires an explicit policy_start_us")
+                if resolve_fork_scene is None:
+                    raise ValueError("ego_history is not supported by this runtime")
+                resolved = resolve_fork_scene(requested)
+            else:
+                resolved = resolve_scene(requested)
+        except KeyError as exc:
+            raise UnknownSceneError(
+                requested.source.source_id, requested.policy_start_us
+            ) from exc
+        except ValueError as exc:
+            raise InvalidRequestError(f"RolloutSpec index {spec_index}: {exc}") from exc
 
         if spec.nr_rollouts == 0:
             logger.warning(
-                "Dropping rollout spec with nr_rollouts=0 for scene_id=%s",
-                spec.scenario_id,
+                "Dropping rollout spec with nr_rollouts=0 for source_id=%s, "
+                "policy_start_us=%s",
+                requested.source.source_id,
+                requested.policy_start_us,
             )
             continue
 
         session_uuids = list(spec.session_uuids)
         if session_uuids and len(session_uuids) != spec.nr_rollouts:
             raise ValueError(
-                f"RolloutSpec scenario_id={spec.scenario_id!r}: "
+                f"RolloutSpec scene={requested.scene_key!r}: "
                 f"len(session_uuids)={len(session_uuids)} != "
                 f"nr_rollouts={spec.nr_rollouts}"
             )
@@ -203,12 +227,16 @@ def build_pending_jobs_from_request(
                 PendingRolloutJob(
                     request_id=request_id,
                     job_id=uuid4().hex,
-                    scene_id=spec.scenario_id,
+                    scene=resolved,
                     rollout_spec_index=spec_index,
                     session_uuid=session_uuids[rollout_idx] if session_uuids else "",
-                    start_time_offset_us=spec.start_time_offset_us,
                     session_seed=(
                         spec.random_seed + rollout_idx if spec.random_seed else 0
+                    ),
+                    ego_history_bytes=(
+                        spec.ego_history.SerializeToString()
+                        if spec.HasField("ego_history")
+                        else None
                     ),
                 )
             )
@@ -244,11 +272,12 @@ class DaemonEngine:
 
         self._version_ids: logging_pb2.RolloutMetadata.VersionIds | None = None
         self._runtime_context: RuntimeContext | None = None
-        self._scene_loader: SceneLoader | None = None
+        self._data_source_loader: DataSourceLoader | None = None
+        self._scene_registry: SceneRegistry | None = None
         self._renderer_kind: RendererKind | None = None
         self._scheduler: DaemonScheduler | None = None
         self._worker_runtime: WorkerRuntime | None = None
-        self._scene_prefetch_tasks: dict[str, asyncio.Task[None]] = {}
+        self._clip_prefetch_tasks: dict[str, asyncio.Task[None]] = {}
         self._started = False
         self._shutting_down = False
 
@@ -258,11 +287,21 @@ class DaemonEngine:
             raise RuntimeError("daemon is not started")
         return self._version_ids
 
-    def _has_scene(self, scene_id: str) -> bool:
-        """Return whether the runtime knows about the given scene_id."""
-        if self._scene_loader is None:
-            raise RuntimeError("SceneLoader not initialized")
-        return self._scene_loader.has_scene(scene_id)
+    def _has_data_source(self, source_id: str) -> bool:
+        """Return whether the runtime can materialize the given source ID."""
+        if self._data_source_loader is None:
+            raise RuntimeError("DataSourceLoader not initialized")
+        return self._data_source_loader.has_data_source(source_id)
+
+    def _resolve_scene(self, scene: Scene) -> Scene:
+        if self._scene_registry is None:
+            raise RuntimeError("SceneRegistry not initialized")
+        return self._scene_registry.resolve(scene)
+
+    def _resolve_fork_scene(self, scene: Scene) -> Scene:
+        if self._scene_registry is None:
+            raise RuntimeError("SceneRegistry not initialized")
+        return self._scene_registry.resolve_fork(scene)
 
     def _ensure_accepting_requests(self) -> None:
         if not self._started:
@@ -274,9 +313,9 @@ class DaemonEngine:
         """Initialize the runtime context, start workers, and begin scheduling.
 
         Builds the RuntimeContext (parses configs, probes service versions,
-        validates scenarios, and creates the scene loader), then creates the
-        worker runtime and daemon scheduler. Idempotent: subsequent calls after
-        the first are no-ops.
+        validates scenes, and creates the data-source loader and scene registry), then
+        creates the worker runtime and daemon scheduler. Idempotent: subsequent calls
+        after the first are no-ops.
         """
         if self._started:
             return
@@ -288,7 +327,8 @@ class DaemonEngine:
             validate_config_scenes=self._validate_config_scenes,
         )
 
-        self._scene_loader = runtime_context.scene_loader
+        self._data_source_loader = runtime_context.data_source_loader
+        self._scene_registry = runtime_context.scene_registry
         self._renderer_kind = runtime_context.config.user.renderer.kind
 
         num_consumers_per_worker = compute_num_consumers_per_worker(
@@ -305,13 +345,15 @@ class DaemonEngine:
                 log_dir=self._log_dir,
                 eval_config=runtime_context.eval_config,
                 version_ids=runtime_context.version_ids,
+                ego_mask_overrides=runtime_context.ego_mask_overrides,
+                nav_routes=runtime_context.nav_routes,
             )
 
-            affine_config = runtime_context.config.user.scene_affine_dispatch
+            clip_affine_config = runtime_context.config.user.clip_affine_dispatch
             scheduler = DaemonScheduler(
                 pools=runtime_context.pools,
                 runtime=worker_runtime,
-                scene_affine_dispatch=affine_config,
+                clip_affine_dispatch=clip_affine_config,
                 max_rollout_retries=runtime_context.config.user.max_rollout_retries,
                 rollouts_dir=os.path.join(self._log_dir, "rollouts"),
             )
@@ -321,7 +363,7 @@ class DaemonEngine:
             raise
 
         try:
-            if affine_config.enabled:
+            if clip_affine_config.enabled:
                 await scheduler.warm_start()
         except BaseException:
             await scheduler.shutdown(reason="warm_start failed")
@@ -344,57 +386,57 @@ class DaemonEngine:
             version_ids=self.version_ids,
         )
 
-    def _forget_scene_prefetch(
+    def _forget_clip_prefetch(
         self,
-        scene_id: str,
+        clip_id: str,
         task: asyncio.Task[None],
     ) -> None:
-        """Retrieve task failures and remove the completed scene prefetch."""
+        """Retrieve task failures and remove the completed clip prefetch."""
         try:
             task.exception()
         except asyncio.CancelledError:
             pass
-        if self._scene_prefetch_tasks.get(scene_id) is task:
-            del self._scene_prefetch_tasks[scene_id]
+        if self._clip_prefetch_tasks.get(clip_id) is task:
+            del self._clip_prefetch_tasks[clip_id]
 
-    async def prefetch_scene(self, scene_id: str) -> None:
-        """Warm one scene in the sole NRE renderer used by a rollout cell."""
+    async def prefetch_clip(self, clip_id: str) -> None:
+        """Warm one clip in the sole NRE renderer used by a rollout cell."""
         self._ensure_accepting_requests()
-        if not self._has_scene(scene_id):
-            raise UnknownSceneError(scene_id)
+        if not self._has_data_source(clip_id):
+            raise UnknownClipError(clip_id)
         assert self._runtime_context is not None
         if self._runtime_context.config.user.renderer.kind != RendererKind.sensorsim:
-            raise ValueError("scene prefetch requires the sensorsim renderer")
+            raise ValueError("clip prefetch requires the sensorsim renderer")
 
         renderer_pool = self._runtime_context.pools["renderer"]
         if renderer_pool.skip or len(renderer_pool.address_order) != 1:
             raise ValueError(
-                "scene prefetch requires exactly one renderer address; "
+                "clip prefetch requires exactly one renderer address; "
                 f"got {renderer_pool.address_order!r}"
             )
         renderer_address = renderer_pool.address_order[0]
 
-        task = self._scene_prefetch_tasks.get(scene_id)
+        task = self._clip_prefetch_tasks.get(clip_id)
         if task is None:
             logger.info(
-                "Scene prefetch request accepted: scene_id=%s renderer=%s",
-                scene_id,
+                "Clip prefetch request accepted: clip_id=%s renderer=%s",
+                clip_id,
                 renderer_address,
             )
             task = asyncio.create_task(
-                prefetch_nre_scene(renderer_address, scene_id),
-                name=f"scene-prefetch-{scene_id}",
+                prefetch_nre_clip(renderer_address, clip_id),
+                name=f"clip-prefetch-{clip_id}",
             )
-            self._scene_prefetch_tasks[scene_id] = task
+            self._clip_prefetch_tasks[clip_id] = task
             task.add_done_callback(
-                lambda done, requested_scene_id=scene_id: self._forget_scene_prefetch(
-                    requested_scene_id, done
+                lambda done, requested_clip_id=clip_id: self._forget_clip_prefetch(
+                    requested_clip_id, done
                 )
             )
         else:
             logger.info(
-                "Scene prefetch request coalesced: scene_id=%s renderer=%s",
-                scene_id,
+                "Clip prefetch request coalesced: clip_id=%s renderer=%s",
+                clip_id,
                 renderer_address,
             )
         await asyncio.shield(task)
@@ -411,25 +453,47 @@ class DaemonEngine:
 
         Raises:
             DaemonUnavailableError: If the engine has not been started.
-            UnknownSceneError: If the request references an unknown scene_id.
+            UnknownSceneError: If the request references an unconfigured address.
         """
         self._ensure_accepting_requests()
-
-        if self._renderer_kind == RendererKind.video_model and any(
-            spec.start_time_offset_us for spec in request.rollout_specs
-        ):
-            raise InvalidRequestError(
-                "video_model renderer does not support start_time_offset_us > 0"
-            )
-
-        assert self._scheduler is not None
 
         request_id = uuid4().hex
 
         try:
-            jobs = build_pending_jobs_from_request(request, request_id, self._has_scene)
+            jobs = build_pending_jobs_from_request(
+                request,
+                request_id,
+                self._resolve_scene,
+                self._resolve_fork_scene,
+            )
         except UnknownSceneError as exc:
             raise InvalidRequestError(str(exc)) from exc
+
+        assert self._scheduler is not None
+
+        if self._renderer_kind == RendererKind.video_model and any(
+            job.ego_history_bytes is not None for job in jobs
+        ):
+            raise InvalidRequestError(
+                "video_model renderer does not support ego_history; use the "
+                "stateless sensorsim renderer"
+            )
+
+        if any(job.ego_history_bytes is not None for job in jobs):
+            assert self._runtime_context is not None
+            if not self._runtime_context.pools["trafficsim"].skip:
+                raise InvalidRequestError(
+                    "ego_history currently requires log-replay traffic "
+                    "(runtime.endpoints.trafficsim.skip=true)"
+                )
+
+        if self._renderer_kind == RendererKind.video_model and any(
+            job.scene.policy_start_us != T0_AUTO for job in jobs
+        ):
+            raise InvalidRequestError(
+                "video_model renderer does not support scenes with an explicit "
+                "policy start"
+            )
 
         driver_pool: AddressPool | None = None
         if request.available_drivers:
@@ -471,12 +535,12 @@ class DaemonEngine:
         self._shutting_down = True
         errors: list[Exception] = []
         try:
-            prefetch_tasks = tuple(self._scene_prefetch_tasks.values())
+            prefetch_tasks = tuple(self._clip_prefetch_tasks.values())
             for task in prefetch_tasks:
                 task.cancel()
             if prefetch_tasks:
                 await asyncio.gather(*prefetch_tasks, return_exceptions=True)
-            self._scene_prefetch_tasks.clear()
+            self._clip_prefetch_tasks.clear()
 
             try:
                 await self._scheduler.shutdown(reason="daemon shutting down")
@@ -493,11 +557,12 @@ class DaemonEngine:
             self._scheduler = None
             self._worker_runtime = None
             self._runtime_context = None
-            self._scene_loader = None
+            self._data_source_loader = None
+            self._scene_registry = None
             self._started = False
             self._shutting_down = False
 
         if len(errors) == 1:
             raise errors[0]
         if errors:
-            raise ExceptionGroup("daemon shutdown failed", errors)
+            raise ExceptionGroup("daemon shutdown failed", errors)  # noqa: F821

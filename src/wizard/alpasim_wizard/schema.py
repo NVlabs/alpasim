@@ -25,8 +25,21 @@ class DebugFlags:
 
 
 @dataclass
+class EgoHoodsConfig:
+    """Ego hood banks the renderer mounts, and optional per-scene re-rendering (see ego_hoods.py)."""
+
+    # Directory of banks, mounted at /mnt/ego-hoods
+    banks: str = MISSING
+    # Clip ID -> carline bank map; when set, the wizard writes re-rendered banks to `banks`
+    carlines: str | None = None
+    # Transform specs (source image and camera per carline, plus stock banks), combined
+    transforms: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AlpasimConfig:
     defines: dict[str, str] = MISSING
+    ego_hoods: EgoHoodsConfig = MISSING
     wizard: WizardConfig = MISSING
     scenes: ScenesConfig = MISSING
     services: ServicesConfig = MISSING
@@ -38,29 +51,43 @@ class AlpasimConfig:
 
 
 @dataclass
+class SceneSuiteConfig:
+    """One configured scene-suite CSV."""
+
+    csv_path: str = MISSING
+    t0_offset_us: int = 0
+
+
+@dataclass
 class ScenesConfig:
-    # Selection method (exactly one must be set)
-    scene_ids: list[str] | None = None
-    test_suite_id: str | None = None
+    # Selection method. Suites are exclusive; local mode may use clip_ids as a filter.
+    clip_ids: list[str] | None = None
+    suite_ids: list[str] | None = None
+    suite_configs: list[SceneSuiteConfig] | None = None
+    suite_groups: dict[str, list[SceneSuiteConfig]] = field(default_factory=dict)
+
+    # Clip IDs to remove from the selected suites or explicit clip list
+    exclude_clip_ids: list[str] = field(default_factory=list)
 
     # Limit the number of scenes to run (0 or negative means no limit)
     limit_to_first_n: int = 0
 
     # Paths
     scene_cache: str = MISSING
-    scenes_csv: list[str] = MISSING
-    suites_csv: list[str] = MISSING
+    clip_catalog_csvs: list[str] = MISSING
+    scene_suite_dirs: list[str] = MISSING
 
     # Relative path within scene_cache to the sceneset directory for this run.
     # Set automatically by the wizard; used by reeval to locate the correct USDZs.
     sceneset_path: str | None = None
 
+    # Read-only mounts needed to resolve external USDZ symlink targets during reeval.
+    external_artifact_mounts: list[str] = field(default_factory=list)
+
     # Optional: path to a local directory containing *.usdz files.
     # When set, the wizard will scan this directory to generate in-memory
-    # sim_scenes/sim_suites data, bypassing the CSV files. A test suite (called "local")
-    # is created automatically containing all discovered scenes.
-    # If local_usdz_dir is provided and neither scene_ids nor test_suite_id is set,
-    # all scenes in the directory will be simulated.
+    # clip catalog data, bypassing the configured catalog CSVs. If local_usdz_dir
+    # is provided without clip_ids, all discovered clips are selected.
     local_usdz_dir: str | None = None
 
     # Used to override services.renderer.image for the USDZ database service if NRE is not enabled.
@@ -106,6 +133,8 @@ class WizardConfig:
     run_name: str | None = None
     run_method: RunMethod = MISSING
     run_mode: RunMode = MISSING
+    # Optional slots assigned to this Wizard from the GPUs available to its process.
+    gpu_slots: list[int] | None = None
 
     # Global log level for all alpasim services (DEBUG, INFO, WARNING, ERROR)
     log_level: str = "INFO"
@@ -156,8 +185,13 @@ class WizardConfig:
 
     # Run GPU services through CUDA MPS so kernels from co-located processes
     # execute concurrently instead of time-slicing between CUDA contexts.
-    # Starts a per-job MPS control daemon on the node. Slurm run methods only.
+    # Starts a per-job MPS control daemon on the node as the Wizard starts.
+    # Slurm run methods only.
     enable_mps: bool = False
+    # Pipe directory of that daemon; defaults to /tmp/nvidia-mps-<job id>. Set it
+    # when processes outside the Wizard join the daemon. Unix socket paths are
+    # capped at ~108 characters, so keep it short and node-local.
+    mps_pipe_dir: str | None = None
 
     # External service addresses for services running outside the deployment.
     # Maps service name to list of addresses (e.g., {"driver": ["localhost:6789"]}).
@@ -173,6 +207,7 @@ class ServicesConfig:
     physics: ServiceConfig | None = MISSING
     trafficsim: ServiceConfig | None = MISSING
     controller: ServiceConfig | None = MISSING
+    frame_quality: ServiceConfig | None = None
     runtime: RuntimeServiceConfig = MISSING
     prometheus: ContainerConfig = MISSING
 
@@ -195,8 +230,11 @@ class ServiceConfig(ContainerConfig):
     command: list[str] = MISSING
     # Number of service replicas to run per container.
     # If gpus is None or empty, creates a single container with this many replicas.
-    # If gpus is specified, creates one container per GPU, each with this many replicas.
+    # If gpus is specified, creates one container per entry, each with this many replicas.
     replicas_per_container: int = MISSING
+    # GPU slots relative to the Wizard's allocation (one container per entry).
+    # A slot may appear multiple times to run multiple containers on the same GPU,
+    # e.g. gpus: [0, 0, 1, 1] creates four containers, two on each GPU.
     gpus: list[int] | None = MISSING
 
 

@@ -6,7 +6,10 @@
 from pathlib import Path
 
 import pytest
-from alpasim_runtime.scene_loader import ArtifactSceneProvider, SceneLoader
+from alpasim_runtime.data_source_loader import (
+    ArtifactDataSourceProvider,
+    DataSourceLoader,
+)
 from alpasim_trafficsim.catk.scene_adapter import CATKSceneAdapter
 
 
@@ -16,14 +19,14 @@ def test_data_dir_exists(usdz_data_dir: Path) -> None:
     ), f"Expected {usdz_data_dir} to exist (create it for local USDZ files)."
 
 
-def test_runtime_scene_loader_discovers_scenes(usdz_data_dir: Path) -> None:
-    scene_loader = SceneLoader(
-        ArtifactSceneProvider.from_path(
+def test_runtime_data_source_loader_discovers_scenes(usdz_data_dir: Path) -> None:
+    data_source_loader = DataSourceLoader(
+        ArtifactDataSourceProvider.from_path(
             usdz_data_dir,
             smooth_trajectories=False,
         )
     )
-    assert len(scene_loader.scene_ids) >= 1
+    assert len(data_source_loader.source_ids) >= 1
 
 
 @pytest.mark.integration
@@ -31,14 +34,14 @@ def test_catk_scene_adapter_loads_training_style_data(
     usdz_data_dir: Path, usdz_from_data_dir: Path
 ) -> None:
     del usdz_data_dir
-    scene_loader = SceneLoader(
-        ArtifactSceneProvider.from_path(
+    data_source_loader = DataSourceLoader(
+        ArtifactDataSourceProvider.from_path(
             usdz_from_data_dir,
             smooth_trajectories=False,
         )
     )
-    scene_id = next(iter(scene_loader.scene_ids))
-    data_source = scene_loader.get_data_source(scene_id)
+    clip_id = next(iter(data_source_loader.source_ids))
+    data_source = data_source_loader.get_data_source(clip_id)
     env_data = CATKSceneAdapter().load(data_source)
 
     assert env_data["map"], "Expected at least one decoded map layer"

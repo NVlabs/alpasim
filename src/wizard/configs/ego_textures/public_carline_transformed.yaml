@@ -1,0 +1,15 @@
+# @package _global_
+# Carline hoods for all public ClipGT scenes, with the front-wide hood of the
+# carlines listed in data/ego-hood-transforms/public_carline.yaml re-rendered into
+# each scene's own camera. The wizard generates the banks of the selected scenes
+# into ego_hoods.banks (cached and shared between runs) and writes the run's
+# overrides to its log directory.
+ego_hoods:
+  banks: "${defines.filesystem}/ego-textures/public_carline_transformed/banks"
+  carlines: "${repo-relative:'data/scenes/ego_textures/public_carline.yaml'}"
+  transforms:
+    - "${repo-relative:'data/ego-hood-transforms/public_carline.yaml'}"
+runtime:
+  simulation_config:
+    ego_mask_rig_config_id: null
+    ego_mask_overrides_file: /mnt/log_dir/ego_mask_overrides.yaml

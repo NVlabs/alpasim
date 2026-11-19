@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-"""
-Vehicle simulation system with pluggable MPC controller.
+"""Vehicle simulation system with pluggable MPC controller.
 
 This module provides the System class which handles:
 - Trajectory management and coordinate transforms
@@ -11,7 +10,7 @@ This module provides the System class which handles:
 - Logging
 
 The MPC algorithm is delegated to an MPCController instance, allowing
-different implementations (LinearMPC, NonlinearMPC) to be chosen at runtime.
+different implementations (LinearMPC, NonlinearMPC, SQPMPC) at runtime.
 """
 
 import logging
@@ -79,6 +78,17 @@ class System:
         self.control_input: np.ndarray = np.array([0.0, 0.0])
         self._solve_time_ms: float = 0.0
         self._last_mpc_time_us: int | None = None
+        self._last_controller_status: str = "not_run"
+
+    @property
+    def current_control_input(self) -> np.ndarray:
+        """Return the last controller command [steering_cmd, accel_cmd]."""
+        return self.control_input.copy()
+
+    @property
+    def last_controller_status(self) -> str:
+        """Return the status string from the last controller solve."""
+        return self._last_controller_status
 
     def _dynamic_state_to_cg_velocity(
         self, dynamic_state: common_pb2.DynamicState
@@ -160,6 +170,8 @@ class System:
                 yaw_rate=request.state.state.angular_velocity.z,
                 longitudinal_acceleration=request.state.state.linear_acceleration.x,
             )
+            self._controller.reset_warm_start()
+            self.control_input = self._vehicle_model.state[6:8].copy()
 
         # Determine intermediate reporting timestamps
         if request.pose_reporting_interval_us > 0:
@@ -196,6 +208,7 @@ class System:
         reported_states: list[
             controller_pb2.RunControllerAndVehicleModelResponse.PropagatedState
         ] = []
+        solver_stats = controller_pb2.RunControllerAndVehicleModelResponse.SolverStats()
         for target_ts in step_targets:
             pre_step_time = self._timestamp_us
             run_ctrl = pre_step_time in mpc_run_times
@@ -203,6 +216,11 @@ class System:
                 target_ts - pre_step_time,
                 run_controller=run_ctrl,
             )
+            if run_ctrl:
+                solver_stats.solve_count += 1
+                solver_stats.failed_solve_count += (
+                    self._last_controller_status.startswith("failed:")
+                )
 
             # Record state at reporting timestamps and at the final timestamp
             if target_ts in reporting_timestamps or target_ts == request.future_time_us:
@@ -220,11 +238,11 @@ class System:
 
         return controller_pb2.RunControllerAndVehicleModelResponse(
             states=reported_states,
+            solver_stats=solver_stats,
         )
 
     def _build_dynamic_state_in_rig_frame(self) -> common_pb2.DynamicState:
-        """
-        Builds the DynamicState message with velocities and accelerations
+        """Builds the DynamicState message with velocities and accelerations
         converted from CG frame to rig frame.
 
         The rig frame is offset from the CG by l_rig_to_cg along the x-axis.
@@ -300,7 +318,9 @@ class System:
 
             # Compute control
             ctrl_output = self._controller.compute_control(ctrl_input)
-            self.control_input = ctrl_output.control
+            if ctrl_output.control is not None:
+                self.control_input = ctrl_output.control
+            self._last_controller_status = ctrl_output.status
             self._last_mpc_time_us = self._timestamp_us
 
             # Cache info for logging
@@ -338,24 +358,11 @@ class System:
         if self._reference_trajectory is None:
             return None
 
-        # Transform from local frame to current rig frame
         pose_local_to_rig_at_ref_start = self._trajectory.interpolate_pose(
             self._reference_trajectory.timestamps_us[0]
         )
-        pose_local_to_rig_now = self._trajectory.last_pose
-        pose_rig_now_to_rig_at_traj_time = (
-            pose_local_to_rig_now.inverse() @ pose_local_to_rig_at_ref_start
-        )
-
-        # Transform all poses
-        transformed_poses = []
-        for i in range(len(self._reference_trajectory)):
-            pose = self._reference_trajectory.get_pose(i)
-            transformed_poses.append(pose_rig_now_to_rig_at_traj_time @ pose)
-
-        return Trajectory.from_poses(
-            timestamps=self._reference_trajectory.timestamps_us.copy(),
-            poses=transformed_poses,
+        return self._reference_trajectory.transform(
+            self._trajectory.last_pose.inverse() @ pose_local_to_rig_at_ref_start
         )
 
     def _log_header(self) -> None:

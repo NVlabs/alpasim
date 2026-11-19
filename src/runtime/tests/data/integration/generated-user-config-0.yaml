@@ -23,7 +23,10 @@ prometheus:
   url: http://127.0.0.1:9090
   worker_ports: [0]
 scenes:
-  - scene_id: clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e
+  - source:
+      clip_id: clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e
+      usdz_uuid: 9c264c49-82a8-4344-ada1-d93791120c27
+    policy_start_us: AUTO
 simulation_config:
   assert_zero_decision_delay: true
   cameras:

@@ -41,6 +41,7 @@ class RouteGenerator(ABC):
         vector_map: VectorMap,
         route_generator_type: RouteGeneratorType,
         route_start_offset_m: float = 0.0,
+        recorded_quaternions_in_local: np.ndarray | None = None,
     ) -> "RouteGenerator | None":
         """
         Factory method to create a RouteGenerator
@@ -49,6 +50,8 @@ class RouteGenerator(ABC):
           vector_map: the map data
           route_generator_type: the type of route generator to create
           route_start_offset_m: approximate distance ahead of the ego projection where routes start
+          recorded_quaternions_in_local: (N, 4) rig quaternions in the local frame; required for
+            map-based routes
         Returns:
           A route generator of the specified type, or None if route generation is disabled
         """
@@ -64,6 +67,7 @@ class RouteGenerator(ABC):
                 recorded_waypoints_in_local,
                 vector_map,
                 route_start_offset_m=route_start_offset_m,
+                recorded_quaternions_in_local=recorded_quaternions_in_local,
             )
         else:
             raise ValueError(f"Invalid route generator type: {route_generator_type}")
@@ -303,6 +307,7 @@ class RouteGeneratorMap(RouteGenerator):
         recorded_waypoints_in_local: np.ndarray,
         vector_map: VectorMap,
         route_start_offset_m: float = 0.0,
+        recorded_quaternions_in_local: np.ndarray | None = None,
     ) -> None:
         """
         Initialize the route generator with the rig waypoints in the local frame
@@ -311,29 +316,35 @@ class RouteGeneratorMap(RouteGenerator):
           recorded_waypoints_in_local: the waypoints in the local frame. (N, 3) array
           vector_map: the map data
           route_start_offset_m: distance ahead of the ego projection where routes start
+          recorded_quaternions_in_local: (N, 4) rig quaternions in the local frame
         """
+        if recorded_quaternions_in_local is None:
+            raise ValueError("recorded_quaternions_in_local is required for map routes")
         self._map = vector_map
         self._current_lane = None
         super().__init__(
-            self._determine_waypoints(recorded_waypoints_in_local),
+            self._determine_waypoints(
+                recorded_waypoints_in_local, recorded_quaternions_in_local
+            ),
             route_start_offset_m=route_start_offset_m,
         )
 
     def _determine_waypoints(
-        self, recorded_waypoints_in_local: np.ndarray
+        self,
+        recorded_waypoints_in_local: np.ndarray,
+        recorded_quaternions_in_local: np.ndarray,
     ) -> np.ndarray:
         # For each waypoint in the recorded rig trajectory, find the possible lanes
         possible_lane_ids: list[list[str]] = []
-        heading = np.array([0.0])
         for i in range(len(recorded_waypoints_in_local)):
-            if i != len(recorded_waypoints_in_local) - 1:
-                relative_motion = (
-                    recorded_waypoints_in_local[i + 1] - recorded_waypoints_in_local[i]
-                )[:2]
-                if np.linalg.norm(relative_motion) > 1.0e-2:
-                    heading = np.array(
-                        [math.atan2(relative_motion[1], relative_motion[0])]
-                    )
+            heading = np.array(
+                [
+                    Pose(
+                        recorded_waypoints_in_local[i],
+                        recorded_quaternions_in_local[i],
+                    ).yaw()
+                ]
+            )
 
             possible_lane_ids.append(
                 [

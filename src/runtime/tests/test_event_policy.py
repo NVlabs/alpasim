@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
+from alpasim_grpc.v0.egodriver_pb2 import VectorizedObservation
 from alpasim_runtime.config import PhysicsUpdateMode
 from alpasim_runtime.events.base import EndSimulationException, EventQueue
+from alpasim_runtime.events.force_gt_utils import controller_reference_trajectory
 from alpasim_runtime.events.physics import PhysicsEvent, PhysicsTarget
 from alpasim_runtime.events.policy import (
     PolicyEvent,
@@ -37,6 +39,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
     def test_priority(self, policy_event: PolicyEvent):
@@ -54,19 +57,89 @@ class TestPolicyEvent:
         rollout_state: RolloutState,
         mock_driver: AsyncMock,
         simple_trajectory: Trajectory,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """PolicyEvent.run() should call driver.drive with correct timestamps."""
         # Setup driver to return a trajectory
         drive_traj = simple_trajectory.clip(200_000, 300_001)
         mock_driver.drive.return_value = (drive_traj, False)
+        estimate_timestamps_us = np.array([0, 100_000, 300_000], dtype=np.uint64)
+        estimate_context = Trajectory.from_poses(
+            timestamps=estimate_timestamps_us,
+            poses=[
+                Pose(
+                    np.array([10.0 + float(ts) / 1e6, 0.0, 0.0], dtype=np.float32),
+                    np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                )
+                for ts in estimate_timestamps_us
+            ],
+        )
+        zero_dynamics = np.zeros(
+            (len(estimate_context.timestamps_us), 12), dtype=np.float64
+        )
+        rollout_state.ego_trajectory_estimate = (
+            DynamicTrajectory.from_trajectory_and_dynamics(
+                estimate_context,
+                zero_dynamics,
+            )
+        )
+        captured_vector_kwargs: dict[str, Any] = {}
 
+        def fake_build_vectorized_observation(
+            **kwargs: Any,
+        ) -> VectorizedObservation:
+            captured_vector_kwargs.update(kwargs)
+            return VectorizedObservation(timestamp_us=kwargs["timestamp_us"])
+
+        monkeypatch.setattr(
+            "alpasim_runtime.events.policy.build_vectorized_observation",
+            fake_build_vectorized_observation,
+        )
+
+        policy_event.send_vectorized_observation = True
         queue = EventQueue()
         await policy_event.run(rollout_state, queue)
 
         mock_driver.drive.assert_awaited_once()
+        mock_driver.submit_vectorized_observation.assert_awaited_once()
         call_kwargs = mock_driver.drive.call_args.kwargs
         assert call_kwargs["time_now_us"] == 200_000
         assert call_kwargs["time_query_us"] == 300_000
+        assert captured_vector_kwargs["timestamp_us"] == 200_000
+        np.testing.assert_allclose(
+            captured_vector_kwargs["pose_local_to_physical_ego"].vec3[0],
+            0.2,
+        )
+        np.testing.assert_array_equal(
+            rollout_state.step_context.driver_trajectory.timestamps_us,
+            drive_traj.timestamps_us,
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_skips_vector_observation_when_disabled(
+        self,
+        policy_event: PolicyEvent,
+        rollout_state: RolloutState,
+        mock_driver: AsyncMock,
+        simple_trajectory: Trajectory,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Disabled vector observations should not pay vector build cost."""
+        drive_traj = simple_trajectory.clip(200_000, 300_001)
+        mock_driver.drive.return_value = (drive_traj, False)
+
+        def fail_build_vectorized_observation(**kwargs: Any) -> VectorizedObservation:
+            raise AssertionError("vector observation should not be built")
+
+        monkeypatch.setattr(
+            "alpasim_runtime.events.policy.build_vectorized_observation",
+            fail_build_vectorized_observation,
+        )
+
+        await policy_event.run(rollout_state, EventQueue())
+
+        mock_driver.drive.assert_awaited_once()
+        mock_driver.submit_vectorized_observation.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_first_run_submits_full_initial_egomotion_context(
@@ -98,6 +171,7 @@ class TestPolicyEvent:
             camera_ids=[],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
         await event.run(rollout_state, EventQueue())
 
@@ -242,6 +316,7 @@ class TestPolicyEvent:
                 SimpleNamespace(generate_route=lambda *_args, **_kwargs: route),
             ),
             send_recording_ground_truth=True,
+            send_vectorized_observation=False,
         )
 
         await event.run(rollout_state, EventQueue())
@@ -305,6 +380,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         await event.run(rollout_state, EventQueue())
@@ -315,7 +391,9 @@ class TestPolicyEvent:
         assert rollout_state.step_context is not None
         driver_trajectory = rollout_state.step_context.driver_trajectory
         assert driver_trajectory is not None
-        expected_trajectory = force_gt_trajectory.clip(200_000, 300_001)
+        expected_trajectory = controller_reference_trajectory(
+            force_gt_trajectory, 200_000, rollout_state.unbound.control_timestep_us
+        )
         np.testing.assert_array_equal(
             driver_trajectory.timestamps_us, expected_trajectory.timestamps_us
         )
@@ -345,6 +423,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         await event.run(rollout_state, EventQueue())
@@ -383,6 +462,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
         queue = EventQueue()
         policy_task = asyncio.create_task(event.run(rollout_state, queue))
@@ -417,6 +497,7 @@ class TestPolicyEvent:
                 SimpleNamespace(generate_route=lambda *_args, **_kwargs: route),
             ),
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         with pytest.raises(ValueError, match="Timestamp mismatch"):
@@ -454,6 +535,7 @@ class TestPolicyEvent:
                 ),
             ),
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         with pytest.raises(
@@ -516,6 +598,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=cast(Any, SimpleNamespace(generate_route=_generate_route)),
             send_recording_ground_truth=False,
+            send_vectorized_observation=False,
         )
 
         await event.run(rollout_state, EventQueue())
@@ -548,6 +631,7 @@ class TestPolicyEvent:
             camera_ids=["cam_front"],
             route_generator=None,
             send_recording_ground_truth=True,
+            send_vectorized_observation=False,
         )
 
         with pytest.raises(ValueError, match="Timestamp mismatch"):
@@ -756,3 +840,120 @@ class TestPhysicsEventTraffic:
         await event.run(rollout_state, EventQueue())
 
         assert ctx.traffic_trajectories == {}
+
+
+@pytest.mark.asyncio
+async def test_navigation_instruction_is_looked_up_from_the_true_pose(
+    rollout_state: RolloutState,
+    service_bundle: ServiceBundle,
+    mock_driver: AsyncMock,
+    simple_trajectory: Trajectory,
+):
+    """The instruction reflects where the ego is along the recorded route."""
+    from alpasim_runtime.nav_route import (
+        NavStatus,
+        RouteInstruction,
+        RouteNavigator,
+        SessionRouteIndex,
+    )
+
+    # The recording covers 0..1 m of a session; the turn sits 0.6 m ahead of the
+    # ego, which is at x=0.2 m at step 200_000.
+    route_index = SessionRouteIndex(
+        timestamps=np.array([0, 500_000, 1_000_000], dtype=np.int64),
+        cumulative_distances=np.array([100.0, 100.5, 101.0]),
+        instructions=[RouteInstruction(100.8, "TURN_LEFT", "Turn left")],
+    )
+    mock_driver.drive.return_value = (simple_trajectory.clip(200_000, 300_001), False)
+    event = PolicyEvent(
+        timestamp_us=200_000,
+        policy_timestep_us=100_000,
+        services=service_bundle,
+        camera_ids=[],
+        route_generator=None,
+        send_recording_ground_truth=False,
+        send_vectorized_observation=False,
+        navigation=RouteNavigator(route_index, rollout_state.unbound.gt_ego_trajectory),
+    )
+
+    await event.run(rollout_state, EventQueue())
+
+    mock_driver.submit_navigation.assert_awaited_once()
+    timestamp_us, instruction = mock_driver.submit_navigation.call_args.args
+    assert timestamp_us == 200_000
+    assert instruction.status is NavStatus.UPCOMING
+    assert instruction.instruction_text == "Turn left in 1m"
+    assert instruction.remaining_distance_m == pytest.approx(0.6, abs=1e-5)
+
+
+@pytest.mark.asyncio
+async def test_geometry_navigation_sends_text_classified_from_the_route(
+    rollout_state: RolloutState,
+    service_bundle: ServiceBundle,
+    mock_driver: AsyncMock,
+    simple_trajectory: Trajectory,
+):
+    """With source ``geometry`` the runtime, not the driver, reads the route."""
+    from alpasim_runtime.nav_route import GeometryNavigator, NavStatus
+    from alpasim_utils.geometry import Polyline
+
+    ahead = [(x, 0.0, 0.0) for x in np.arange(0.0, 20.0, 4.0)]
+    left = [(16.0, y, 0.0) for y in np.arange(4.0, 24.0, 4.0)]
+    route_generator = MagicMock()
+    route_generator.generate_route.return_value = Polyline(
+        np.array(ahead + left, dtype=np.float64)
+    )
+    mock_driver.drive.return_value = (simple_trajectory.clip(200_000, 300_001), False)
+    event = PolicyEvent(
+        timestamp_us=200_000,
+        policy_timestep_us=100_000,
+        services=service_bundle,
+        camera_ids=[],
+        route_generator=route_generator,
+        send_recording_ground_truth=False,
+        send_vectorized_observation=False,
+        navigation=GeometryNavigator(),
+    )
+
+    await event.run(rollout_state, EventQueue())
+
+    mock_driver.submit_route.assert_awaited_once()
+    mock_driver.submit_navigation.assert_awaited_once()
+    timestamp_us, instruction = mock_driver.submit_navigation.call_args.args
+    assert timestamp_us == 200_000
+    assert instruction.instruction_text == "Turn left in 16m"
+    assert instruction.status is NavStatus.UPCOMING
+
+
+@pytest.mark.asyncio
+async def test_geometry_navigation_without_usable_route_sends_the_empty_instruction(
+    rollout_state: RolloutState,
+    service_bundle: ServiceBundle,
+    mock_driver: AsyncMock,
+    simple_trajectory: Trajectory,
+):
+    from alpasim_runtime.nav_route import GeometryNavigator, NavStatus
+    from alpasim_utils.geometry import Polyline
+
+    route_generator = MagicMock()
+    route_generator.generate_route.return_value = Polyline(np.zeros((0, 3)))
+    mock_driver.drive.return_value = (simple_trajectory.clip(200_000, 300_001), False)
+    event = PolicyEvent(
+        timestamp_us=200_000,
+        policy_timestep_us=100_000,
+        services=service_bundle,
+        camera_ids=[],
+        route_generator=route_generator,
+        send_recording_ground_truth=False,
+        send_vectorized_observation=False,
+        navigation=GeometryNavigator(),
+    )
+
+    await event.run(rollout_state, EventQueue())
+
+    # The driver keeps the last instruction, so "nothing to say" is sent explicitly.
+    mock_driver.submit_navigation.assert_awaited_once()
+    timestamp_us, instruction = mock_driver.submit_navigation.call_args.args
+    assert timestamp_us == 200_000
+    assert instruction.instruction_text == ""
+    assert instruction.status is NavStatus.UNAVAILABLE

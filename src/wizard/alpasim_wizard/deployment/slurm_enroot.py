@@ -6,25 +6,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shlex
 import shutil
-import socket
 import subprocess
-import sys
 import tempfile
 import time
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from pathlib import Path
-from typing import Iterator
 
 from filelock import FileLock
 
 from ..context import WizardContext
 from ..schema import RunMode
 from ..services import ContainerDefinition, VolumeMount
-from .dispatcher import dispatch_background, terminate_process
+from .dispatcher import terminate_process
 from .fuse_tools import ensure_fuse_tools, fuse_tool_paths
 from .slurm import SlurmDeployment
 
@@ -33,7 +31,33 @@ logger = logging.getLogger(__name__)
 # Enroot cannot bind these through `--mount` with `x-create=auto`; they need a
 # late hook that creates the destination inside the private overlay first.
 _ENROOT_HOOK_MOUNT_PATHS = frozenset({"/", "/proc", "/sys"})
-_HOST_EXPORTER_START_TIMEOUT_SECONDS = 10
+
+
+def _resolve_enroot_gpu_uuids(
+    allocated_gpus: tuple[int, ...],
+) -> tuple[str, ...]:
+    """Return allocated GPU UUIDs in topology-slot order."""
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    visible_gpus: dict[int, str] = {}
+    for line in result.stdout.splitlines():
+        index, uuid = line.split(",", maxsplit=1)
+        visible_gpus[int(index)] = uuid.strip()
+
+    try:
+        return tuple(visible_gpus[device] for device in allocated_gpus)
+    except KeyError as error:
+        if tuple(visible_gpus) == tuple(range(len(allocated_gpus))):
+            # ConstrainDevices renumbers allocated GRES to 0..N-1 in allocation order.
+            return tuple(visible_gpus.values())
+        raise RuntimeError(
+            "Cannot reconcile Slurm GPU allocation "
+            f"{allocated_gpus} with nvidia-smi indices {tuple(visible_gpus)}"
+        ) from error
 
 
 class SlurmEnrootDeployment(SlurmDeployment):
@@ -44,6 +68,8 @@ class SlurmEnrootDeployment(SlurmDeployment):
             raise ValueError("wizard.fuse_dir is required for SLURM_ENROOT")
         super().__init__(context)
         self._staged_sqsh_paths: dict[str, str] = {}
+        self._gpu_uuids: tuple[str, ...] | None = None
+        self._command_rc_path: Path | None = None
 
     def _prepare_deployment(self, stack: ExitStack) -> None:
         cache_config = self._node_local_cache_config()
@@ -51,7 +77,7 @@ class SlurmEnrootDeployment(SlurmDeployment):
             ensure_fuse_tools(self._fuse_dir())
             if cache_config is not None:
                 self._stage_sqsh_images(*cache_config)
-        stack.enter_context(self._host_process_exporter())
+        super()._prepare_deployment(stack)
         stack.callback(self._cleanup_enroot_runtime_paths)
 
     def _node_local_cache_config(self) -> tuple[Path, float] | None:
@@ -75,20 +101,22 @@ class SlurmEnrootDeployment(SlurmDeployment):
         source_paths = set()
         for container in containers:
             source_paths.add(super()._sqsh_path(container))
-        digests = {
-            source_path: self._sqsh_digest(Path(source_path))
-            for source_path in source_paths
-        }
-        destinations = {
-            source_path: self._cache_destination(
-                cache_dir,
-                Path(source_path),
-                digests[source_path],
-            )
-            for source_path in source_paths
-        }
-        protected_names = {path.name for path in destinations.values()}
         with FileLock(cache_dir / ".cache.lock"):
+            digest_path = cache_dir / ".digests.json"
+            records = (
+                json.loads(digest_path.read_text()) if digest_path.exists() else {}
+            )
+            digests = {
+                source_path: self._cached_sqsh_digest(Path(source_path), records)
+                for source_path in source_paths
+            }
+            destinations = {
+                source_path: self._cache_destination(
+                    cache_dir, Path(source_path), digests[source_path]
+                )
+                for source_path in source_paths
+            }
+            protected_names = {path.name for path in destinations.values()}
             for partial in cache_dir.glob(".*.partial"):
                 partial.unlink()
 
@@ -150,11 +178,56 @@ class SlurmEnrootDeployment(SlurmDeployment):
                             time.monotonic() - started_at,
                         )
                 self._staged_sqsh_paths[source_path] = str(destination)
+            # The cache lock covers both image publication and its digest metadata.
+            metadata_partial = cache_dir / ".digests.json.partial"
+            metadata_partial.write_text(json.dumps(records))
+            os.replace(metadata_partial, digest_path)
+
+    @staticmethod
+    def _sqsh_fingerprint(source: Path) -> list[int]:
+        """Identify normal file replacements and writes, even with restored mtime."""
+        stat = source.stat()
+        return [
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        ]
+
+    @classmethod
+    def _cached_sqsh_digest(cls, source: Path, records: dict) -> str:
+        """Reuse a prior full hash only while the file's identity is unchanged."""
+        fingerprint = cls._sqsh_fingerprint(source)
+        record = records.get(str(source))
+        if (
+            record is not None
+            and record[0] == fingerprint
+            and record[2] - fingerprint[4] >= 2_000_000_000
+        ):
+            logger.info("Startup timing: phase=squash_hash_reused path=%s", source)
+            return record[1]
+        # Shared filesystems can expose only whole-second ctime. A hash taken
+        # in the same timestamp window cannot certify later same-size writes.
+        started_ns = time.time_ns()
+        digest = cls._sqsh_digest(source)
+        if cls._sqsh_fingerprint(source) != fingerprint:
+            raise OSError(f"Squash image changed while hashing: {source}")
+        records[str(source)] = [fingerprint, digest, started_ns]
+        return digest
 
     @staticmethod
     def _sqsh_digest(source: Path) -> str:
+        started = time.monotonic()
         with source.open("rb") as stream:
-            return hashlib.file_digest(stream, "sha256").hexdigest()
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        logger.info(
+            "Startup timing: phase=squash_hash path=%s bytes=%d seconds=%.3f",
+            source,
+            source.stat().st_size,
+            time.monotonic() - started,
+        )
+        return digest
 
     @staticmethod
     def _cache_destination(
@@ -276,6 +349,32 @@ class SlurmEnrootDeployment(SlurmDeployment):
         config_path.write_text("\n".join(lines) + "\n")
         return config_path
 
+    def _command_rc(self) -> Path:
+        """Return the start script that runs a service command without the image entrypoint.
+
+        Enroot 4 runs an image's entrypoint with the given command as its arguments
+        (``/app/run bash -c ...`` for the NRE renderer). The script keeps the image's
+        working directory and /etc/rc.local, then runs the command itself. It is written
+        once per deployment: rewriting it could truncate it while an earlier service's
+        ``enroot start`` is reading it.
+        """
+        if self._command_rc_path is not None:
+            return self._command_rc_path
+        config_dir = Path(self.context.cfg.wizard.log_dir) / "enroot-configs"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        rc_path = config_dir / "command-rc.sh"
+        rc_path.write_text(
+            r"""workdir=$(sed -n 's/^cd "\(.*\)" && unset OLDPWD.*$/\1/p' /etc/rc)
+cd "${workdir:-/}" && unset OLDPWD || exit 1
+if [ -s /etc/rc.local ]; then
+    . /etc/rc.local
+fi
+exec "$@"
+"""
+        )
+        self._command_rc_path = rc_path
+        return rc_path
+
     @staticmethod
     def _to_enroot_mount(volume: VolumeMount) -> str:
         options = volume.options or "rw"
@@ -297,49 +396,6 @@ class SlurmEnrootDeployment(SlurmDeployment):
                 e,
             )
 
-    @contextmanager
-    def _host_process_exporter(self) -> Iterator[None]:
-        """Run process telemetry outside Enroot to retain host procfs access."""
-        cfg = self.context.cfg.wizard
-        job_id = cfg.slurm_job_id
-        assert job_id is not None, "SLURM environment not detected"
-        command = shlex.join(
-            [
-                sys.executable,
-                "-m",
-                "alpasim_wizard.telemetry.slurm_process_exporter",
-                f"--job-id={job_id}",
-                f"--port={self.context.telemetry_ports.process_exporter}",
-                "--procfs=/proc",
-                "--cgroupfs=/sys/fs/cgroup",
-            ]
-        )
-        process = dispatch_background(
-            command,
-            log_dir=Path(cfg.log_dir),
-            dry_run=cfg.dry_run,
-        )
-        try:
-            if process is not None:
-                self._wait_for_host_exporter(process)
-            yield
-        finally:
-            if process is not None:
-                terminate_process(process)
-
-    def _wait_for_host_exporter(self, process: subprocess.Popen[str]) -> None:
-        port = self.context.telemetry_ports.process_exporter
-        deadline = time.monotonic() + _HOST_EXPORTER_START_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError("Host process exporter exited during startup")
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                    return
-            except OSError:
-                time.sleep(0.1)
-        raise TimeoutError(f"Host process exporter did not open port {port}")
-
     def _to_enroot_run(
         self,
         container: ContainerDefinition,
@@ -350,28 +406,37 @@ class SlurmEnrootDeployment(SlurmDeployment):
         sqsh_path = self._sqsh_path(container)
         environments = list(container.environments or [])
         environments.append("SLURM_JOB_ID")
-        mps_enabled = self._mps_enabled(container)
+        mps_pipe_dir = self._mps_pipe_dir(container)
         if container.gpu is not None:
+            device = self.context.resolve_gpu_slot(container.gpu)
+            logger.info(
+                "Container %s maps GPU slot %d to device %d",
+                container.uuid,
+                container.gpu,
+                device,
+            )
+            if self._gpu_uuids is None:
+                self._gpu_uuids = _resolve_enroot_gpu_uuids(self.context.gpu_allocation)
+            gpu_uuid = self._gpu_uuids[container.gpu]
             environments.extend(
                 [
-                    f"CUDA_VISIBLE_DEVICES={container.gpu}",
-                    "NVIDIA_VISIBLE_DEVICES=all",
-                    "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+                    # Enroot may retain multiple device nodes from the Slurm step.
+                    f"CUDA_VISIBLE_DEVICES={gpu_uuid}",
+                    f"NVIDIA_VISIBLE_DEVICES={gpu_uuid}",
+                    "NVIDIA_DRIVER_CAPABILITIES=all",
                 ]
             )
-        if mps_enabled:
-            environments.append(f"CUDA_MPS_PIPE_DIRECTORY={self._mps_pipe_dir()}")
+        if mps_pipe_dir is not None:
+            environments.append(f"CUDA_MPS_PIPE_DIRECTORY={mps_pipe_dir}")
 
         mounts = [
             self._to_enroot_mount(volume)
             for volume in container.volumes
             if volume.host not in _ENROOT_HOOK_MOUNT_PATHS
         ]
-        if mps_enabled:
+        if mps_pipe_dir is not None:
             mounts.append(
-                self._to_enroot_mount(
-                    VolumeMount(self._mps_pipe_dir(), self._mps_pipe_dir())
-                )
+                self._to_enroot_mount(VolumeMount(mps_pipe_dir, mps_pipe_dir))
             )
 
         command = container.command.replace("$$", "$")
@@ -388,6 +453,7 @@ class SlurmEnrootDeployment(SlurmDeployment):
             "enroot",
             "start",
             "--rw",
+            f"--rc={shlex.quote(str(self._command_rc()))}",
         ]
         if config_path is not None:
             parts.append(f"--conf={shlex.quote(str(config_path))}")

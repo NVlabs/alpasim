@@ -7,6 +7,7 @@ package egodriver;
 
 import "alpasim_grpc/v0/common.proto";
 import "alpasim_grpc/v0/sensorsim.proto";
+import "alpasim_grpc/v0/traffic.proto";
 
 service EgodriverService {
     rpc start_session (DriveSessionRequest) returns (common.SessionRequestStatus);
@@ -14,6 +15,9 @@ service EgodriverService {
     rpc submit_image_observation (RolloutCameraImage) returns (common.Empty);
     rpc submit_egomotion_observation (RolloutEgoTrajectory) returns (common.Empty);
     rpc submit_route (RouteRequest) returns (common.Empty);
+    rpc submit_vectorized_observation (VectorizedObservation) returns (common.Empty);
+
+    rpc submit_navigation (NavigationInstruction) returns (common.Empty);
     rpc submit_recording_ground_truth (GroundTruthRequest) returns (common.Empty);
     rpc drive (DriveRequest) returns (DriveResponse);
     rpc get_version (common.Empty) returns (common.VersionId);
@@ -38,6 +42,16 @@ message DriveSessionRequest {
     message RolloutSpec {
         message VehicleDefinition {
             repeated nre.grpc.protos.sensorsim.AvailableCamerasReturn.AvailableCamera available_cameras = 3;
+
+            // Full vehicle bounding-box dimensions in metres along the box's
+            // x, y, and z axes. This is the nominal AABB used by simulation and
+            // supplied to evaluation before metric-specific shrink/rounding.
+            common.AABB bounding_box = 4;
+
+            // Pose of the bounding-box center relative to the ego rig. This is
+            // an active rig->bounding-box transform and uses the same rig frame
+            // as each available camera's rig_to_camera transform.
+            common.Pose rig_to_bounding_box = 5;
         }
 
         VehicleDefinition vehicle = 1;
@@ -88,9 +102,69 @@ message RouteRequest {
     Route route = 3; // Waypoints are defined in the rig frame at the accompanying timestamp.
 }
 
+message VectorizedObservation {
+    message Polyline {
+        repeated common.Vec3 points = 1;
+    }
+
+    string session_uuid = 1;
+    // Timestamp of the current physical ego-rig frame used for this payload.
+    // Lane lines and road boundaries are static map geometry serialized in
+    // that frame. Each obstacle pose keeps its own historical timestamp, but
+    // all obstacle poses are expressed in this same current frame. The
+    // obstacles field reuses traffic.ObjectTrajectory for identity, AABB,
+    // static/dynamic state, label class, and the common.Trajectory container;
+    // unlike traffic-service payloads, those trajectory poses are not in the
+    // local frame. Obstacle samples after timestamp_us are excluded.
+    fixed64 timestamp_us = 2;
+    repeated Polyline lane_lines = 3;
+    repeated Polyline road_boundaries = 4;
+    repeated traffic.ObjectTrajectory obstacles = 5;
+}
+
 message GroundTruthRequest {
     string session_uuid = 1;
     GroundTruth ground_truth = 2;
+}
+
+// Turn-by-turn navigation the runtime sends to the driver every policy step.
+// The text comes either from the generated route's geometry or from the
+// recording session's routed maneuvers looked up at the simulated ego's
+// position, so distances follow the ego rather than the recording. An empty
+// instruction_text means no instruction applies at this step; drivers should
+// drop any earlier one.
+message NavigationInstruction {
+    // Diagnostics the simulator knows but a vehicle's navigation stack would not
+    // expose to the policy. Logged for evaluation (video overlay, route-following
+    // metrics); drivers must not condition on it.
+    message DebugInfo {
+        enum Status {
+            STATUS_UNSPECIFIED = 0;
+            UPCOMING = 1;        // the maneuver lies ahead within the instruction horizon
+            ACTIVE = 2;          // the ego is inside the maneuver
+            OUTSIDE_HORIZON = 3; // the next maneuver is beyond the horizon; continue straight
+            ROUTE_COMPLETE = 4;  // no maneuvers remain on the route
+        }
+        Status status = 1;
+        // Along-route distance from the ego to the maneuver; 0 when active, when none is
+        // reported, or for geometry-derived text.
+        float remaining_distance_m = 2;
+        // Lateral distance from the ego to the recorded route; 0 for geometry-derived text.
+        // Large values mean the ego has left the route the instructions describe.
+        float route_offset_m = 3;
+    }
+
+    string session_uuid = 1;
+    // Timestamp at which the instruction is valid.
+    fixed64 timestamp_us = 2;
+    // Instruction text in the wording navigation-conditioned models are trained on,
+    // e.g. "Turn left onto Main St in 85m" or "Continue straight". Empty when no
+    // instruction applies.
+    string instruction_text = 3;
+    // Field numbers 4-6 held status, remaining_distance_m and route_offset_m in the
+    // pre-release draft of this message.
+    reserved 4, 5, 6;
+    DebugInfo debug_info = 7;
 }
 
 message DriveRequest {

@@ -377,7 +377,12 @@ class TestDriverResponseDebugInfo:
         self, sample_raabb: RAABB
     ) -> None:
         response = _drive_response_with_debug(
-            eval_data.pickle.dumps({"command_name": "STRAIGHT"})
+            eval_data.pickle.dumps(
+                {
+                    "command_name": "STRAIGHT",
+                    "reasoning_text": "Slow for the crossing pedestrian.",
+                }
+            )
         )
 
         parsed = DriverResponseAtTime.from_drive_response(
@@ -390,6 +395,7 @@ class TestDriverResponseDebugInfo:
         )
 
         assert parsed.command_name == "STRAIGHT"
+        assert parsed.reasoning_text == "Slow for the crossing pedestrian."
 
     def test_does_not_unpickle_unstructured_debug_info_when_disabled(
         self, sample_raabb: RAABB, monkeypatch: pytest.MonkeyPatch

@@ -19,9 +19,17 @@ import aiofiles.os
 import numpy as np
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_utils.geometry import Trajectory, pose_from_grpc
+from alpasim_utils.types import scene_from_proto
 from google.protobuf.message import Message
 
 logger = logging.getLogger(__name__)
+
+
+def clip_id_from_session_metadata(
+    metadata: RolloutMetadata.SessionMetadata,
+) -> str:
+    """Return the clip ID encoded in rollout session metadata."""
+    return scene_from_proto(metadata.scene).source.source_id
 
 
 @dataclass
@@ -117,7 +125,7 @@ async def read_trajectory(fname: str) -> tuple[str, Trajectory] | None:
     async for message in async_read_pb_log(fname):
         if message.WhichOneof("log_entry") == "rollout_metadata":
             metadata: RolloutMetadata = message.rollout_metadata
-            name = metadata.session_metadata.scene_id
+            name = scene_from_proto(metadata.session_metadata.scene).scene_key
             continue
         if message.WhichOneof("log_entry") != "actor_poses":
             continue

@@ -290,7 +290,7 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
         address = addresses[0]
         tasks.append(
             _log_awaitable_progress(
-                _probe_scenario_compatibility(
+                _probe_clip_compatibility(
                     svc_name,
                     stub_class,
                     address,
@@ -308,40 +308,44 @@ async def validate_scenarios(config: SimulatorConfig) -> None:
         raise AssertionError("\n".join(error_messages))
 
 
-async def _probe_scenario_compatibility(
+async def _probe_clip_compatibility(
     svc_name: str,
     stub_class: type,
     address: str,
     scenes: list[SceneConfig],
     timeout_s: int = 30,
 ) -> list[str]:
-    """Probe a service address to validate scenario compatibility without creating pools."""
+    """Probe a service address to validate clip compatibility without creating pools."""
     incompatibilities = []
 
-    logger.info("Validating scenarios on %s at %s...", svc_name, address)
+    logger.info("Validating clips on %s at %s...", svc_name, address)
     channel = grpc.aio.insecure_channel(address)
     try:
         stub = stub_class(channel)
         response = await stub.get_available_scenes(
             Empty(), wait_for_ready=True, timeout=timeout_s
         )
-        available_scenes = set(response.scene_ids)
+        # Existing service APIs expose clip IDs in ``scene_ids``.
+        available_clip_ids = set(response.scene_ids)
 
         for scene in scenes:
-            if scene.scene_id not in available_scenes and "*" not in available_scenes:
+            if (
+                scene.source.clip_id not in available_clip_ids
+                and "*" not in available_clip_ids
+            ):
                 incompatibilities.append(
-                    f"Scene {scene.scene_id} not available at {address}. "
-                    f"Available: {sorted(available_scenes)}"
+                    f"Clip {scene.source.clip_id} not available at {address}. "
+                    f"Available: {sorted(available_clip_ids)}"
                 )
 
         if incompatibilities:
             logger.error(
-                "Scenario validation failed on %s: %d issue(s)",
+                "Clip validation failed on %s: %d issue(s)",
                 svc_name,
                 len(incompatibilities),
             )
         else:
-            logger.info("Scenario validation passed on %s", svc_name)
+            logger.info("Clip validation passed on %s", svc_name)
     finally:
         await channel.close()
 

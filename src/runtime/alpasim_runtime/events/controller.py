@@ -89,7 +89,9 @@ class ControllerEvent(RecurringEvent):
                 )
 
             reference_trajectory_of_rig_in_local = controller_reference_trajectory(
-                state.force_gt_trajectory, step_start_us
+                state.force_gt_trajectory,
+                step_start_us,
+                state.unbound.control_timestep_us,
             )
         else:
             fallback_trajectory_local_to_rig = reference_trajectory_of_rig_in_local
@@ -120,8 +122,13 @@ class ControllerEvent(RecurringEvent):
             rig_angular_velocity_in_rig = 2.0 * pose_rig0_to_rig1.quat[0:3] / dt
             rig_linear_acceleration_in_rig = np.zeros(3, dtype=np.float64)
 
+        pose_local_to_rig_at_reference_start = state.ego_trajectory.interpolate_pose(
+            int(reference_trajectory_of_rig_in_local.timestamps_us[0])
+        )
         planner_delay_buffer.add(
-            reference_trajectory_of_rig_in_local.transform(pose_local_to_rig.inverse()),
+            reference_trajectory_of_rig_in_local.transform(
+                pose_local_to_rig_at_reference_start.inverse()
+            ),
             step_start_us,
         )
         rig_reference_trajectory = planner_delay_buffer.at(step_start_us)
@@ -137,8 +144,11 @@ class ControllerEvent(RecurringEvent):
             force_gt=force_gt,
             coerce_dynamic_state=coerce_dynamic_state,
             fallback_trajectory_local_to_rig=fallback_trajectory_local_to_rig,
-            pose_reporting_interval_us=state.unbound.pose_reporting_interval_us
-            or state.unbound.control_timestep_us,
+            pose_reporting_interval_us=(
+                state.unbound.pose_reporting_interval_us
+                if state.unbound.pose_reporting_interval_us is not None
+                else state.unbound.control_timestep_us
+            ),
         )
 
         # Convert list[PropagatedPosesAtTime] → two DynamicTrajectory instances.
@@ -147,12 +157,17 @@ class ControllerEvent(RecurringEvent):
         )
         true_poses = [s.pose_local_to_rig for s in propagated_states]
         est_poses = [s.pose_local_to_rig_estimate for s in propagated_states]
-        true_dynamics = geometry.dynamic_states_to_array(
-            [s.dynamic_state for s in propagated_states]
-        )
-        est_dynamics = geometry.dynamic_states_to_array(
-            [s.dynamic_state_estimated for s in propagated_states]
-        )
+        if force_gt:
+            assert state.force_gt_dynamics is not None
+            true_dynamics = state.force_gt_dynamics.interpolate_dynamics(timestamps)
+            est_dynamics = true_dynamics.copy()
+        else:
+            true_dynamics = geometry.dynamic_states_to_array(
+                [s.dynamic_state for s in propagated_states]
+            )
+            est_dynamics = geometry.dynamic_states_to_array(
+                [s.dynamic_state_estimated for s in propagated_states]
+            )
 
         ego_true = geometry.DynamicTrajectory.from_trajectory_and_dynamics(
             geometry.Trajectory.from_poses(timestamps, true_poses),

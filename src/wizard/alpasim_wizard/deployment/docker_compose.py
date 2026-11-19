@@ -164,6 +164,7 @@ class DockerComposeDeployment:
             ret["ports"] = ports
 
         if container.gpu is not None:
+            # NVIDIA_DRIVER_CAPABILITIES is inherited from the image ENV.
             ret["deploy"] = {
                 "resources": {
                     "reservations": {
@@ -177,7 +178,7 @@ class DockerComposeDeployment:
                     }
                 }
             }
-        elif container.name == "prometheus" and self.context.num_gpus > 0:
+        elif container.name == "prometheus" and self.context.gpu_allocation:
             ret["deploy"] = {
                 "resources": {
                     "reservations": {

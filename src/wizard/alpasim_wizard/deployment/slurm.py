@@ -10,18 +10,59 @@ import os
 import shlex
 import socket
 import subprocess
+import sys
 import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any, Iterator, List
 
 from ..context import WizardContext
-from ..schema import RunMode
+from ..schema import RunMode, WizardConfig
 from ..services import ContainerDefinition, build_container_set
 from ..utils import ensure_sqsh_path
-from .dispatcher import dispatch_background, dispatch_command
+from .dispatcher import dispatch_background, dispatch_command, terminate_process
 
 logger = logging.getLogger(__name__)
+
+_HOST_EXPORTER_START_TIMEOUT_SECONDS = 10
+
+
+@contextmanager
+def mps_daemon(cfg: WizardConfig) -> Iterator[None]:
+    """Run a CUDA MPS control daemon on this node at ``cfg.mps_pipe_dir``.
+
+    A stale pipe directory (e.g. from a requeued job) is removed first so the
+    daemon does not fail on leftover sockets. On exit the daemon is told to quit
+    and the pipe directory is removed, even when the shutdown command fails.
+    """
+    pipe_dir = cfg.mps_pipe_dir
+    log_dir = Path(cfg.log_dir)
+    dispatch_command(
+        f"rm -rf {pipe_dir} && mkdir -p {pipe_dir} {log_dir}/mps && "
+        f"CUDA_MPS_PIPE_DIRECTORY={pipe_dir} CUDA_MPS_LOG_DIRECTORY={log_dir}/mps "
+        "nvidia-cuda-mps-control -d",
+        log_dir=log_dir,
+        dry_run=cfg.dry_run,
+    )
+    try:
+        yield
+    finally:
+        try:
+            try:
+                dispatch_command(
+                    f"echo quit | CUDA_MPS_PIPE_DIRECTORY={pipe_dir} "
+                    "nvidia-cuda-mps-control",
+                    log_dir=log_dir,
+                    dry_run=cfg.dry_run,
+                )
+            finally:
+                dispatch_command(
+                    f"rm -rf {pipe_dir}",
+                    log_dir=log_dir,
+                    dry_run=cfg.dry_run,
+                )
+        except Exception as e:
+            logger.warning("Failed to stop MPS daemon: %s", e)
 
 
 class SlurmDeployment:
@@ -46,8 +87,6 @@ class SlurmDeployment:
         containers.append(self.container_set.prometheus)
         with ExitStack() as stack:
             self._prepare_deployment(stack)
-            if self.context.cfg.wizard.enable_mps:
-                stack.enter_context(self._mps_daemon())
             self.deploy(
                 containers=containers,
                 containers_to_start_last=containers_to_start_last,
@@ -55,15 +94,61 @@ class SlurmDeployment:
 
     def _prepare_deployment(self, stack: ExitStack) -> None:
         """Register launcher-specific resources with the deployment lifecycle."""
+        stack.enter_context(self._host_process_exporter())
 
-    def _mps_pipe_dir(self) -> str:
-        """Job-scoped CUDA MPS pipe directory.
+    @contextmanager
+    def _host_process_exporter(self) -> Iterator[None]:
+        """Run process telemetry on the host so it can inspect host process IDs."""
+        cfg = self.context.cfg.wizard
+        job_id = cfg.slurm_job_id
+        assert job_id is not None, "SLURM environment not detected"
+        containers = [*self.container_set.sim, self.container_set.prometheus]
+        if self.container_set.runtime is not None:
+            containers.append(self.container_set.runtime)
+        gpu_indices = sorted(
+            {
+                self.context.resolve_gpu_slot(container.gpu)
+                for container in containers
+                if container.gpu is not None
+            }
+        )
+        command = shlex.join(
+            [
+                sys.executable,
+                "-m",
+                "alpasim_wizard.telemetry.slurm_process_exporter",
+                f"--job-id={job_id}",
+                f"--port={self.context.telemetry_ports.process_exporter}",
+                "--procfs=/proc",
+                "--cgroupfs=/sys/fs/cgroup",
+                *(f"--gpu-index={gpu_index}" for gpu_index in gpu_indices),
+            ]
+        )
+        process = dispatch_background(
+            command,
+            log_dir=Path(cfg.log_dir),
+            dry_run=cfg.dry_run,
+        )
+        try:
+            if process is not None:
+                self._wait_for_host_exporter(process)
+            yield
+        finally:
+            if process is not None:
+                terminate_process(process)
 
-        Lives under /tmp rather than the run log dir because Unix socket paths
-        are capped at ~108 characters, which Lustre log paths exceed. Scoped by
-        job id so daemons of jobs sharing a node cannot collide.
-        """
-        return f"/tmp/nvidia-mps-{self.context.cfg.wizard.slurm_job_id}"
+    def _wait_for_host_exporter(self, process: subprocess.Popen[str]) -> None:
+        port = self.context.telemetry_ports.process_exporter
+        deadline = time.monotonic() + _HOST_EXPORTER_START_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError("Host process exporter exited during startup")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    return
+            except OSError:
+                time.sleep(0.1)
+        raise TimeoutError(f"Host process exporter did not open port {port}")
 
     def _service_log_path(self, container: ContainerDefinition) -> str:
         job_id = container.context.cfg.wizard.slurm_job_id
@@ -74,58 +159,18 @@ class SlurmDeployment:
             f"out-{job_id}-attempt-{restart_count}-{container.uuid}-log.txt"
         )
 
-    def _mps_enabled(self, container: ContainerDefinition) -> bool:
-        return container.context.cfg.wizard.enable_mps and container.gpu is not None
+    def _mps_pipe_dir(self, container: ContainerDefinition) -> str | None:
+        """Return the MPS pipe directory a GPU service joins, or None without MPS."""
+        wizard_cfg = container.context.cfg.wizard
+        if not wizard_cfg.enable_mps or container.gpu is None:
+            return None
+        return wizard_cfg.mps_pipe_dir
 
     def _sqsh_path(self, container: ContainerDefinition) -> str:
         return ensure_sqsh_path(
             container.service_config.image,
             list(container.context.cfg.wizard.sqshcaches),
         )
-
-    @contextmanager
-    def _mps_daemon(self) -> Iterator[None]:
-        self._start_mps_daemon()
-        try:
-            yield
-        finally:
-            self._stop_mps_daemon()
-
-    def _start_mps_daemon(self) -> None:
-        """Start the CUDA MPS control daemon on the host for this job."""
-        cfg = self.context.cfg.wizard
-        pipe_dir = self._mps_pipe_dir()
-        mps_log_dir = f"{cfg.log_dir}/mps"
-        # Remove a stale pipe dir (e.g. from a requeued job) so the daemon
-        # does not fail on leftover sockets.
-        dispatch_command(
-            f"rm -rf {pipe_dir} && mkdir -p {pipe_dir} {mps_log_dir} && "
-            f"CUDA_MPS_PIPE_DIRECTORY={pipe_dir} CUDA_MPS_LOG_DIRECTORY={mps_log_dir} "
-            "nvidia-cuda-mps-control -d",
-            log_dir=Path(cfg.log_dir),
-            dry_run=cfg.dry_run,
-        )
-
-    def _stop_mps_daemon(self) -> None:
-        """Stop the CUDA MPS control daemon and remove its pipe directory."""
-        cfg = self.context.cfg.wizard
-        pipe_dir = self._mps_pipe_dir()
-        try:
-            try:
-                dispatch_command(
-                    f"echo quit | CUDA_MPS_PIPE_DIRECTORY={pipe_dir} "
-                    "nvidia-cuda-mps-control",
-                    log_dir=Path(cfg.log_dir),
-                    dry_run=cfg.dry_run,
-                )
-            finally:
-                dispatch_command(
-                    f"rm -rf {pipe_dir}",
-                    log_dir=Path(cfg.log_dir),
-                    dry_run=cfg.dry_run,
-                )
-        except Exception as e:
-            logger.warning("Failed to stop MPS daemon: %s", e)
 
     def deploy(
         self,
@@ -306,12 +351,21 @@ class SlurmDeployment:
         # Note that we cannot use --export=CUDA_VISIBLE_DEVICES=... with srun because SLURM
         # overrides CUDA_VISIBLE_DEVICES even when exported as an environment variable.
         # Instead we set it in the command line. Use export to allow chaining commands with &&.
-        mps_enabled = self._mps_enabled(container)
+        mps_pipe_dir = self._mps_pipe_dir(container)
         s_gpu = ""
         if container.gpu is not None:
-            s_gpu = f"export CUDA_VISIBLE_DEVICES={container.gpu};"
-        if mps_enabled:
-            s_gpu += f"export CUDA_MPS_PIPE_DIRECTORY={self._mps_pipe_dir()};"
+            # Topology GPUs are allocation-relative slots, but nested service srun steps use
+            # job-global GPU IDs; map through the Wizard step (or its direct batch job).
+            device = self.context.resolve_gpu_slot(container.gpu)
+            logger.info(
+                "Container %s maps GPU slot %d to device %d",
+                container.uuid,
+                container.gpu,
+                device,
+            )
+            s_gpu = f"export CUDA_VISIBLE_DEVICES={device};"
+        if mps_pipe_dir is not None:
+            s_gpu += f"export CUDA_MPS_PIPE_DIRECTORY={mps_pipe_dir};"
         # Separate environment variables:
         #  - 'VAR=value' format to export in bash. The value will be logged, not secure for secrets.
         #  - 'VAR' format pass-through from host. The value will not be logged, secure for secrets.
@@ -335,10 +389,10 @@ class SlurmDeployment:
         s_env_export_arg = f"--export={','.join(env_passthrough_set)} "
 
         mounts = [v.to_str() for v in container.volumes]
-        if mps_enabled:
+        if mps_pipe_dir is not None:
             # enroot containers have an isolated rootfs; the MPS pipe directory
             # must be mounted explicitly for clients to reach the daemon.
-            mounts.append(f"{self._mps_pipe_dir()}:{self._mps_pipe_dir()}")
+            mounts.append(f"{mps_pipe_dir}:{mps_pipe_dir}")
         s_mnt = ",".join(mounts)
 
         # Pin child srun steps to the wizard's node so services are co-located

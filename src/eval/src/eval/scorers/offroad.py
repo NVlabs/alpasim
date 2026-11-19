@@ -83,6 +83,62 @@ def _get_lane_polygon(
         )
 
 
+# Restrict road-edge checks to the ego's elevation to avoid matching stacked roads.
+MAX_ROAD_EDGE_ELEVATION_DELTA_M = 3.0
+ROAD_EDGE_QUERY_DIST_M = 10.0
+
+
+def _closest_road_edge_distance_2d(
+    simulation_result: SimulationResult,
+    ego_xyzh: np.ndarray,
+    ego_polygon: BaseGeometry,
+) -> float:
+    """Return the 2D distance to the nearest road edge at the ego's elevation.
+
+    Each edge's elevation is taken from its vertex nearest the ego in plan view.
+    Returns ``inf`` when no nearby edge meets the elevation threshold.
+    """
+    ego_xyz = np.asarray(ego_xyzh[..., :3], dtype=float).reshape(3)
+    ego_xy, ego_z = ego_xyz[:2], float(ego_xyz[2])
+
+    closest_distance = float("inf")
+    closest_3d = float("inf")
+    closest_points: np.ndarray | None = None
+    for road_edge in simulation_result.vec_map.get_road_edges_within(
+        ego_xyz, ROAD_EDGE_QUERY_DIST_M
+    ):
+        points = np.asarray(road_edge.polyline.points)
+        nearest_vertex = int(
+            np.argmin(np.linalg.norm(points[..., :2] - ego_xy, axis=-1))
+        )
+        if (
+            abs(float(points[nearest_vertex, 2]) - ego_z)
+            > MAX_ROAD_EDGE_ELEVATION_DELTA_M
+        ):
+            continue
+        distance_3d = float(
+            np.linalg.norm(points[nearest_vertex, :3].astype(float) - ego_xyz)
+        )
+        if distance_3d < closest_3d:
+            closest_3d = distance_3d
+            closest_points = points
+
+    if closest_points is not None:
+        closest_distance = shapely.geometry.LineString(
+            closest_points[..., :2]
+        ).distance(ego_polygon)
+
+    return closest_distance
+
+
+def _has_map_element_kdtree(
+    simulation_result: SimulationResult,
+    elem_type: vec_map_elements.MapElementType,
+) -> bool:
+    search_kdtrees = getattr(simulation_result.vec_map, "search_kdtrees", None)
+    return search_kdtrees is not None and elem_type in search_kdtrees
+
+
 def _compute_off_lane(
     simulation_result: SimulationResult,
     ts: int,
@@ -211,17 +267,20 @@ class OffRoadScorer(Scorer):
                 offroad.append(False)
                 continue
 
-            # Check if we're too close to the road edge. This will still miss
-            # offroad cases when we're far outside the road - but then either
-            # we started offroad or we had to go offroad at some point.
-            closest_road_edge_xy = simulation_result.vec_map.get_closest_road_edge(
-                xyz=res["ego_xyzh"][..., :3]
-            ).polyline.xy
-
-            distance = shapely.geometry.LineString(closest_road_edge_xy).distance(
-                ego_polygon
-            )
-            offroad.append(distance < 1e-3)
+            if not _has_map_element_kdtree(
+                simulation_result, vec_map_elements.MapElementType.ROAD_EDGE
+            ):
+                offroad.append(False)
+            else:
+                # Check if we're too close to the road edge. This will still miss
+                # offroad cases when we're far outside the road - but then either
+                # we started offroad or we had to go offroad at some point.
+                # Only edges at the ego's own elevation count; see
+                # _closest_road_edge_distance_2d.
+                distance = _closest_road_edge_distance_2d(
+                    simulation_result, res["ego_xyzh"], ego_polygon
+                )
+                offroad.append(distance < 1e-3)
         return [
             MetricReturn(
                 name="offroad",

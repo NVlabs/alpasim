@@ -130,7 +130,7 @@ defines.flashdreams_cache=/path/to/flashdreams-cache
 > :book: If a Hugging Face download fails with a 401/403, authenticate locally and make sure your account has access to the asset named in the error:
 
 ```bash
-uv run --project src/wizard huggingface-cli login
+uv run --project src/wizard hf auth login
 ```
 
 ## Scene Data
@@ -143,17 +143,17 @@ suite with:
 
 ```bash
 # Recommended 26.01 subset
-scenes.test_suite_id=public_2601_video_model
+scenes.suite_ids=[public_2601_video_model]
 
 # Broader 26.04 suite
-scenes.test_suite_id=public_2604
+scenes.suite_ids=[public_2604]
 ```
 
 Each selected artifact provides a timestamped front-wide JPEG, parseable
 front-wide FTheta calibration, and the ClipGT map parquets consumed by
 OmniDreams.
 
-See [Test Suites & Scenes](../data/scenes/README.md) for the exact scene list
+See [Scene Data](../data/scenes/README.md) for the exact scene list
 and cache-refresh guidance. If necessary, the wizard downloads selected USDZ
 artifacts into the configured scene cache.
 

@@ -1,6 +1,6 @@
 [project]
 name = "alpasim_workspace"
-version = "0.134.0"
+version = "0.197.0"
 description = "Workspace for Alpamayo Sim development"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -13,6 +13,7 @@ plugins = ["alpasim_plugins"]
 controller = ["alpasim_controller"]
 eval = ["alpasim_eval"]
 grpc = ["alpasim_grpc"]
+frame_quality = ["alpasim-frame-quality"]
 runtime = ["alpasim-runtime"]
 utils = ["alpasim_utils"]
 physics = ["alpasim-physics"]
@@ -28,6 +29,7 @@ all = [
   "alpasim_controller",
   "alpasim_eval",
   "alpasim_grpc",
+  "alpasim-frame-quality",
   "alpasim-runtime",
   "alpasim_utils",
   "alpasim-physics",
@@ -49,6 +51,7 @@ members = [
   "src/controller",
   "src/eval",
   "src/grpc",
+  "src/frame_quality",
   "src/runtime",
   "src/wizard",
   "src/utils",
@@ -61,10 +64,15 @@ members = [
 ]
 
 [tool.uv.sources]
+alpamayo-r1 = { git = "https://github.com/NVlabs/alpamayo.git", branch = "main" }
+alpamayo1-5 = { git = "https://github.com/NVlabs/alpamayo1.5.git", branch = "main" }
+alpamayo2-super = { git = "https://github.com/NVlabs/alpamayo2.git", branch = "main" }
+alpamayo2-edge = { git = "https://github.com/NVlabs/alpamayo2-edge.git", branch = "main" }
 alpasim_plugins = { workspace = true }
 alpasim_controller = { workspace = true }
 alpasim_eval = { workspace = true }
 alpasim_grpc = { workspace = true }
+alpasim-frame-quality = { workspace = true }
 alpasim-runtime = { workspace = true }
 alpasim_utils = { workspace = true }
 alpasim-physics = { workspace = true }
@@ -72,13 +80,20 @@ alpasim-tools = { workspace = true }
 alpasim_driver = { workspace = true }
 alpasim_transfuser = { workspace = true }
 alpasim_wizard = { workspace = true }
-trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "a0c1310c5fba190c181c6fb4f00c06fc5c77b417" }
+trajdata-alpasim = { git = "https://github.com/NVlabs/trajdata", rev = "64b4baec4c70361e8ab03d72325ffa62df02a22c" }
 alpasim-trafficsim = { workspace = true }
 
 [tool.uv]
 python-preference = "only-managed"
 exclude-newer = "3 days"
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 override-dependencies = [
+  # Recipes also names these SDKs via Git URLs. Use the main-branch sources above.
+  "alpamayo-r1",
+  "alpamayo1-5",
+  "alpamayo2-super",
+  # The SDKs/recipes still pin Transformers 4; local source patches support Edge's version.
+  "transformers==5.17.0",
   # flash-attention is an AR1/A1.5 dependency, but it doesn't work with uv
   # because its own pyproject.toml does not declare its own dependencies
   # properly, leading to uv install errors.

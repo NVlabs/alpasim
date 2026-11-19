@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import os
 
@@ -13,10 +13,9 @@ from alpasim_runtime.autoresume import (
 def test_autoresume_mark_complete_and_remove_incomplete(tmp_path):
     batch_uuid_1 = "uuid_1"
     batch_uuid_2 = "uuid_2"
-    os.mkdir(tmp_path / "scene_id")
-    SCENE_ID = "scene_id"
+    os.mkdir(tmp_path / "clipgt-a@t0=AUTO")
+    SCENE_ID = "clipgt-a@t0=AUTO"
     scene_dir = tmp_path / SCENE_ID
-    os.mkdir(scene_dir / batch_uuid_1)
     os.mkdir(scene_dir / batch_uuid_2)
 
     num_complete = find_num_complete_rollouts(tmp_path, SCENE_ID)

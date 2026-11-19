@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-"""
-CLI entry point for controller benchmarks.
+"""CLI entry point for controller benchmarks.
 
 Usage (from src/controller directory):
     # Run full benchmark and save results
@@ -12,7 +11,8 @@ Usage (from src/controller directory):
     uv run python -m benchmark run --quick --output results/quick_test.json
 
     # Compare two benchmark runs
-    uv run python -m benchmark compare results/baseline.json results/optimized.json --output-dir comparison_report/
+    uv run python -m benchmark compare results/baseline.json results/optimized.json \
+        --output-dir comparison_report/
 
     # Compare and show plots interactively
     uv run python -m benchmark compare results/baseline.json results/optimized.json --interactive
@@ -28,6 +28,7 @@ from alpasim_utils.yaml_utils import typed_parse_config
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Run the benchmark suite."""
+    from .ego_motion_catalog import EgoMotionCatalog
     from .runner import BenchmarkRunner
 
     # Determine output path
@@ -44,11 +45,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         controller_config = typed_parse_config(Path(args.config), ControllerConfig)
 
+    trajectories = None
+    if args.trajectory_catalog:
+        catalog = EgoMotionCatalog.load(Path(args.trajectory_catalog))
+        trajectories = catalog.to_reference_trajectories()
+        print(
+            f"Loaded {len(trajectories)} ego-motion trajectories "
+            f"from {args.trajectory_catalog}"
+        )
+
     # Run benchmark
     runner = BenchmarkRunner(controller_config=controller_config)
     result = runner.run(
         quick=args.quick,
         description=args.description or "",
+        trajectories=trajectories,
     )
 
     # Print summary
@@ -63,6 +74,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Median solve time:  {stats['solve_time_median_ms']:.2f} ms")
     print(f"Min solve time:     {stats['solve_time_min_ms']:.2f} ms")
     print(f"Max solve time:     {stats['solve_time_max_ms']:.2f} ms")
+    print(f"Tracking RMSE:      {stats['tracking_rmse_m']:.3f} m")
+    print(f"Tracking max error: {stats['tracking_max_error_m']:.3f} m")
+    print(f"Control aggression: {stats['control_aggressiveness_score']:.3f}")
+    print(f"Control violations: {stats['total_control_violation_count']}")
     print("=" * 60)
 
     # Save results
@@ -127,14 +142,23 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     """List available trajectories."""
+    from .ego_motion_catalog import EgoMotionCatalog
     from .trajectories import TrajectoryGenerator
 
-    generator = TrajectoryGenerator()
-
-    if args.quick:
+    if args.trajectory_catalog:
+        catalog = EgoMotionCatalog.load(Path(args.trajectory_catalog))
+        trajectories = catalog.to_reference_trajectories()
+        print(f"Ego-motion catalog trajectories ({len(trajectories)}):")
+        if catalog.selection_metadata:
+            radius = catalog.selection_metadata.get("covering_radius")
+            if radius is not None:
+                print(f"K-disk covering radius: {radius:.3f}")
+    elif args.quick:
+        generator = TrajectoryGenerator()
         trajectories = generator.generate_quick_set()
         print(f"Quick benchmark trajectories ({len(trajectories)}):")
     else:
+        generator = TrajectoryGenerator()
         trajectories = generator.generate_all()
         print(f"Full benchmark trajectories ({len(trajectories)}):")
 
@@ -142,6 +166,26 @@ def cmd_list(args: argparse.Namespace) -> int:
     for traj in trajectories:
         print(f"  {traj.name:<35} {traj.description}")
 
+    return 0
+
+
+def cmd_select_egomotion(args: argparse.Namespace) -> int:
+    """Select a k-disk ego-motion benchmark subset."""
+    from .ego_motion_catalog import EgoMotionCatalog
+
+    catalog = EgoMotionCatalog.load(Path(args.catalog))
+    selected_catalog = catalog.with_selected_cover(args.k)
+    selected_catalog.save(Path(args.output))
+
+    metadata = selected_catalog.selection_metadata
+    print(
+        f"Selected {len(selected_catalog.selected_names)} / {len(selected_catalog.records)} "
+        f"ego-motion records."
+    )
+    print(f"Covering radius:       {metadata['covering_radius']:.3f}")
+    print(f"Mean cover distance:   {metadata['mean_covering_distance']:.3f}")
+    print(f"Max-distance record:   {metadata['max_distance_record']}")
+    print(f"Selected catalog:      {args.output}")
     return 0
 
 
@@ -177,6 +221,15 @@ def main() -> int:
         type=str,
         default=None,
         help="Path to controller YAML config file. If omitted, uses ControllerConfig defaults.",
+    )
+    run_parser.add_argument(
+        "--trajectory-catalog",
+        type=str,
+        default=None,
+        help=(
+            "Path to an ego-motion catalog JSON. "
+            "Selected records override synthetic trajectories."
+        ),
     )
     run_parser.set_defaults(func=cmd_run)
 
@@ -223,7 +276,38 @@ def main() -> int:
         action="store_true",
         help="Show quick benchmark trajectories only",
     )
+    list_parser.add_argument(
+        "--trajectory-catalog",
+        type=str,
+        default=None,
+        help="Path to an ego-motion catalog JSON to list instead of synthetic trajectories.",
+    )
     list_parser.set_defaults(func=cmd_list)
+
+    # Ego-motion selection command
+    select_parser = subparsers.add_parser(
+        "select-egomotion",
+        help="Select a k-disk covering subset from an ego-motion catalog",
+    )
+    select_parser.add_argument(
+        "catalog",
+        type=str,
+        help="Input ego-motion catalog JSON",
+    )
+    select_parser.add_argument(
+        "--k",
+        type=int,
+        required=True,
+        help="Number of ego-motion records to select",
+    )
+    select_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Output selected ego-motion catalog JSON",
+    )
+    select_parser.set_defaults(func=cmd_select_egomotion)
 
     args = parser.parse_args()
     return args.func(args)

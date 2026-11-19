@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+import textwrap
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,11 +16,21 @@ import pytest
 from alpasim_grpc.v0 import common_pb2, runtime_pb2
 from alpasim_runtime.daemon.app import RuntimeDaemonApp
 from alpasim_runtime.daemon.servicer import RuntimeDaemonServicer
-from alpasim_runtime.errors import UnknownSceneError
+from alpasim_runtime.errors import UnknownClipError, UnknownSceneError
 from alpasim_runtime.simulate.__main__ import _serve, create_arg_parser, run_simulation
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene, scene_to_proto
 
 import grpc
 from eval.aggregation.failed_rollouts import FailedRollout
+
+
+def _rollout_spec(clip_id: str, nr_rollouts: int) -> runtime_pb2.RolloutSpec:
+    return runtime_pb2.RolloutSpec(
+        scene=scene_to_proto(
+            Scene(ClipDataSource(clip_id, f"uuid-for-{clip_id}"), T0_AUTO)
+        ),
+        nr_rollouts=nr_rollouts,
+    )
 
 
 class _AbortContext:
@@ -44,7 +57,7 @@ def _make_serve_args() -> Namespace:
 @pytest.mark.asyncio
 async def test_servicer_maps_unknown_scene_to_invalid_argument() -> None:
     engine = SimpleNamespace(
-        simulate=AsyncMock(side_effect=UnknownSceneError("scene-x"))
+        simulate=AsyncMock(side_effect=UnknownSceneError("clipgt-x", "AUTO"))
     )
     servicer = RuntimeDaemonServicer(engine=engine)
     context = _AbortContext()
@@ -53,7 +66,7 @@ async def test_servicer_maps_unknown_scene_to_invalid_argument() -> None:
         await servicer.simulate(runtime_pb2.SimulationRequest(), context)
 
     assert context.code == grpc.StatusCode.INVALID_ARGUMENT
-    assert "scene-x" in context.details
+    assert "clipgt-x" in context.details
 
 
 @pytest.mark.asyncio
@@ -61,14 +74,10 @@ async def test_servicer_returns_rollout_returns_in_request_order() -> None:
     response = runtime_pb2.SimulationReturn(
         rollout_returns=[
             runtime_pb2.SimulationReturn.RolloutReturn(
-                rollout_spec=runtime_pb2.RolloutSpec(
-                    scenario_id="clipgt-a", nr_rollouts=1
-                )
+                rollout_spec=_rollout_spec("clipgt-a", 1)
             ),
             runtime_pb2.SimulationReturn.RolloutReturn(
-                rollout_spec=runtime_pb2.RolloutSpec(
-                    scenario_id="clipgt-b", nr_rollouts=2
-                )
+                rollout_spec=_rollout_spec("clipgt-b", 2)
             ),
         ]
     )
@@ -79,24 +88,43 @@ async def test_servicer_returns_rollout_returns_in_request_order() -> None:
     servicer = RuntimeDaemonServicer(engine=engine)
 
     response = await servicer.simulate(runtime_pb2.SimulationRequest(), _AbortContext())
-    assert [item.rollout_spec.scenario_id for item in response.rollout_returns] == [
+    assert [
+        item.rollout_spec.scene.source.clip.clip_id for item in response.rollout_returns
+    ] == [
         "clipgt-a",
         "clipgt-b",
     ]
 
 
 @pytest.mark.asyncio
-async def test_servicer_prefetch_scene_forwards_scene_id() -> None:
-    """The runtime RPC acknowledges a completed scene prefetch."""
-    engine = SimpleNamespace(prefetch_scene=AsyncMock())
+async def test_servicer_prefetch_clip_forwards_clip_id() -> None:
+    """The runtime RPC acknowledges a completed clip prefetch."""
+    engine = SimpleNamespace(prefetch_clip=AsyncMock())
     servicer = RuntimeDaemonServicer(engine=engine)
 
-    response = await servicer.prefetch_scene(
-        runtime_pb2.ScenePrefetchRequest(scene_id="clipgt-a"), _AbortContext()
+    response = await servicer.prefetch_clip(
+        runtime_pb2.ClipPrefetchRequest(clip_id="clipgt-a"), _AbortContext()
     )
 
     assert response == common_pb2.Empty()
-    engine.prefetch_scene.assert_awaited_once_with("clipgt-a")
+    engine.prefetch_clip.assert_awaited_once_with("clipgt-a")
+
+
+@pytest.mark.asyncio
+async def test_servicer_maps_unknown_clip_to_invalid_argument() -> None:
+    engine = SimpleNamespace(
+        prefetch_clip=AsyncMock(side_effect=UnknownClipError("clipgt-missing"))
+    )
+    servicer = RuntimeDaemonServicer(engine=engine)
+    context = _AbortContext()
+
+    with pytest.raises(RuntimeError, match="aborted"):
+        await servicer.prefetch_clip(
+            runtime_pb2.ClipPrefetchRequest(clip_id="clipgt-missing"), context
+        )
+
+    assert context.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "clipgt-missing" in context.details
 
 
 @pytest.mark.asyncio
@@ -456,15 +484,12 @@ def _make_simulation_return(
     return runtime_pb2.SimulationReturn(
         rollout_returns=[
             runtime_pb2.SimulationReturn.RolloutReturn(
-                rollout_spec=runtime_pb2.RolloutSpec(
-                    scenario_id=scenario_id,
-                    nr_rollouts=1,
-                ),
+                rollout_spec=_rollout_spec(clip_id, 1),
                 success=success,
                 rollout_uuid="",
                 error=error or "",
             )
-            for scenario_id, success, error in results
+            for clip_id, success, error in results
         ]
     )
 
@@ -486,8 +511,8 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=2),
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 2),
+                _rollout_spec("clipgt-b", 1),
             ]
         ),
     )
@@ -542,7 +567,7 @@ async def test_run_simulation_one_shot_uses_daemon_engine(
     request = fake_engine.simulate.await_args.args[0]
     assert isinstance(request, runtime_pb2.SimulationRequest)
     assert [
-        (rollout_spec.scenario_id, rollout_spec.nr_rollouts)
+        (rollout_spec.scene.source.clip.clip_id, rollout_spec.nr_rollouts)
         for rollout_spec in request.rollout_specs
     ] == [("clipgt-a", 2), ("clipgt-b", 1)]
 
@@ -565,7 +590,7 @@ async def test_run_simulation_metrics_artifact_failure_is_best_effort(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 1),
             ]
         ),
     )
@@ -625,8 +650,8 @@ async def test_run_simulation_does_not_aggregate_failed_rollouts_by_default(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 1),
+                _rollout_spec("clipgt-b", 1),
             ]
         ),
     )
@@ -688,8 +713,8 @@ async def test_run_simulation_aggregates_failed_rollouts_when_enabled(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 1),
+                _rollout_spec("clipgt-b", 1),
             ]
         ),
     )
@@ -732,7 +757,7 @@ async def test_run_simulation_aggregates_failed_rollouts_when_enabled(
         FailedRollout(
             run_name="run-name",
             run_uuid=None,
-            clipgt_id="clipgt-b",
+            scene_key="clipgt-b@t0=AUTO",
             rollout_id="failed-1",
             error="Maximum allowed size exceeded",
         )
@@ -756,8 +781,8 @@ async def test_run_simulation_one_shot_fails_when_result_count_mismatches_jobs(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=2),
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-b", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 2),
+                _rollout_spec("clipgt-b", 1),
             ]
         ),
     )
@@ -815,7 +840,7 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_simulate_raises(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 1),
             ]
         ),
     )
@@ -858,7 +883,7 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_startup_raises(
         fake_eval_config=fake_eval_config,
         request=runtime_pb2.SimulationRequest(
             rollout_specs=[
-                runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1),
+                _rollout_spec("clipgt-a", 1),
             ]
         ),
     )
@@ -881,3 +906,48 @@ async def test_run_simulation_one_shot_shutdowns_when_engine_startup_raises(
 
     fake_engine.simulate.assert_not_awaited()
     fake_engine.shutdown.assert_awaited_once()
+
+
+@pytest.mark.parametrize("log_level", ["INFO", "WARNING"])
+def test_simulate_cli_honors_log_level_after_logging_is_configured(
+    log_level: str,
+) -> None:
+    code = textwrap.dedent(
+        """
+        import logging
+        import runpy
+        import sys
+        from unittest.mock import AsyncMock, patch
+
+        logging.basicConfig(level=logging.INFO)
+
+        async def emit_logs():
+            logger = logging.getLogger("alpasim_runtime")
+            logger.info("cli-test-info")
+            logger.warning("cli-test-warning")
+
+        sys.argv = [
+            "alpasim_runtime.simulate",
+            "--user-config=u.yaml",
+            "--network-config=n.yaml",
+            "--eval-config=e.yaml",
+            "--log-dir=/tmp/log",
+            "--serve",
+            "--log-level=" + sys.argv[1],
+        ]
+        with (
+            patch("alpasim_runtime.daemon.engine.DaemonEngine"),
+            patch("alpasim_runtime.daemon.app.RuntimeDaemonApp") as app,
+        ):
+            app.return_value.run = AsyncMock(side_effect=emit_logs)
+            runpy.run_module("alpasim_runtime.simulate", run_name="__main__")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, log_level],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "cli-test-warning" in result.stderr
+    assert ("cli-test-info" in result.stderr) == (log_level == "INFO")

@@ -16,6 +16,7 @@ from typing import Any
 import boto3
 import yaml
 from botocore.client import BaseClient
+from botocore.config import Config  # type: ignore[import-not-found,import-untyped]
 from filelock import FileLock
 from typing_extensions import Self
 
@@ -122,6 +123,7 @@ class S3Connection:
         aws_secret_access_key: str,
         region_name: str,
         endpoint_url: str,
+        max_pool_connections: int = 10,
     ) -> None:
         self.session = boto3.Session(
             aws_access_key_id=aws_access_key_id,
@@ -131,16 +133,23 @@ class S3Connection:
         self.client = self.session.client(
             "s3",
             endpoint_url=endpoint_url,
+            config=Config(max_pool_connections=max_pool_connections),
         )
 
     @classmethod
-    def from_env_vars(cls) -> S3Connection:
-        """Creates an S3Connection from environment variables (uses ALPAMAYO_S3_SECRET)."""
+    def from_env_vars(cls, max_pool_connections: int = 10) -> S3Connection:
+        """Create a SwiftStack connection using ``ALPAMAYO_S3_SECRET``.
+
+        Args:
+            max_pool_connections: Maximum concurrent HTTP connections retained
+                by the botocore client.
+        """
         return cls(
             aws_access_key_id="team-alpamayo",
             aws_secret_access_key=os.environ["ALPAMAYO_S3_SECRET"],
             region_name="us-east-1",
             endpoint_url="https://pdx.s8k.io",
+            max_pool_connections=max_pool_connections,
         )
 
     def list_objects(self, path: S3Path) -> list[S3ObjectMetadata]:

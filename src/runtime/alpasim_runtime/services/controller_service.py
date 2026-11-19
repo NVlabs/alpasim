@@ -43,9 +43,7 @@ class PropagatedPosesAtTime:
 
 
 class ControllerService(ServiceBase[VDCServiceStub]):
-    """
-    Controller service implementation that handles both real and skip modes.
-    """
+    """Controller service implementation that handles both real and skip modes."""
 
     @property
     def stub_class(self) -> Type[VDCServiceStub]:
@@ -64,9 +62,7 @@ class ControllerService(ServiceBase[VDCServiceStub]):
         coerce_dynamic_state: bool,
         pose_reporting_interval_us: int = 0,
     ) -> RunControllerAndVehicleModelRequest:
-        """
-        Helper method to generate a RunControllerAndVehicleModelRequest.
-        """
+        """Helper method to generate a RunControllerAndVehicleModelRequest."""
         request = RunControllerAndVehicleModelRequest()
         request.session_uuid = session_uuid
 

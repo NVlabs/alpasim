@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2025 NVIDIA Corporation
+# Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB, Pose, Quat, Vec3
@@ -78,12 +78,6 @@ def pose_grpc_to_ndarray(pose: Pose) -> np.ndarray:
     ndarray_pose[:3, :3] = rot
     ndarray_pose[:3, 3] = vec
     return ndarray_pose
-
-
-"""
-These are borrowed from NCORE, see
-https://gitlab-master.nvidia.com/Toronto_DL_Lab/ncore/-/blob/main/ncore/impl/common/transformations.py?ref_type=heads
-"""
 
 
 def so3_trans_2_se3(so3, trans):

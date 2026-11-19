@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""
-Nonlinear MPC controller using do_mpc/CasADi.
+"""Nonlinear MPC controller using do_mpc/CasADi.
 
 Full nonlinear bicycle dynamics solved with interior point method.
 More accurate but slower than LinearMPC.
 """
 
-import logging
-import time
 import warnings
 
 # Suppress do_mpc warnings
@@ -20,18 +17,18 @@ warnings.filterwarnings("ignore", message='"is" with a literal', category=Syntax
 import casadi  # noqa: E402
 import do_mpc  # noqa: E402
 import numpy as np  # noqa: E402
-
-logger = logging.getLogger(__name__)
-
 from alpasim_controller.mpc_controller import (  # noqa: E402
     DEFAULT_DT_MPC,
+    DEFAULT_MAX_SPEED_MPS,
     DEFAULT_N_HORIZON,
     ControllerInput,
-    ControllerOutput,
     MPCController,
     MPCGains,
 )
-from alpasim_controller.vehicle_model import VehicleModel  # noqa: E402
+from alpasim_controller.vehicle_model import (  # noqa: E402
+    VehicleModel,
+    lateral_dynamics_coefficients,
+)
 
 
 class NonlinearMPC(MPCController):
@@ -59,6 +56,12 @@ class NonlinearMPC(MPCController):
         """
         self._vehicle_params = vehicle_params or VehicleModel.Parameters()
         self._gains = gains or MPCGains()
+        if self._gains.max_curvature_abs <= 0.0:
+            raise ValueError("max_curvature_abs must be positive")
+        if self._gains.max_curvature_speed_floor <= 0.0:
+            raise ValueError("max_curvature_speed_floor must be positive")
+        if self._gains.max_lateral_acceleration <= 0.0:
+            raise ValueError("max_lateral_acceleration must be positive")
         self._n_horizon = n_horizon
         self._dt_mpc = dt_mpc
         self._model = self._build_model()
@@ -73,7 +76,7 @@ class NonlinearMPC(MPCController):
     def name(self) -> str:
         return "nonlinear_mpc"
 
-    def compute_control(self, input: ControllerInput) -> ControllerOutput:
+    def _compute_control(self, input: ControllerInput) -> tuple[np.ndarray | None, str]:
         """Compute optimal control using nonlinear MPC.
 
         Args:
@@ -82,8 +85,6 @@ class NonlinearMPC(MPCController):
         Returns:
             Optimal control command and solver metadata
         """
-        start_time = time.perf_counter()
-
         # Store reference for tvp_fun callback (must be set before setup/solve)
         self._current_reference = input
 
@@ -93,23 +94,37 @@ class NonlinearMPC(MPCController):
 
         # Prepare state vector (do_mpc expects column vector)
         x0 = input.state.reshape(-1, 1)
+        if not self._mpc.flags["initial_run"]:
+            self._mpc.x0 = x0
+            self._mpc.u0 = input.state[6:8].reshape(-1, 1)
+            self._mpc.set_initial_guess()
 
         # Solve
         try:
             u_opt = self._mpc.make_step(x0)
-            status = "solved"
-        except Exception as e:
-            u_opt = np.zeros((2, 1))
-            status = f"failed: {e}"
-            logger.warning("Nonlinear MPC solver failed: %s", e)
+        except RuntimeError as exc:
+            return None, str(exc)
+        stats = self._mpc.solver_stats
+        if not stats["success"]:
+            return None, stats["return_status"]
+        return u_opt.flatten(), "solved"
 
-        solve_time_ms = (time.perf_counter() - start_time) * 1000
-
-        return ControllerOutput(
-            control=u_opt.flatten(),
-            solve_time_ms=solve_time_ms,
-            status=status,
+    def reset_warm_start(self) -> None:
+        """Discard primal, dual and previous-control state after a physical-state jump."""
+        if self._mpc is None:
+            return
+        self._mpc.x0 = np.zeros((8, 1))
+        self._mpc.u0 = np.zeros((2, 1))
+        self._mpc.z0 = np.zeros((self._model.n_z, 1))
+        self._mpc.t0 = np.zeros((1,))
+        self._mpc.opt_x_num.master = casadi.DM.zeros(self._mpc.opt_x_num.cat.shape)
+        self._mpc.opt_x_num_unscaled.master = casadi.DM.zeros(
+            self._mpc.opt_x_num.cat.shape
         )
+        self._mpc.lam_x_num = casadi.DM.zeros(self._mpc.opt_x_num.cat.shape)
+        self._mpc.lam_g_num = casadi.DM.zeros(self._mpc.nlp_cons_lb.shape)
+        self._mpc.set_initial_guess()
+        self._mpc.flags["initial_run"] = False
 
     def _build_model(self) -> do_mpc.model.Model:
         """Build the do_mpc model with bicycle dynamics."""
@@ -143,73 +158,36 @@ class NonlinearMPC(MPCController):
 
         # Dynamics coefficients
         EPS_SPEED = 1.0e-2
-        kinetic_mass = params.mass * casadi.fmax(v_cg_x, EPS_SPEED)
-        kinetic_inertia = params.inertia * casadi.fmax(v_cg_x, EPS_SPEED)
-        lf = params.wheelbase - params.l_rig_to_cg
-        lf_caf = lf * params.front_cornering_stiffness
-        lr_car = params.l_rig_to_cg * params.rear_cornering_stiffness
-        lf_sq_caf = lf * lf_caf
-        lr_sq_car = params.l_rig_to_cg * lr_car
+        # Smooth positive speed keeps the continuous predictor finite at rest.
+        # Scaling steering by v / smooth_v preserves the no-slip zero-speed
+        # equilibrium instead of creating lateral force while stationary.
+        smooth_v = casadi.sqrt(v_cg_x**2 + EPS_SPEED**2)
+        coefficients, steering_coefficients = lateral_dynamics_coefficients(params)
+        a_00 = coefficients[0, 0] / smooth_v
+        a_01 = (coefficients[0, 1] - v_cg_x**2) / smooth_v
+        a_10 = coefficients[1, 0] / smooth_v
+        a_11 = coefficients[1, 1] / smooth_v
+        b_00 = steering_coefficients[0] * v_cg_x / smooth_v
+        b_10 = steering_coefficients[1] * v_cg_x / smooth_v
 
-        a_00 = (
-            -2
-            * (params.front_cornering_stiffness + params.rear_cornering_stiffness)
-            / kinetic_mass
-        )
-        a_01 = -v_cg_x - 2 * (lf_caf - lr_car) / kinetic_mass
-        a_10 = -2 * (lf_caf - lr_car) / kinetic_inertia
-        a_11 = -2 * (lf_sq_caf + lr_sq_car) / kinetic_inertia
-
-        b_00 = 2 * params.front_cornering_stiffness / params.mass
-        b_10 = 2 * lf_caf / params.inertia
-
-        # Model switching (kinematic vs dynamic)
-        use_kinematic_model = casadi.lt(v_cg_x, params.kinematic_threshold_speed)
-
-        # Position dynamics
+        v_rig_y = v_cg_y - params.l_rig_to_cg * yaw_rate
         model.set_rhs(
             "x_rig_inertial",
-            casadi.if_else(
-                use_kinematic_model,
-                v_cg_x * casadi.cos(yaw_angle),
-                v_cg_x * casadi.cos(yaw_angle)
-                - (v_cg_y - params.l_rig_to_cg * yaw_rate) * casadi.sin(yaw_angle),
-            ),
+            v_cg_x * casadi.cos(yaw_angle) - v_rig_y * casadi.sin(yaw_angle),
         )
         model.set_rhs(
             "y_rig_inertial",
-            casadi.if_else(
-                use_kinematic_model,
-                v_cg_x * casadi.sin(yaw_angle),
-                v_cg_x * casadi.sin(yaw_angle)
-                + (v_cg_y - params.l_rig_to_cg * yaw_rate) * casadi.cos(yaw_angle),
-            ),
+            v_cg_x * casadi.sin(yaw_angle) + v_rig_y * casadi.cos(yaw_angle),
         )
         model.set_rhs("yaw_angle", yaw_rate)
         model.set_rhs("v_cg_x", acceleration)
-
-        # Lateral dynamics
-        yaw_rate_kinematic = v_cg_x * front_steering_angle / params.wheelbase
-        v_cg_y_kinematic = (
-            v_cg_x * front_steering_angle * params.l_rig_to_cg / params.wheelbase
-        )
-        GAIN = 10.0
-
         model.set_rhs(
             "v_cg_y",
-            casadi.if_else(
-                use_kinematic_model,
-                GAIN * (v_cg_y_kinematic - v_cg_y),
-                a_00 * v_cg_y + a_01 * yaw_rate + b_00 * front_steering_angle,
-            ),
+            a_00 * v_cg_y + a_01 * yaw_rate + b_00 * front_steering_angle,
         )
         model.set_rhs(
             "yaw_rate",
-            casadi.if_else(
-                use_kinematic_model,
-                GAIN * (yaw_rate_kinematic - yaw_rate),
-                a_10 * v_cg_y + a_11 * yaw_rate + b_10 * front_steering_angle,
-            ),
+            a_10 * v_cg_y + a_11 * yaw_rate + b_10 * front_steering_angle,
         )
 
         # Actuator dynamics
@@ -273,26 +251,69 @@ class NonlinearMPC(MPCController):
         self._mpc.set_tvp_fun(self._tvp_fun)
 
         # State bounds
+        steering_bound = min(
+            0.785,
+            float(
+                np.arctan(
+                    self._gains.max_curvature_abs * self._vehicle_params.wheelbase
+                )
+            ),
+        )
         self._mpc.bounds["lower", "_x", "x_rig_inertial"] = -500
         self._mpc.bounds["upper", "_x", "x_rig_inertial"] = 500
         self._mpc.bounds["lower", "_x", "y_rig_inertial"] = -20
         self._mpc.bounds["upper", "_x", "y_rig_inertial"] = 20
         self._mpc.bounds["lower", "_x", "yaw_angle"] = -0.78
         self._mpc.bounds["upper", "_x", "yaw_angle"] = 0.78
-        self._mpc.bounds["lower", "_x", "v_cg_x"] = 0.0
-        self._mpc.bounds["upper", "_x", "v_cg_x"] = 35
+        # Small reverse-velocity slack keeps low-speed handoff states feasible;
+        # it is not intended to model parking or reverse-driving maneuvers.
+        self._mpc.bounds["lower", "_x", "v_cg_x"] = -5.0
+        self._mpc.bounds["upper", "_x", "v_cg_x"] = DEFAULT_MAX_SPEED_MPS
         self._mpc.bounds["lower", "_x", "v_cg_y"] = -10
         self._mpc.bounds["upper", "_x", "v_cg_y"] = 10
         self._mpc.bounds["lower", "_x", "yaw_rate"] = -3
         self._mpc.bounds["upper", "_x", "yaw_rate"] = 3
-        self._mpc.bounds["lower", "_x", "front_steering_angle"] = -0.785
-        self._mpc.bounds["upper", "_x", "front_steering_angle"] = 0.785
+        self._mpc.bounds["lower", "_x", "front_steering_angle"] = -steering_bound
+        self._mpc.bounds["upper", "_x", "front_steering_angle"] = steering_bound
 
         # Input bounds
-        self._mpc.bounds["lower", "_u", "front_steering_angle_cmd"] = -2
-        self._mpc.bounds["upper", "_u", "front_steering_angle_cmd"] = 2
+        self._mpc.bounds["lower", "_u", "front_steering_angle_cmd"] = -steering_bound
+        self._mpc.bounds["upper", "_u", "front_steering_angle_cmd"] = steering_bound
         self._mpc.bounds["lower", "_u", "acceleration_cmd"] = -9.0
         self._mpc.bounds["upper", "_u", "acceleration_cmd"] = 6.0
+
+        speed_for_curvature = casadi.fmax(
+            self._gains.max_curvature_speed_floor,
+            casadi.fabs(self._model.x["v_cg_x"]),
+        )
+        max_yaw_rate = self._gains.max_curvature_abs * speed_for_curvature
+        self._mpc.set_nl_cons(
+            "yaw_rate_upper_curvature",
+            self._model.x["yaw_rate"] - max_yaw_rate,
+            ub=0.0,
+        )
+        self._mpc.set_nl_cons(
+            "yaw_rate_lower_curvature",
+            -self._model.x["yaw_rate"] - max_yaw_rate,
+            ub=0.0,
+        )
+        # Tire grip: without it, a sharp steer at speed is the cheapest way to
+        # fall back onto a reference slower than the ego, and the car spins.
+        lateral_acceleration_cmd = (
+            self._model.x["v_cg_x"] ** 2
+            * casadi.tan(self._model.u["front_steering_angle_cmd"])
+            / self._vehicle_params.wheelbase
+        )
+        self._mpc.set_nl_cons(
+            "lateral_acceleration_upper",
+            lateral_acceleration_cmd,
+            ub=self._gains.max_lateral_acceleration,
+        )
+        self._mpc.set_nl_cons(
+            "lateral_acceleration_lower",
+            -lateral_acceleration_cmd,
+            ub=self._gains.max_lateral_acceleration,
+        )
 
         self._mpc.setup()
         self._mpc.x0 = np.zeros((8, 1))
