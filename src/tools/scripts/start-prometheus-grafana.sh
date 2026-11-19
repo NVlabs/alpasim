@@ -14,8 +14,8 @@ Arguments:
   file-sd-dir                 Local path or SSH path.
                               Examples:
                                 /tmp/alpasim-prometheus/file-sd
-                                iad:/lustre/.../prometheus/file-sd
-                                user@iad-login:/lustre/.../prometheus/file-sd
+                                cluster-login:/shared/cache/prometheus/file-sd
+                                user@cluster-login:/shared/cache/prometheus/file-sd
 
 Options:
   --prometheus-port PORT      Host port for Prometheus. Default: first open >= 9090

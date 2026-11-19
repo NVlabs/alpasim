@@ -20,8 +20,12 @@ The top-level structure of the JSON record is as follows:
     "driver": "<driver>",
     "base_topology": "topology=<name>",
     "scenes": {
-      "scene_ids": null,
-      "test_suite_id": "public_2601"
+      "clip_ids": null,
+      "suites": [
+        {
+          "csv_path": "data/scenes/scene_suites/public_2601.csv"
+        }
+      ]
     },
     "simulation_duration_s": 20,
     "rollouts_per_scene": 1,

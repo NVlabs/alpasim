@@ -21,9 +21,9 @@ from eval.aggregation.modifiers import (
 )
 from eval.aggregation.processing import ProcessedMetricDFs
 from eval.schema import EvalConfig, SceneScoreConfig
-from eval.video import VIDEO_FILE_NAME_FORMAT
 
 WIZARD_FILE = "wizard-config.yaml"
+VIDEO_FILE_NAME_FORMAT = "{scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4"
 
 # Configure the root logger first to affect all modules
 root_logger = logging.getLogger()
@@ -43,7 +43,7 @@ def _collect_metrics_from_job_dir(job_dir: pathlib.Path) -> pl.DataFrame | None:
     Collect metrics from a single job directory.
 
     Both post-eval and runtime-eval write metrics to the same unified path:
-    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/metrics.parquet
+    <job_dir>/rollouts/<scene_key>/<rollout_uuid>/metrics.parquet
 
     Returns:
         DataFrame with metrics from this job directory, or None if no metrics found.
@@ -73,12 +73,12 @@ def _aggregate_metrics(
     modifiers: list[MetricAggregationModifiers],
     failed_rollouts: list[FailedRolloutInput] | None = None,
     scene_score_config: SceneScoreConfig | None = None,
-) -> ProcessedMetricDFs:
+) -> ProcessedMetricDFs | None:
     """
     Aggregate metrics from job directories.
 
     Both post-eval and runtime-eval use the same unified metrics path:
-    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/metrics.parquet
+    <job_dir>/rollouts/<scene_key>/<rollout_uuid>/metrics.parquet
     """
     all_dfs: list[pl.DataFrame] = []
     for job_dir in job_dirs:
@@ -89,6 +89,20 @@ def _aggregate_metrics(
             all_dfs.append(df)
 
     if not all_dfs:
+        if failed_rollouts:
+            processing.write_results_summary_json(
+                pl.DataFrame(),
+                pl.DataFrame(),
+                str(aggregate_dir),
+                failed_rollouts=failed_rollouts,
+                scene_score_config=scene_score_config,
+            )
+            logger.warning(
+                "No metrics files were written; recorded %d failed rollout(s) "
+                "in the terminal failure summary",
+                len(failed_rollouts),
+            )
+            return None
         raise ValueError(
             "No metrics files found in any job directory. Ensure either post-eval "
             "or in-runtime evaluation has completed successfully."
@@ -115,7 +129,7 @@ def _run_aggregation_core(
     aggregate_dir: pathlib.Path,
     cfg: EvalConfig,
     failed_rollouts: list[FailedRolloutInput] | None = None,
-) -> ProcessedMetricDFs:
+) -> ProcessedMetricDFs | None:
     """
     Core aggregation logic shared between runtime and CLI entry points.
 
@@ -125,10 +139,11 @@ def _run_aggregation_core(
         cfg: Evaluation configuration.
 
     Returns:
-        ProcessedMetricDFs containing aggregated metrics data.
+        ProcessedMetricDFs containing aggregated metrics data, or None when
+        only known failed rollouts were recorded.
 
     Raises:
-        ValueError: If no metrics files are found.
+        ValueError: If no metrics files or known failed rollouts are found.
     """
     os.makedirs(aggregate_dir, exist_ok=True)
 
@@ -146,6 +161,11 @@ def _run_aggregation_core(
         failed_rollouts=failed_rollouts,
         scene_score_config=cfg.scene_score,
     )
+    if processed_dfs is None:
+        logger.info(
+            "Aggregation complete with only failed rollout rows: %s", aggregate_dir
+        )
+        return None
     processed_dfs.save_to(aggregate_dir)
 
     logger.info("Aggregation complete. Results saved to %s", aggregate_dir)
@@ -346,7 +366,7 @@ def _aggregate_eval_videos(
     """Aggregate eval videos across all array jobs.
 
     Videos are saved next to ASL files in the unified path structure:
-    <job_dir>/rollouts/<scene_id>/<rollout_uuid>/<video_name>.mp4
+    <job_dir>/rollouts/<scene_key>/<rollout_uuid>/<video_name>.mp4
 
     This function creates symlinks to all videos in the aggregate/videos/all/ directory.
     """
@@ -370,7 +390,7 @@ def _aggregate_eval_videos(
         video_files.sort()
         for video_file in video_files:
             # Use the basename as the symlink name. By design, video_file.name is
-            # "{clipgt_id}_{rollout_id}_{camera_id}_{layout_id}.mp4" (VIDEO_FILE_NAME_FORMAT),
+            # "{scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4" (VIDEO_FILE_NAME_FORMAT),
             # which ensures global uniqueness across jobs; collisions are not expected.
             symlink_path = all_videos_dir / video_file.name
             symlink_path.unlink(missing_ok=True)
@@ -408,7 +428,7 @@ def _aggregate_eval_videos(
         for row in filtered_df.iter_rows(named=True):
             for layout_id in layouts_to_link:
                 video_file_name = VIDEO_FILE_NAME_FORMAT.format(
-                    clipgt_id=row["clipgt_id"],
+                    scene_key=row["scene_key"],
                     rollout_id=row["rollout_id"],
                     camera_id=cfg.video.camera_id_to_render,
                     layout_id=layout_id,

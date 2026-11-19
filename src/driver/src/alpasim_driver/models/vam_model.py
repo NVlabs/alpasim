@@ -16,10 +16,10 @@ import omegaconf.listconfig
 import torch
 import torch.serialization
 from vam.action_expert import VideoActionModelInference
-from vam.datalib.transforms import NeuroNCAPTransform
 
 from ..schema import ModelConfig
 from .base import BaseTrajectoryModel, DriveCommand, ModelPrediction, PredictionInput
+from .image_preprocessing import resize_and_center_crop_batch
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,9 @@ class VAMModel(BaseTrajectoryModel):
     DTYPE = torch.float32 if platform.machine() == "aarch64" else torch.float16
     # VAM only supports single camera
     NUM_CAMERAS = 1
-    # NeuroNCAPTransform expects 900x1600 input
-    EXPECTED_HEIGHT = 900
-    EXPECTED_WIDTH = 1600
+    # VQ tokenizer input size
+    DOWNSCALE_HEIGHT = 288
+    DOWNSCALE_WIDTH = 512
 
     @classmethod
     def from_config(
@@ -136,7 +136,6 @@ class VAMModel(BaseTrajectoryModel):
         self._device = device
         self._camera_ids = camera_ids
         self._context_length = context_length
-        self._preproc_pipeline = NeuroNCAPTransform()
         self._use_autocast = device.type == "cuda" and platform.machine() != "aarch64"
 
     @property
@@ -165,24 +164,29 @@ class VAMModel(BaseTrajectoryModel):
         }
         return COMMAND_MAP[command]
 
-    def _preprocess(self, image: np.ndarray) -> torch.Tensor:
-        """Resize and apply NeuroNCAP transform."""
-        image = self._resize_and_center_crop(
-            image, self.EXPECTED_HEIGHT, self.EXPECTED_WIDTH
-        )
-        return self._preproc_pipeline(image)
-
     def _preprocess_batch(self, images: list[np.ndarray]) -> torch.Tensor:
-        """Preprocess and stack multiple images into a batch tensor.
+        """Preprocess a list of images using batched GPU tensor operations.
+
+        Resize and center-crop directly to the VQ tokenizer input size, then
+        normalize to [-1, 1].
 
         Args:
             images: List of HWC uint8 numpy arrays.
 
         Returns:
-            Tensor of shape ``(B, C, H, W)`` ready for the tokenizer.
+            Tensor of shape ``(B, C, DOWNSCALE_HEIGHT, DOWNSCALE_WIDTH)``
+            (float32, normalized to [-1, 1]) ready for the tokenizer.
         """
-        tensors = [self._preprocess(img) for img in images]
-        return torch.stack(tensors, dim=0)
+        batch = resize_and_center_crop_batch(
+            images,
+            target_height=self.DOWNSCALE_HEIGHT,
+            target_width=self.DOWNSCALE_WIDTH,
+            device=self._device,
+        )
+
+        # Normalize: uint8 [0, 255] -> float32 [-1, 1]
+        batch = batch.float() / 127.5 - 1.0
+        return batch
 
     def _tokenize_frames(self, images: list[np.ndarray]) -> torch.Tensor:
         """Preprocess and tokenize a batch of images in a single GPU call.
@@ -193,7 +197,7 @@ class VAMModel(BaseTrajectoryModel):
         Returns:
             Token tensor of shape ``(B, h, w)``.
         """
-        batch_tensor = self._preprocess_batch(images).to(self._device)
+        batch_tensor = self._preprocess_batch(images)
         autocast_ctx = (
             torch.amp.autocast(self._device.type, dtype=self.DTYPE)
             if self._use_autocast

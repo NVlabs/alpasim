@@ -35,9 +35,10 @@ services:
       - TORCH_HOME=/root/.cache/torch
       - TORCH_EXTENSIONS_DIR=/root/.cache/torch/extensions
       - FLASHDREAMS_CACHE_DIR=/root/.cache/flashdreams
-    workdir: /workspace/flashdreams
+    # Run the package installed in the image's baked venv. The runtime image
+    # intentionally does not contain a uv project workspace.
     command:
-      - "uv run --no-sync --package flashdreams-omnidreams python -m omnidreams.grpc.server"
+      - "/opt/flashdreams/bin/python -m omnidreams.grpc.server"
       - "--pipeline_config_name omnidreams-sv-2steps-chunk2-loc6-lightvae-lighttae-perf"
       - "--host 0.0.0.0"
       - "--port {port}"
@@ -46,7 +47,7 @@ services:
 # download/setup notes.
 scenes:
   nre_version_string: "25.7.9-b85d0efd"
-  scene_ids:
+  clip_ids:
     - clipgt-01d503d4-449b-46fc-8d78-9085e70d3554
 
 runtime:

@@ -51,7 +51,7 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
             )
 
         self._traffic_objs = cfg.traffic_objs
-        scene_id = cfg.scene_id
+        clip_id = cfg.clip_id
         ego_aabb = cfg.ego_aabb
         gt_ego_aabb_trajectory = cfg.gt_ego_aabb_trajectory
         start_timestamp_us = cfg.start_timestamp_us
@@ -90,7 +90,8 @@ class TrafficService(ServiceBase[TrafficServiceStub]):
         # Create session request
         session_request = TrafficSessionRequest(
             session_uuid=session_info.uuid,
-            scene_id=scene_id,
+            # TrafficService's wire schema names the clip ID scene_id.
+            scene_id=clip_id,
             random_seed=(
                 cfg.random_seed
                 if cfg.random_seed is not None

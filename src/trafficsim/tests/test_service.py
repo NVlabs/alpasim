@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 from alpasim_grpc.v0 import common_pb2, traffic_pb2, traffic_pb2_grpc
-from alpasim_runtime.errors import UnknownSceneError
+from alpasim_runtime.errors import UnknownClipError
 from alpasim_trafficsim.grpc.catk_predictor import CatkPredictionUnavailableError
 from alpasim_trafficsim.grpc.config import CatkLoaderConfig
 from alpasim_trafficsim.grpc.servicer import TrafficServiceServicer
@@ -30,19 +30,19 @@ import grpc
 DT_US = 100_000
 MIN_HISTORY = 16
 PREDICTION_STEPS = 15
-DEFAULT_SCENE_ID = "clipgt-test-scene"
+DEFAULT_CLIP_ID = "clipgt-test-scene"
 
 
-class FakeSceneLoader:
-    """Returns scene data source handles for a fixed set of scene IDs."""
+class FakeDataSourceLoader:
+    """Returns data handles for a fixed set of clip IDs."""
 
-    def __init__(self, scene_ids: list[str] | None = None) -> None:
-        self.scene_ids = set(scene_ids or [DEFAULT_SCENE_ID])
+    def __init__(self, clip_ids: list[str] | None = None) -> None:
+        self.source_ids = set(clip_ids or [DEFAULT_CLIP_ID])
 
-    def get_data_source(self, scene_id: str) -> str:
-        if scene_id not in self.scene_ids:
-            raise UnknownSceneError(scene_id)
-        return scene_id
+    def get_data_source(self, clip_id: str) -> str:
+        if clip_id not in self.source_ids:
+            raise UnknownClipError(clip_id)
+        return clip_id
 
 
 class FakeSceneAdapter:
@@ -354,7 +354,7 @@ def _session_request(
     logged: list[traffic_pb2.ObjectTrajectory],
     handover_time_us: int = 1_500_000,
     session_uuid: str = "session-1",
-    scene_id: str = DEFAULT_SCENE_ID,
+    scene_id: str = DEFAULT_CLIP_ID,
 ) -> traffic_pb2.TrafficSessionRequest:
     return traffic_pb2.TrafficSessionRequest(
         session_uuid=session_uuid,
@@ -409,7 +409,7 @@ def _build_servicer(
     *,
     predictor: Any,
     env_data: dict[str, Any] | None = None,
-    scene_loader: Any | None = None,
+    data_source_loader: Any | None = None,
 ) -> TrafficServiceServicer:
     """Construct a servicer with injected fakes, bypassing loader/model setup."""
     servicer = TrafficServiceServicer.__new__(TrafficServiceServicer)
@@ -423,7 +423,7 @@ def _build_servicer(
     servicer._minimum_history_length = MIN_HISTORY
     servicer._prediction_steps = PREDICTION_STEPS
     servicer._loader_cfg = CatkLoaderConfig(usdz_folder="unused")
-    servicer._scene_loader = scene_loader or FakeSceneLoader()
+    servicer._data_source_loader = data_source_loader or FakeDataSourceLoader()
     servicer._scene_adapter = FakeSceneAdapter(env_data or _make_env_data())
     servicer._catk_predictor = predictor
     return servicer
@@ -477,11 +477,11 @@ def _serve(
     predictor: Any | None = None,
     *,
     max_workers: int = 4,
-    scene_loader: Any | None = None,
+    data_source_loader: Any | None = None,
 ) -> Iterator[RunningService]:
     servicer = _build_servicer(
         predictor=predictor or RecordingPredictor(),
-        scene_loader=scene_loader,
+        data_source_loader=data_source_loader,
     )
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
     traffic_pb2_grpc.add_TrafficServiceServicer_to_server(servicer, server)
@@ -511,9 +511,9 @@ def test_get_metadata_reports_service_version(
     assert metadata.minimum_history_length_us == MIN_HISTORY * DT_US
 
 
-def test_get_available_scenes_reports_scene_ids(service: RunningService) -> None:
+def test_get_available_scenes_reports_clip_ids(service: RunningService) -> None:
     response = service.stub.get_available_scenes(common_pb2.Empty())
-    assert DEFAULT_SCENE_ID in response.scene_ids
+    assert DEFAULT_CLIP_ID in response.scene_ids
 
 
 def test_start_then_close_session_round_trips(service: RunningService) -> None:
@@ -617,7 +617,9 @@ def test_start_session_rejects_empty_logged_ego_trajectory(
 
 
 def test_start_session_unknown_scene_returns_not_found() -> None:
-    with _serve(scene_loader=FakeSceneLoader(["clipgt-known-scene"])) as service:
+    with _serve(
+        data_source_loader=FakeDataSourceLoader(["clipgt-known-scene"])
+    ) as service:
         with pytest.raises(grpc.RpcError) as exc:
             service.stub.start_session(
                 _session_request(

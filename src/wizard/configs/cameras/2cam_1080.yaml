@@ -4,10 +4,10 @@ runtime:
   simulation_config:
       cameras:
       -
-        # We want 1080x1920 but NRE will resize to match original camera aspect ratio.
-        # So we set 1080x1900 here, which will be resized to 1080x1916.
+        # NRE preserves the source camera aspect ratio, so 1900 is only the
+        # requested width. The decoded width can vary by scene.
         height: 1080
-        width: 1900
+        width: 1900  # Request width; decoded width can differ.
         logical_id: camera_front_wide_120fov
 
         # If you change this see note in base_config.yaml about `driver.inference.Cframes_subsample`
@@ -15,7 +15,7 @@ runtime:
         shutter_duration_us: 30_000
       -
         height: 1080
-        width: 1900
+        width: 1900  # Request width; decoded width can differ.
         logical_id: camera_front_tele_30fov
 
         # If you change this see note in base_config.yaml about `driver.inference.Cframes_subsample`

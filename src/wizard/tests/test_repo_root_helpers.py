@@ -37,6 +37,35 @@ def test_base_image_tag_uses_commit_for_mr_base_image_change(monkeypatch) -> Non
     assert setup_omegaconf._read_base_image_tag() == "cf8241f7"
 
 
+def test_detached_checkout_uses_commit_base_image_when_version_changed(
+    monkeypatch,
+) -> None:
+    """A pinned feature commit resolves its CI-built base image."""
+    responses = {
+        ("rev-parse", "--abbrev-ref", "HEAD"): "HEAD",
+        ("merge-base", "HEAD", "origin/main"): "main-sha",
+        ("diff", "--name-only", "main-sha...HEAD"): "pyproject.toml",
+        ("rev-parse", "HEAD"): "1234567890abcdef",
+    }
+    monkeypatch.setattr(setup_omegaconf, "_read_repo_version", lambda: "0.139.0")
+    monkeypatch.setattr(setup_omegaconf, "_git_output", lambda *args: responses[args])
+
+    assert setup_omegaconf._read_base_image_tag() == "12345678"
+
+
+def test_base_image_tag_uses_version_for_shallow_alpagym_cached_checkout(
+    monkeypatch,
+) -> None:
+    responses = {
+        ("rev-parse", "--abbrev-ref", "HEAD"): "alpagym-cache/cf8241f7ee05",
+        ("merge-base", "HEAD", "origin/main"): None,
+    }
+    monkeypatch.setattr(setup_omegaconf, "_read_repo_version", lambda: "0.139.0")
+    monkeypatch.setattr(setup_omegaconf, "_git_output", lambda *args: responses[args])
+
+    assert setup_omegaconf._read_base_image_tag() == "0.139.0"
+
+
 def test_base_image_tag_uses_version_for_feature_without_base_image_change(
     monkeypatch,
 ) -> None:

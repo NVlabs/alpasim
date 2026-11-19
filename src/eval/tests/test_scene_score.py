@@ -17,6 +17,7 @@ def _score_row(**overrides: object) -> dict[str, object]:
         "collision_at_fault": 0.0,
         "offroad": 0.0,
         "dist_to_gt_trajectory": 0.0,
+        "left_corridor_laterally": 0.0,
     }
     row.update(overrides)
     return row
@@ -52,7 +53,10 @@ def test_score_rollout_deviation_does_not_hard_fail() -> None:
     assert result.failure_reason is None
 
 
-@pytest.mark.parametrize("failure_metric", ["collision_at_fault", "offroad"])
+@pytest.mark.parametrize(
+    "failure_metric",
+    ["collision_at_fault", "offroad", "left_corridor_laterally"],
+)
 def test_score_rollout_collision_or_offroad_hard_fails(failure_metric: str) -> None:
     result = score_rollout(
         _score_row(progress_clipped_rel=0.8, **{failure_metric: 1.0}),
@@ -72,3 +76,25 @@ def test_score_rollout_requires_finite_metrics() -> None:
         match="metric 'progress_clipped_rel' has non-finite value",
     ):
         score_rollout(row, SceneScoreConfig())
+
+
+def test_score_rollout_lateral_corridor_exit_hard_fails() -> None:
+    result = score_rollout(_score_row(left_corridor_laterally=1.0), SceneScoreConfig())
+
+    assert result.score == 0.0
+    assert result.failure_reason == "left_corridor_laterally"
+
+
+def test_score_rollout_forward_corridor_exit_does_not_fail() -> None:
+    # Far from the recording, but only because the ego drove past its end.
+    result = score_rollout(
+        _score_row(
+            progress_clipped_rel=1.0,
+            dist_to_gt_trajectory=20.0,
+            left_corridor_laterally=0.0,
+        ),
+        SceneScoreConfig(),
+    )
+
+    assert result.failure_reason is None
+    assert result.score == 1.0

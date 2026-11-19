@@ -18,12 +18,15 @@ from alpasim_grpc.v0.egodriver_pb2 import (
     DriveSessionRequest,
     GroundTruth,
     GroundTruthRequest,
+    NavigationInstruction,
     RolloutCameraImage,
     RolloutEgoTrajectory,
     RouteRequest,
+    VectorizedObservation,
 )
 from alpasim_grpc.v0.egodriver_pb2_grpc import EgodriverServiceStub
 from alpasim_grpc.v0.logging_pb2 import LogEntry
+from alpasim_runtime.nav_route import NavInstruction, NavStatus
 from alpasim_runtime.services.service_base import ServiceBase, SessionInfo
 from alpasim_runtime.services.session_configs import DriverSessionConfig
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
@@ -32,12 +35,39 @@ from alpasim_utils.geometry import (
     Pose,
     Trajectory,
     polyline_to_grpc_route,
+    pose_to_grpc,
     trajectory_from_grpc,
     trajectory_to_grpc,
 )
 from alpasim_utils.types import ImageWithMetadata
 
 logger = logging.getLogger(__name__)
+
+_NAV_STATUS_TO_PROTO: dict[
+    NavStatus, NavigationInstruction.DebugInfo.Status.ValueType
+] = {
+    NavStatus.UPCOMING: NavigationInstruction.DebugInfo.UPCOMING,
+    NavStatus.ACTIVE: NavigationInstruction.DebugInfo.ACTIVE,
+    NavStatus.OUTSIDE_HORIZON: NavigationInstruction.DebugInfo.OUTSIDE_HORIZON,
+    NavStatus.ROUTE_COMPLETE: NavigationInstruction.DebugInfo.ROUTE_COMPLETE,
+    NavStatus.UNAVAILABLE: NavigationInstruction.DebugInfo.STATUS_UNSPECIFIED,
+}
+
+
+def nav_instruction_to_grpc(
+    instruction: NavInstruction, timestamp_us: int, session_uuid: str
+) -> NavigationInstruction:
+    """The driver-facing text plus simulator-side diagnostics under ``debug_info``."""
+    return NavigationInstruction(
+        session_uuid=session_uuid,
+        timestamp_us=timestamp_us,
+        instruction_text=instruction.instruction_text,
+        debug_info=NavigationInstruction.DebugInfo(
+            status=_NAV_STATUS_TO_PROTO[instruction.status],
+            remaining_distance_m=instruction.remaining_distance_m,
+            route_offset_m=instruction.route_offset_m,
+        ),
+    )
 
 
 class DriverService(ServiceBase[EgodriverServiceStub]):
@@ -47,6 +77,9 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
     This service handles communication with the driver model, including
     submitting sensor observations and receiving driving decisions.
     """
+
+    def __init__(self, address: str, skip: bool = False) -> None:
+        super().__init__(address=address, skip=skip)
 
     @property
     def stub_class(self) -> Type[EgodriverServiceStub]:
@@ -61,12 +94,14 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
                 f"via session_config, got {type(cfg).__name__}."
             )
 
-        scene_id = cfg.scene_id
+        scene_key = cfg.scene_key
         sensorsim_cameras = cfg.sensorsim_cameras
 
         rollout_spec = DriveSessionRequest.RolloutSpec(
             vehicle=DriveSessionRequest.RolloutSpec.VehicleDefinition(
                 available_cameras=sensorsim_cameras,
+                bounding_box=cfg.ego_aabb.to_grpc(),
+                rig_to_bounding_box=pose_to_grpc(cfg.rig_to_ego_aabb),
             ),
         )
 
@@ -77,7 +112,8 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
                 if cfg.random_seed is not None
                 else random.randint(0, 2**32 - 1)
             ),
-            debug_info=DriveSessionRequest.DebugInfo(scene_id=scene_id),
+            # EgoDriver's wire schema names the debug identity scene_id.
+            debug_info=DriveSessionRequest.DebugInfo(scene_id=scene_key),
             rollout_spec=rollout_spec,
         )
 
@@ -182,6 +218,46 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
             "submit_route", "driver", self.stub.submit_route, request
         )
 
+    async def submit_vectorized_observation(
+        self, observation: VectorizedObservation
+    ) -> None:
+        """Submit physical ego-frame map vectors and causal obstacle histories."""
+        session_info = self._require_session_info()
+        request = VectorizedObservation()
+        request.CopyFrom(observation)
+        request.session_uuid = session_info.uuid
+        await session_info.broadcaster.broadcast(
+            LogEntry(vectorized_observation=request)
+        )
+
+        if self.skip:
+            return
+
+        await profiled_rpc_call(
+            "submit_vectorized_observation",
+            "driver",
+            self.stub.submit_vectorized_observation,
+            request,
+        )
+
+    async def submit_navigation(
+        self, timestamp_us: int, instruction: NavInstruction
+    ) -> None:
+        """Submit the navigation instruction valid at ``timestamp_us``."""
+        session_info = self._require_session_info()
+        request = nav_instruction_to_grpc(instruction, timestamp_us, session_info.uuid)
+
+        await session_info.broadcaster.broadcast(
+            LogEntry(navigation_instruction=request)
+        )
+
+        if self.skip:
+            return
+
+        await profiled_rpc_call(
+            "submit_navigation", "driver", self.stub.submit_navigation, request
+        )
+
     async def submit_recording_ground_truth(
         self, timestamp_us: int, trajectory: Trajectory
     ) -> None:
@@ -213,12 +289,9 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
         """Request a drive decision for the current session.
 
         Returns:
-            Tuple of (trajectory, terminate_session).  When terminate_session
-            is True the caller should terminate the rollout immediately
-            without completing the remainder of the step.
+            Tuple of trajectory and termination flag.
         """
         session_info = self._require_session_info()
-        # Create request with both old and new fields for backward compatibility
         request = DriveRequest(
             session_uuid=session_info.uuid,
             time_now_us=time_now_us,
@@ -266,4 +339,5 @@ class DriverService(ServiceBase[EgodriverServiceStub]):
 
         await session_info.broadcaster.broadcast(LogEntry(driver_return=response))
 
-        return trajectory_from_grpc(response.trajectory), response.terminate_session
+        trajectory = trajectory_from_grpc(response.trajectory)
+        return trajectory, response.terminate_session

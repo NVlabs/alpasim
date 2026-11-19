@@ -70,7 +70,7 @@ def test_vavam_video_model_rectifies_recorded_ftheta_images() -> None:
     assert target.resolution_hw == [1080, 1920]
 
 
-def test_managed_flashdreams_uses_local_image_without_pulling() -> None:
+def test_managed_flashdreams_uses_baked_runtime_image_without_pulling() -> None:
     cfg = _compose_config(
         "deploy=managed_flashdreams",
         "topology=1gpu",
@@ -81,3 +81,8 @@ def test_managed_flashdreams_uses_local_image_without_pulling() -> None:
 
     assert cfg.services.renderer.external_image is True
     assert cfg.services.renderer.pull_policy == "never"
+    assert cfg.services.renderer.workdir is None
+    assert (
+        cfg.services.renderer.command[0]
+        == "/opt/flashdreams/bin/python -m omnidreams.grpc.server"
+    )

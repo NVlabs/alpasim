@@ -16,11 +16,19 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, List, cast
 
-from alpasim_wizard.context import WizardContext
-from alpasim_wizard.schema import AlpasimConfig, RunMode
+import polars as pl
+from alpasim_utils.types import ClipDataSource
+from alpasim_wizard.context import WizardContext, slurm_array_task_scenes
+from alpasim_wizard.scenes.csv_utils import (
+    SCENE_SUITE_COLUMNS,
+    normalize_scene_suite_catalog,
+)
+from alpasim_wizard.scenes.scene_suite import scene_suite_id_from_csv_path
+from alpasim_wizard.schema import AlpasimConfig, RunMode, SceneSuiteConfig
 from alpasim_wizard.telemetry.prometheus import generate_prometheus_configs
 from omegaconf import OmegaConf
 
+from .nav_coverage import check_recorded_navigation_coverage
 from .services import ContainerDefinition, ContainerSet
 from .utils import read_yaml, save_loadable_wizard_config, write_yaml
 
@@ -32,6 +40,7 @@ CORE_SERVICE_NAMES = (
     "physics",
     "trafficsim",
     "controller",
+    "frame_quality",
 )
 
 
@@ -52,13 +61,11 @@ class ConfigurationManager:
         logger.info("Generating all configurations...")
 
         cfg = context.cfg
-        artifact_list = context.artifact_list
-
         run_metadata = self._load_or_create_run_metadata(cfg)
         self._write_config("run_metadata.yaml", run_metadata)
 
         # Generate each configuration
-        self._generate_runtime_config(cfg, artifact_list, context)
+        self._generate_runtime_config(cfg, context)
 
         # Get sim containers from service_manager for network config
         sim_containers = container_set.sim
@@ -77,13 +84,13 @@ class ConfigurationManager:
 
         # Save wizard config
         self._save_wizard_config(cfg)
+        self._write_scene_manifest(context)
 
         logger.info("Generated configuration files")
 
     def _generate_runtime_config(
         self,
         cfg: Any,
-        artifact_list: List[Any],
         context: WizardContext,
     ) -> str | None:
         """Generate runtime configuration."""
@@ -93,13 +100,13 @@ class ConfigurationManager:
 
         sceneset_path = getattr(getattr(cfg, "scenes", None), "sceneset_path", None)
         if sceneset_path is not None:
-            scene_provider = runtime_config.get("scene_provider")
+            data_source_provider = runtime_config.get("data_source_provider")
             if (
-                isinstance(scene_provider, dict)
-                and scene_provider.get("kind") == "usdz"
-                and isinstance(scene_provider.get("usdz"), dict)
+                isinstance(data_source_provider, dict)
+                and data_source_provider.get("kind") == "usdz"
+                and isinstance(data_source_provider.get("usdz"), dict)
             ):
-                scene_provider["usdz"]["data_dir"] = (
+                data_source_provider["usdz"]["data_dir"] = (
                     "/mnt/nre-data"
                     if sceneset_path == "."
                     else f"/mnt/nre-data/{sceneset_path}"
@@ -107,6 +114,11 @@ class ConfigurationManager:
 
         # Write simulation params directly (was: fan out per scene)
         simulation_config = runtime_config.pop("simulation_config", {})
+        check_recorded_navigation_coverage(
+            simulation_config,
+            {scene.source.source_id for scene in context.scene_list},
+            list(cfg.services.runtime.volumes),
+        )
         telemetry_ports = context.telemetry_ports
         prometheus_host = (
             "localhost"
@@ -136,10 +148,13 @@ class ConfigurationManager:
         ):
             cache_config["extra_key"] = self._renderer_cache_fingerprint(cfg)
 
-        # Write flat scene list
-        runtime_config["scenes"] = [{"scene_id": s.scene_id} for s in artifact_list]
-
-        runtime_config = self._maybe_split_user_config_for_slurm_array(runtime_config)
+        runtime_config["scenes"] = [
+            {
+                "source": self._serialize_data_source(scene.source),
+                "policy_start_us": scene.policy_start_us,
+            }
+            for scene in slurm_array_task_scenes(context.scene_list)
+        ]
 
         task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
         filename = f"generated-user-config-{task_id}.yaml"
@@ -147,6 +162,15 @@ class ConfigurationManager:
 
         logger.debug(f"Generated runtime config: {filename}")
         return filename
+
+    @staticmethod
+    def _serialize_data_source(source: object) -> dict[str, str]:
+        if isinstance(source, ClipDataSource):
+            return {
+                "clip_id": source.clip_id,
+                "usdz_uuid": source.usdz_uuid,
+            }
+        raise TypeError(f"Unsupported data source: {type(source).__name__}")
 
     @staticmethod
     def _renderer_cache_fingerprint(cfg: Any) -> str:
@@ -207,6 +231,7 @@ class ConfigurationManager:
             "renderer": {"endpoints": []},
             "trafficsim": {"endpoints": []},
             "controller": {"endpoints": []},
+            "frame_quality": {"endpoints": []},
         }
 
         for c in service_containers:
@@ -372,6 +397,10 @@ class ConfigurationManager:
             or f"LR-{run_uuid}"
         )
 
+        suite_configs = list(cfg.scenes.suite_configs or [])
+        for group in cfg.scenes.suite_groups.values():
+            suite_configs.extend(group)
+
         run_metadata = {
             "run_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "run_name": run_name,
@@ -386,11 +415,9 @@ class ConfigurationManager:
             "description": (
                 cfg.wizard.description if hasattr(cfg.wizard, "description") else None
             ),
-            "test_suite_id": (
-                cfg.scenes.test_suite_id
-                if hasattr(cfg.scenes, "test_suite_id")
-                else None
-            ),
+            "scene_suite_ids": [
+                scene_suite_id_from_csv_path(suite.csv_path) for suite in suite_configs
+            ],
         }
         return run_metadata
 
@@ -407,11 +434,97 @@ class ConfigurationManager:
 
         logger.debug("Saved wizard configurations")
 
-    def _write_config(self, filename: str, data: Dict) -> Path:
+    def _write_scene_manifest(self, context: WizardContext) -> None:
+        """Record selected suite inputs and the resolved scenes."""
+        configured_suites: list[tuple[str | None, SceneSuiteConfig]] = [
+            (None, config) for config in context.cfg.scenes.suite_configs or []
+        ]
+        for name, group in context.cfg.scenes.suite_groups.items():
+            configured_suites.extend((name, config) for config in group)
+
+        suites = []
+        for group_name, config in configured_suites:
+            path = Path(config.csv_path)
+            normalized = normalize_scene_suite_catalog(
+                pl.read_csv(path, infer_schema_length=0),
+                source=str(path),
+            )
+            canonical_csv = normalized.select(SCENE_SUITE_COLUMNS).write_csv().encode()
+            suite = {
+                "scene_suite_id": scene_suite_id_from_csv_path(path),
+                "csv_path": str(path.resolve()),
+                "source_sha256": hashlib.sha256(canonical_csv).hexdigest(),
+                "t0_offset_us": config.t0_offset_us,
+            }
+            if group_name is not None:
+                suite["group"] = group_name
+            suites.append(suite)
+
+        manifest = {
+            "scene_suites": suites,
+            "scenes": [
+                {
+                    "source": self._serialize_data_source(scene.source),
+                    "policy_start_us": scene.policy_start_us,
+                }
+                for scene in context.scene_list
+            ],
+        }
+        if context.scene_groups:
+            manifest["scene_groups"] = {
+                name: [scene.scene_key for scene in scenes]
+                for name, scenes in context.scene_groups.items()
+            }
+        materialization = context.scene_materialization
+        if materialization is not None:
+            manifest["scene_materialization"] = {
+                "simulation_timing": {
+                    "force_gt_duration_us": materialization.force_gt_duration_us,
+                    "n_sim_steps": materialization.n_sim_steps,
+                    "control_timestep_us": materialization.control_timestep_us,
+                },
+                "requested_count": materialization.requested_count,
+                "accepted_count": materialization.accepted_count,
+                "rejected_count": materialization.rejected_count,
+                "invalid_percent": round(materialization.invalid_percent, 6),
+                "rejection_counts": materialization.rejection_counts,
+                "accepted_sha256": materialization.accepted_sha256,
+                "rejections": [
+                    {
+                        "source": self._serialize_data_source(rejection.scene.source),
+                        "policy_start_us": rejection.scene.policy_start_us,
+                        "reason": rejection.reason.value,
+                        **(
+                            {"clip_duration_us": rejection.clip_duration_us}
+                            if rejection.clip_duration_us is not None
+                            else {}
+                        ),
+                        **(
+                            {"requested_end_us": rejection.requested_end_us}
+                            if rejection.requested_end_us is not None
+                            else {}
+                        ),
+                    }
+                    for rejection in materialization.rejections
+                ],
+            }
+        # Model startup may consume this inventory before services are ready.
+        manifest_path = self._write_config("scene-manifest.yaml", manifest, atomic=True)
+        if materialization is not None:
+            logger.info(
+                "Recorded accepted scene population in %s (sha256=%s)",
+                manifest_path,
+                materialization.accepted_sha256,
+            )
+
+    def _write_config(self, filename: str, data: Dict, *, atomic: bool = False) -> Path:
         """Write configuration to file."""
         filepath = self.log_dir / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        write_yaml(data, str(filepath))
+        write_path = filepath.with_name(f".{filepath.name}.tmp") if atomic else filepath
+        write_yaml(data, str(write_path))
+        if atomic:
+            write_path.replace(filepath)
         return filepath
 
     def cleanup_central_file_sd(self) -> None:
@@ -432,33 +545,6 @@ class ConfigurationManager:
         if not isinstance(d, dict):
             return d
         return {k: self._remove_none_values(v) for k, v in d.items() if v is not None}
-
-    def _maybe_split_user_config_for_slurm_array(self, user_config: Any) -> Any:
-        """Split scenes for SLURM array jobs."""
-        task_count = int(os.environ.get("SLURM_ARRAY_TASK_COUNT", 0))
-
-        if task_count <= 1:
-            return user_config
-
-        logger.info(
-            f"Detected SLURM_ARRAY_TASK_COUNT = {task_count}, splitting user-config"
-        )
-        user_config = user_config.copy()
-
-        task_id = int(os.environ.get("SLURM_ARRAY_TASK_ID", 0))
-        min_task_id = int(os.environ.get("SLURM_ARRAY_TASK_MIN", 0))
-
-        all_scenes = user_config["scenes"]
-        # Sort for deterministic distribution
-        all_scenes = sorted(all_scenes, key=lambda x: (x.get("scene_id", ""), str(x)))
-
-        # Distribute scenes across array tasks (round-robin)
-        split_scenes: List[List[Any]] = [[] for _ in range(task_count)]
-        for idx, scene in enumerate(all_scenes):
-            split_scenes[idx % task_count].append(scene)
-
-        user_config["scenes"] = split_scenes[task_id - min_task_id]
-        return user_config
 
     def get_runtime_config_name(self) -> str:
         """Get the runtime configuration filename."""

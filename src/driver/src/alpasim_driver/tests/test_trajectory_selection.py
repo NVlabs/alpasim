@@ -281,6 +281,7 @@ class TestSessionPlanHandoff:
             poses=[],
             last_selected_plan=None,
             route=None,
+            navigation=None,
             frames_trail_request_warned=False,
         )
 

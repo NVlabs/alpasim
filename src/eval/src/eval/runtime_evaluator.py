@@ -21,13 +21,13 @@ from concurrent.futures import ProcessPoolExecutor
 
 import yaml
 from alpasim_grpc.v0.logging_pb2 import LogEntry
+from alpasim_utils.logs import clip_id_from_session_metadata
 from trajdata.maps import VectorMap
 
 from eval.accumulator import EvalDataAccumulator
 from eval.data import ScenarioEvalInput
 from eval.scenario_evaluator import ScenarioEvalResult, ScenarioEvaluator
 from eval.schema import EvalConfig
-from eval.video import render_video_from_eval_result
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,6 @@ def _evaluate_in_subprocess(
     metrics_path: str,
     render_video: bool,
     video_output_dir: str,
-    scene_id: str,
     rollout_uuid: str,
 ) -> ScenarioEvalResult:
     """Run evaluation in a subprocess. Module-level for pickling.
@@ -54,12 +53,17 @@ def _evaluate_in_subprocess(
         eval_result.metrics_df.write_parquet(metrics_path)
 
     if render_video:
+        # Video dependencies are optional for score-only evaluation.  Import
+        # them only when rendering was requested so they cannot prevent the
+        # evaluator from recording a scene result.
+        from eval.video import render_video_from_eval_result
+
         render_video_from_eval_result(
             scenario_input=scenario_input,
             metrics_df=eval_result.metrics_df,
             cfg=eval_config,
             output_dir=video_output_dir,
-            clipgt_id=scene_id,
+            clipgt_id=clip_id_from_session_metadata(scenario_input.session_metadata),
             rollout_id=rollout_uuid,
         )
 
@@ -83,7 +87,6 @@ class RuntimeEvaluator:
         evaluator = RuntimeEvaluator(
             eval_config=eval_config,
             rollout_uuid=rollout_uuid,
-            scene_id=scene_id,
             save_path_root=save_path_root,
             vector_map=vector_map,
         )
@@ -101,7 +104,6 @@ class RuntimeEvaluator:
         self,
         eval_config: EvalConfig,
         rollout_uuid: str,
-        scene_id: str,
         save_path_root: str,
         vector_map: VectorMap | None,
     ) -> None:
@@ -111,14 +113,12 @@ class RuntimeEvaluator:
         Args:
             eval_config: Evaluation configuration.
             rollout_uuid: Unique identifier for this rollout.
-            scene_id: Scene identifier.
             save_path_root: Root path for this scenario's rollouts.
             vector_map: Vector map for offroad metrics (can be None).
         """
         # Configuration (immutable after init)
         self.eval_config = eval_config
         self.rollout_uuid = rollout_uuid
-        self.scene_id = scene_id
         self.save_path_root = save_path_root
         self.vector_map = vector_map
 
@@ -173,7 +173,7 @@ class RuntimeEvaluator:
             ValueError: If the metadata file is empty or invalid.
         """
         # Try to find run_metadata.yaml in parent directories of save_path_root
-        # save_path_root is typically: <log_dir>/rollouts/<scene_id>
+        # save_path_root is typically: <log_dir>/rollouts/<scene_key>
         # run_metadata.yaml is in: <log_dir>/
         log_dir = os.path.dirname(os.path.dirname(self.save_path_root))
         metadata_path = os.path.join(log_dir, "run_metadata.yaml")
@@ -227,13 +227,19 @@ class RuntimeEvaluator:
         CPU-bound scorer computation, parquet writing, and optional video
         rendering to the provided executor.
 
-        Eval failures are caught and logged; they do not fail the rollout.
+        Evaluation failures are recorded as failed rollouts by propagating
+        them to the worker. The aggregation path records a terminal failure
+        row, with a zero score when scene scoring is enabled.
 
         Args:
             executor: ProcessPoolExecutor to run evaluation in.
 
         Returns:
-            ScenarioEvalResult if evaluation succeeded, None otherwise.
+            ScenarioEvalResult if evaluation succeeded, None if evaluation
+            is disabled or no input was accumulated.
+
+        Raises:
+            RuntimeError: If evaluation in the subprocess fails.
         """
         if not self._enabled:
             return None
@@ -263,16 +269,17 @@ class RuntimeEvaluator:
                     metrics_path=metrics_path,
                     render_video=self._should_render_video,
                     video_output_dir=os.path.dirname(metrics_path),
-                    scene_id=self.scene_id,
                     rollout_uuid=self.rollout_uuid,
                 ),
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Evaluation failed in subprocess for session %s",
                 self.rollout_uuid,
             )
-            return None
+            raise RuntimeError(
+                f"Evaluation failed for session {self.rollout_uuid}"
+            ) from exc
 
         # Log results in the main process
         if eval_result.metrics_df is not None and len(eval_result.metrics_df) > 0:

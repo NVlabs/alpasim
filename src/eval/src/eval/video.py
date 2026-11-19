@@ -3,16 +3,16 @@
 
 import logging
 import os
+import textwrap
 import traceback
 
 import matplotlib as mpl
-import matplotlib.animation as animation
-import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
-import matplotlib.transforms as transforms
 import numpy as np
 import polars as pl
+from alpasim_utils.types import scene_from_proto
+from matplotlib import animation, gridspec, transforms
 from tqdm import tqdm
 
 from eval.aggregation import processing
@@ -27,7 +27,24 @@ logger = logging.getLogger("alpasim.eval.video")
 mpl.use("Agg")
 mplstyle.use("fast")
 
-VIDEO_FILE_NAME_FORMAT = "{clipgt_id}_{rollout_id}_{camera_id}_{layout_id}.mp4"
+VIDEO_FILE_NAME_FORMAT = "{scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4"
+
+# Characters per line of the chain-of-thought box on the camera pane (9 in wide at 10 pt bold).
+REASONING_WRAP_CHARS = 90
+# Lines shown; a longer chain of thought is cut with an ellipsis so it never covers the image.
+REASONING_MAX_LINES = 6
+
+
+def reasoning_label(reasoning_text: str | None) -> str | None:
+    """Wrap the driver's chain of thought for the camera pane, or ``None`` when there is none."""
+    if not reasoning_text or not reasoning_text.strip():
+        return None
+    lines = textwrap.wrap(" ".join(reasoning_text.split()), REASONING_WRAP_CHARS)
+    if len(lines) > REASONING_MAX_LINES:
+        lines = lines[: REASONING_MAX_LINES - 1] + [
+            lines[REASONING_MAX_LINES - 1] + " …"
+        ]
+    return "CoT: " + "\n".join(lines)
 
 
 def render_and_save_video(
@@ -36,6 +53,7 @@ def render_and_save_video(
     output_dir: str,
     cfg: EvalConfig,
     clipgt_id: str,
+    scene_key: str,
     rollout_id: str,
 ) -> None:
     """
@@ -49,6 +67,7 @@ def render_and_save_video(
         output_dir: Output directory for the video.
         cfg: Evaluation configuration.
         clipgt_id: Clip/ground truth identifier.
+        scene_key: Canonical source-and-time scene identity.
         rollout_id: Rollout identifier.
     """
     logger.info(
@@ -63,7 +82,7 @@ def render_and_save_video(
         output_path = os.path.join(
             output_dir,
             VIDEO_FILE_NAME_FORMAT.format(
-                clipgt_id=clipgt_id,
+                scene_key=scene_key,
                 rollout_id=rollout_id,
                 camera_id=cfg.video.camera_id_to_render,
                 layout_id=video_layout,
@@ -134,10 +153,10 @@ def render_video_from_eval_result(
         True if video was rendered successfully, False otherwise.
     """
     try:
-        logger.info("Rendering video for %s/%s", clipgt_id, rollout_id)
-
         # Get SimulationResult for video rendering
         simulation_result = SimulationResult.from_scenario_input(scenario_input, cfg)
+        scene_key = scene_from_proto(simulation_result.session_metadata.scene).scene_key
+        logger.info("Rendering video for %s/%s", scene_key, rollout_id)
 
         # Process metrics for video (need ProcessedMetricDFs for video rendering)
         unprocessed_metrics = processing.UnprocessedMetricsDFs(metrics_df)
@@ -149,6 +168,7 @@ def render_video_from_eval_result(
             output_dir=output_dir,
             cfg=cfg,
             clipgt_id=clipgt_id,
+            scene_key=scene_key,
             rollout_id=rollout_id,
         )
 
@@ -257,7 +277,7 @@ def render_table(
     df_long_avg_t = (
         processed_metric_dfs.df_wide_avg_t.drop(
             "rollout_id",
-            "clipgt_id",
+            "scene_key",
             "run_name",
             "run_uuid",
             "trajectory_uid",
@@ -524,6 +544,38 @@ def create_video_animation(
         bbox=dict(boxstyle="round,pad=0.3", facecolor="black", alpha=0.7),
         visible=initial_command is not None,
     )
+    # The chain of thought the driver returned with the plan (debug_info.reasoning_text),
+    # under the command label at the top of the camera pane.
+    initial_reasoning = reasoning_label(
+        initial_driver_response.reasoning_text if initial_driver_response else None
+    )
+    reasoning_text_artist = axs["image"].text(
+        0.02,
+        0.90,
+        initial_reasoning or "",
+        ha="left",
+        va="top",
+        transform=axs["image"].transAxes,
+        fontsize=10,
+        color="white",
+        fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="midnightblue", alpha=0.75),
+        visible=initial_reasoning is not None,
+    )
+    initial_nav = sim_result.nav_instructions.label(timestamps_us[0])
+    nav_text_artist = axs["image"].text(
+        0.02,
+        0.02,
+        initial_nav or "",
+        ha="left",
+        va="bottom",
+        transform=axs["image"].transAxes,
+        fontsize=10,
+        color="white",
+        fontweight="bold",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="darkgreen", alpha=0.75),
+        visible=initial_nav is not None,
+    )
 
     ego_transform = get_ego_transform(
         sim_result=sim_result,
@@ -729,6 +781,20 @@ def create_video_animation(
             command_text_artist.set_visible(True)
         else:
             command_text_artist.set_visible(False)
+        nav_label = sim_result.nav_instructions.label(time)
+        if nav_label:
+            nav_text_artist.set_text(nav_label)
+            nav_text_artist.set_visible(True)
+        else:
+            nav_text_artist.set_visible(False)
+        reasoning = reasoning_label(
+            driver_response.reasoning_text if driver_response else None
+        )
+        if reasoning:
+            reasoning_text_artist.set_text(reasoning)
+            reasoning_text_artist.set_visible(True)
+        else:
+            reasoning_text_artist.set_visible(False)
 
         overlay_artists: list[plt.Artist] = []
         if overlay_enabled and camera_projector is not None:
@@ -754,6 +820,8 @@ def create_video_animation(
             all_artists.append(table)
         all_artists.append(text_artist)
         all_artists.append(command_text_artist)
+        all_artists.append(nav_text_artist)
+        all_artists.append(reasoning_text_artist)
         # Keep camera axis locked to image extent
         if camera_artist is not None:
             array = camera_artist.get_array()

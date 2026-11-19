@@ -1481,14 +1481,18 @@ class TrainingConfig(BaseConfig):
     @property
     def torch_float_type(self):
         """PyTorch float precision type for training."""
-        if self.use_mixed_precision_training and self.gpu_name in ["a100", "l40s"]:
+        if self.use_mixed_precision_training and self.gpu_name in [
+            "a100",
+            "h100",
+            "l40s",
+        ]:
             return torch.bfloat16
         return torch.float32
 
     @property
     def use_mixed_precision_training(self):
         """If true use mixed precision training."""
-        return self.gpu_name in ["a100", "l40s"]
+        return self.gpu_name in ["a100", "h100", "l40s"]
 
     @property
     def need_grad_scaler(self):
@@ -2261,6 +2265,8 @@ class TrainingConfig(BaseConfig):
                 return "gtx1080ti"
             elif "a100" in name:
                 return "a100"
+            elif "h100" in name:
+                return "h100"
             elif "l40s" in name:
                 return "l40s"
             elif "a4000" in name:

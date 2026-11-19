@@ -12,6 +12,7 @@ import logging
 import math
 from dataclasses import dataclass
 
+import casadi
 import numpy as np
 from alpasim_utils.geometry import Pose
 
@@ -47,7 +48,6 @@ class VehicleModel:
         rear_cornering_stiffness: float = 176162.1  # Rear cornering stiffness [N/rad]
         steering_time_constant: float = 0.1  # Steering response time constant [s]
         acceleration_time_constant: float = 0.1  # Accel response time constant [s]
-        kinematic_threshold_speed: float = 5.0  # Speed for kinematic model [m/s]
 
     def __init__(
         self,
@@ -83,7 +83,7 @@ class VehicleModel:
             ]
         )
 
-        # Store last computed accelerations [d_vx_cg, d_vy_cg, d_yaw_rate]
+        # Final-substep body-velocity derivatives [d_vx_cg, d_vy_cg, d_yaw_rate]
         self._accelerations = np.array([0.0, 0.0, 0.0])
 
     @property
@@ -103,7 +103,7 @@ class VehicleModel:
 
     @property
     def accelerations(self) -> np.ndarray:
-        """Get last computed accelerations in CG frame.
+        """Get body-velocity derivatives over the final integration substep.
 
         Returns:
             Array of [d_vx_cg, d_vy_cg, d_yaw_rate] where:
@@ -140,11 +140,14 @@ class VehicleModel:
         else:
             self._state[6] = 0.0
         self._state[7] = longitudinal_acceleration
+        _, self._accelerations = integrate_vehicle_state(
+            self._state, self._state[6:8], 0.01, self._parameters
+        )
 
     def advance(self, u: np.ndarray, dt: float) -> Pose:
         """Advance the vehicle model by dt seconds.
 
-        Uses 2nd order Runge-Kutta integration with sub-stepping.
+        Uses a speed-scaled backward Euler lateral solve with sub-stepping.
 
         Args:
             u: Control input [steering_cmd, accel_cmd]
@@ -154,25 +157,8 @@ class VehicleModel:
             Relative pose (pose_rig_t0_to_rig_t1) if reset_origin was called
             prior, otherwise absolute pose in inertial frame.
         """
-        DT_STEP_MAX = 0.01
-
-        logging.debug("state: %s, u: %s, dt: %s", self._state, u, dt)
-
-        total_time = 0.0
-        while total_time < dt:
-            step_dt = min(DT_STEP_MAX, dt - total_time)
-            total_time += step_dt
-
-            # 2nd order Runge-Kutta
-            k1 = step_dt * self._derivs(self._state, u)
-            k2 = step_dt * self._derivs(self._state + k1 / 2.0, u)
-            self._state += k2
-            self._state[3] = max(0.0, self._state[3])  # Ensure non-negative velocity
-
-        # Store final accelerations
-        final_derivs = self._derivs(self._state, u)
-        self._accelerations = np.array(
-            [final_derivs[3], final_derivs[4], final_derivs[5]]
+        self._state, self._accelerations = integrate_vehicle_state(
+            self._state, u, dt, self._parameters
         )
 
         logging.debug("state (after prop): %s", self._state)
@@ -185,88 +171,110 @@ class VehicleModel:
             ),
         )
 
-    def _derivs(self, state: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """Compute state derivatives.
 
-        Args:
-            state: Current state vector
-            u: Control input [steering_cmd, accel_cmd]
-
-        Returns:
-            State derivative vector
-        """
-        yaw_angle = state[2]
-        v_x = state[3]
-        v_y = state[4]
-        yaw_rate = state[5]
-        front_steering_angle = state[6]
-        longitudinal_acceleration = state[7]
-
-        use_kinematic_model = v_x < self._parameters.kinematic_threshold_speed
-
-        if use_kinematic_model:
-            # Kinematic model - pull system to no-slip conditions
-            steady_state_v_y = (
-                v_x
-                * front_steering_angle
-                * self._parameters.l_rig_to_cg
-                / self._parameters.wheelbase
-            )
-            steady_state_yaw_rate = (
-                v_x * front_steering_angle / self._parameters.wheelbase
-            )
-            GAIN = 10.0
-            v_y_rig = 0.0  # No slip at rear
-            d_v_y = GAIN * (steady_state_v_y - v_y)
-            d_yaw_rate = GAIN * (steady_state_yaw_rate - yaw_rate)
-        else:
-            # Dynamic bicycle model
-            kinetic_mass = self._parameters.mass * v_x
-            kinetic_inertia = self._parameters.inertia * v_x
-            lf = self._parameters.wheelbase - self._parameters.l_rig_to_cg
-            lf_caf = lf * self._parameters.front_cornering_stiffness
-            lr_car = (
-                self._parameters.l_rig_to_cg * self._parameters.rear_cornering_stiffness
-            )
-            lf_sq_caf = lf * lf_caf
-            lr_sq_car = self._parameters.l_rig_to_cg * lr_car
-
-            a_00 = (
-                -2
-                * (
-                    self._parameters.front_cornering_stiffness
-                    + self._parameters.rear_cornering_stiffness
-                )
-                / kinetic_mass
-            )
-            a_01 = -v_x - 2 * (lf_caf - lr_car) / kinetic_mass
-            a_10 = -2 * (lf_caf - lr_car) / kinetic_inertia
-            a_11 = -2 * (lf_sq_caf + lr_sq_car) / kinetic_inertia
-
-            b_00 = (
-                2 * self._parameters.front_cornering_stiffness / self._parameters.mass
-            )
-            b_10 = 2 * lf_caf / self._parameters.inertia
-
-            v_y_rig = v_y - state[5] * self._parameters.l_rig_to_cg
-
-            d_v_y = a_00 * v_y + a_01 * yaw_rate + b_00 * front_steering_angle
-            d_yaw_rate = a_10 * v_y + a_11 * yaw_rate + b_10 * front_steering_angle
-
-        front_steering_angle_cmd = u[0]
-        longitudinal_acceleration_cmd = u[1]
-
-        return np.array(
+def lateral_dynamics_coefficients(
+    params: VehicleModel.Parameters,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return C and b for v * z_dot = (C - v**2 E01) z + v b steering."""
+    lr = params.l_rig_to_cg
+    lf = params.wheelbase - lr
+    cf = params.front_cornering_stiffness
+    cr = params.rear_cornering_stiffness
+    return np.array(
+        [
+            [-2 * (cf + cr) / params.mass, -2 * (lf * cf - lr * cr) / params.mass],
             [
-                v_x * math.cos(yaw_angle) - v_y_rig * math.sin(yaw_angle),
-                v_x * math.sin(yaw_angle) + v_y_rig * math.cos(yaw_angle),
-                yaw_rate,
-                longitudinal_acceleration,
-                d_v_y,
-                d_yaw_rate,
-                (front_steering_angle_cmd - front_steering_angle)
-                / self._parameters.steering_time_constant,
-                (longitudinal_acceleration_cmd - longitudinal_acceleration)
-                / self._parameters.acceleration_time_constant,
-            ]
+                -2 * (lf * cf - lr * cr) / params.inertia,
+                -2 * (lf * lf * cf + lr * lr * cr) / params.inertia,
+            ],
+        ]
+    ), np.array([2 * cf / params.mass, 2 * lf * cf / params.inertia])
+
+
+def integrate_vehicle_state(
+    state: np.ndarray | casadi.SX,
+    control: np.ndarray | casadi.SX,
+    dt: float,
+    params: VehicleModel.Parameters,
+) -> tuple[np.ndarray | casadi.SX, np.ndarray | casadi.SX]:
+    """Propagate the forward-only bicycle model, numerically or symbolically.
+
+    The lateral system is z_dot = A(v) z + b delta, z = [vy, yaw_rate].
+    Multiplying backward Euler by the end-of-step speed gives
+    (v I - h v A(v)) z_next = v z + h v b delta_next. This removes all
+    divisions by speed. At v=0 the nonsingular tire matrix enforces z_next=0;
+    at small positive speed its equilibrium approaches the no-slip limit.
+
+    Actuator states use their exact constant-command solution. Pose uses
+    trapezoidal velocities and midpoint heading, with the same rear-axle
+    velocity conversion at every speed. Linear tires and small steering/slip
+    angles are assumed; this is not a standstill friction or tire saturation model.
+
+    Returns:
+        State after dt and body-velocity derivatives over the final substep.
+        The discrete update serves the simulator, linear MPC, and SQP MPC.
+    """
+    if not math.isfinite(dt) or dt < 0:
+        raise ValueError("dt must be finite and non-negative")
+    symbolic = isinstance(state, casadi.SX)
+    ops = casadi if symbolic else np
+    if dt == 0:
+        return state, casadi.SX.zeros(3) if symbolic else np.zeros(3)
+
+    num_steps = max(1, math.ceil(dt / 0.01))
+    h = dt / num_steps
+    lr = params.l_rig_to_cg
+    coefficients, steering_coefficients = lateral_dynamics_coefficients(params)
+    c00, c01_base, c10, c11 = coefficients.ravel()
+    b0, b1 = steering_coefficients
+    steering_decay = math.exp(-h / params.steering_time_constant)
+    accel_decay = math.exp(-h / params.acceleration_time_constant)
+
+    for _ in range(num_steps):
+        steering = control[0] + (state[6] - control[0]) * steering_decay
+        accel = control[1] + (state[7] - control[1]) * accel_decay
+        vx_unclamped = (
+            state[3]
+            + control[1] * h
+            + (state[7] - control[1])
+            * params.acceleration_time_constant
+            * (1 - accel_decay)
         )
+        # At rest use the forward (right) derivative. fmax's half derivative
+        # at equality compounds across substeps and hides launch acceleration
+        # from the optimizer over a stationary prediction horizon.
+        vx = (
+            casadi.if_else(vx_unclamped >= 0, vx_unclamped, 0.0)
+            if symbolic
+            else max(0.0, vx_unclamped)
+        )
+        c01 = c01_base - vx * vx
+        m00 = vx - h * c00
+        m01 = -h * c01
+        m10 = -h * c10
+        m11 = vx - h * c11
+        rhs0 = vx * (state[4] + h * b0 * steering)
+        rhs1 = vx * (state[5] + h * b1 * steering)
+        determinant = m00 * m11 - m01 * m10
+        vy = (m11 * rhs0 - m01 * rhs1) / determinant
+        yaw_rate = (m00 * rhs1 - m10 * rhs0) / determinant
+
+        yaw = state[2] + h * (state[5] + yaw_rate) / 2
+        yaw_mid = (state[2] + yaw) / 2
+        vx_mid = (state[3] + vx) / 2
+        vy_rig_mid = (state[4] + vy - lr * (state[5] + yaw_rate)) / 2
+        values = [
+            state[0] + h * (vx_mid * ops.cos(yaw_mid) - vy_rig_mid * ops.sin(yaw_mid)),
+            state[1] + h * (vx_mid * ops.sin(yaw_mid) + vy_rig_mid * ops.cos(yaw_mid)),
+            yaw,
+            vx,
+            vy,
+            yaw_rate,
+            steering,
+            accel,
+        ]
+        next_state = casadi.vertcat(*values) if symbolic else np.array(values)
+        accelerations = (next_state[3:6] - state[3:6]) / h
+        state = next_state
+
+    return state, accelerations

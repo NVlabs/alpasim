@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alpasim-physics"
-version = "1.84.0"
+version = "1.142.0"
 description = "Physics micro-service of the Alpamayo Sim"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "alpasim_grpc",
   "alpasim_utils",
   "numpy",
-  "warp-lang",
+  # Warp 1.18+ PyPI wheels require CUDA 13; deployments use CUDA 12 drivers.
+  "warp-lang<1.18",
   "pyyaml",
   "dataclasses_json",
   "pytest"

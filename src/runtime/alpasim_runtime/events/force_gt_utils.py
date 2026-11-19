@@ -47,11 +47,40 @@ def force_gt_dynamic_trajectory(
 
 
 def controller_reference_trajectory(
-    force_gt_trajectory: geometry.Trajectory, step_start_us: int
+    force_gt_trajectory: geometry.Trajectory,
+    step_start_us: int,
+    control_timestep_us: int,
 ) -> geometry.Trajectory:
-    """Build the controller reference used while the rollout is force-GT driven."""
-    clip_end_us = min(
-        step_start_us + FORCE_GT_REFERENCE_HORIZON_US + 1,
-        force_gt_trajectory.time_range_us.stop,
+    """Build the controller reference used while the rollout is force-GT driven.
+
+    The reference covers ``FORCE_GT_REFERENCE_HORIZON_US`` from the step start.
+    Past the end of the force-GT trajectory it repeats the trajectory's last
+    control-step motion. A fork's force-GT trajectory is the parent history,
+    which ends at the policy start; a reference cut off there would have the
+    controller brake towards that pose before the policy takes over.
+    """
+    reference_end_us = step_start_us + FORCE_GT_REFERENCE_HORIZON_US
+    trajectory_end_us = force_gt_trajectory.time_range_us.stop - 1
+    reference = force_gt_trajectory.clip(
+        step_start_us, min(reference_end_us, trajectory_end_us) + 1
     )
-    return force_gt_trajectory.clip(step_start_us, clip_end_us)
+    if trajectory_end_us >= reference_end_us:
+        return reference
+
+    pose_step = force_gt_trajectory.interpolate_delta(
+        trajectory_end_us - control_timestep_us, trajectory_end_us
+    )
+    extension_timestamps_us = np.arange(
+        trajectory_end_us + control_timestep_us,
+        reference_end_us + control_timestep_us,
+        control_timestep_us,
+        dtype=np.uint64,
+    )
+    extension_poses = []
+    pose = force_gt_trajectory.last_pose
+    for _ in extension_timestamps_us:
+        pose = pose @ pose_step
+        extension_poses.append(pose)
+    return reference.append(
+        geometry.Trajectory.from_poses(extension_timestamps_us, extension_poses)
+    )

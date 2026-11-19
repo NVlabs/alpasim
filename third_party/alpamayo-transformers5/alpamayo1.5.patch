@@ -1,0 +1,133 @@
+diff --git a/src/alpamayo1_5/action_space/unicycle_accel_curvature.py b/src/alpamayo1_5/action_space/unicycle_accel_curvature.py
+index b67a8c9..b6a34cf 100644
+--- a/src/alpamayo1_5/action_space/unicycle_accel_curvature.py
++++ b/src/alpamayo1_5/action_space/unicycle_accel_curvature.py
+@@ -80,6 +80,7 @@ class UnicycleAccelCurvatureActionSpace(ActionSpace):
+             kappa_ridge: Ridge parameter for curvature smoothing.
+         """
+         super().__init__()
++        self._normalization_values = (accel_mean, accel_std, curvature_mean, curvature_std)
+         self.register_buffer("accel_mean", torch.tensor(accel_mean), persistent=False)
+         self.register_buffer("accel_std", torch.tensor(accel_std), persistent=False)
+         self.register_buffer("curvature_mean", torch.tensor(curvature_mean), persistent=False)
+@@ -97,6 +98,14 @@ class UnicycleAccelCurvatureActionSpace(ActionSpace):
+         self.kappa_lambda = kappa_lambda
+         self.kappa_ridge = kappa_ridge
+ 
++    @torch.no_grad()
++    def reset_parameters(self) -> None:
++        for name, value in zip(
++            ("accel_mean", "accel_std", "curvature_mean", "curvature_std"),
++            self._normalization_values,
++        ):
++            self.get_buffer(name).fill_(value)
++
+     def get_action_space_dims(self) -> tuple[int, int]:
+         """Get the dimensions of the action space."""
+         return (self.n_waypoints, 2)
+diff --git a/src/alpamayo1_5/models/action_in_proj.py b/src/alpamayo1_5/models/action_in_proj.py
+index 452170e..b5e6827 100644
+--- a/src/alpamayo1_5/models/action_in_proj.py
++++ b/src/alpamayo1_5/models/action_in_proj.py
+@@ -86,8 +86,18 @@ class FourierEncoderV2(nn.Module):
+         half = dim // 2
+         freqs = torch.logspace(0, math.log10(max_freq), steps=half)
+         self.out_dim = dim
++        self.max_freq = max_freq
++        self._freqs_dtype = freqs.dtype
+         self.register_buffer("freqs", freqs[None, :], persistent=False)  # (1, half)
+ 
++    @torch.no_grad()
++    def reset_parameters(self) -> None:
++        freqs = torch.logspace(
++            0, math.log10(self.max_freq), steps=self.out_dim // 2,
++            device=self.freqs.device, dtype=self._freqs_dtype,
++        )
++        self.freqs.copy_(freqs[None, :])
++
+     def forward(self, x: torch.Tensor) -> torch.Tensor:
+         """Forward pass of the Fourier encoder V2.
+ 
+diff --git a/src/alpamayo1_5/models/alpamayo1_5.py b/src/alpamayo1_5/models/alpamayo1_5.py
+index c982345..4621a97 100644
+--- a/src/alpamayo1_5/models/alpamayo1_5.py
++++ b/src/alpamayo1_5/models/alpamayo1_5.py
+@@ -31,9 +31,10 @@ from transformers import (
+     StoppingCriteriaList,
+ )
+ 
+-from alpamayo1_5.action_space import ActionSpace
++from alpamayo1_5.action_space import ActionSpace, UnicycleAccelCurvatureActionSpace
+ from alpamayo1_5.config import Alpamayo1_5Config
+ from alpamayo1_5.diffusion.base import BaseDiffusion
++from alpamayo1_5.models.action_in_proj import FourierEncoderV2
+ from alpamayo1_5.models.base_model import ReasoningVLA
+ from alpamayo1_5.models.diffusion_expert_cuda_graph import (
+     DiffusionExpertCudaGraph,
+@@ -158,6 +159,12 @@ class Alpamayo1_5(ReasoningVLA):
+             return None
+         return self._diffusion_expert_cuda_graph.stats
+ 
++    @torch.no_grad()
++    def _init_weights(self, module: torch.nn.Module) -> None:
++        super()._init_weights(module)
++        if isinstance(module, (FourierEncoderV2, UnicycleAccelCurvatureActionSpace)):
++            module.reset_parameters()
++
+     @staticmethod
+     def _find_eos_offset(
+         sequences: torch.Tensor,
+diff --git a/src/alpamayo1_5/models/base_model.py b/src/alpamayo1_5/models/base_model.py
+index b1a2492..7123e0d 100644
+--- a/src/alpamayo1_5/models/base_model.py
++++ b/src/alpamayo1_5/models/base_model.py
+@@ -446,12 +446,11 @@ class ReasoningVLA(PreTrainedModel, TrajectoryFusionMixin):
+ 
+     def get_input_embeddings(self) -> torch.nn.Module:
+         """Get the input embeddings of the model."""
+-        return self.vlm.language_model.embed_tokens
++        return self.vlm.get_input_embeddings()
+ 
+-    def tie_weights(self) -> None:
++    def tie_weights(self, *args: Any, **kwargs: Any) -> None:
+         """Delegate weight tying to the nested VLM model."""
+-        if hasattr(self.vlm, "tie_weights"):
+-            self.vlm.tie_weights()
++        super().tie_weights(*args, **kwargs)
+ 
+     def generate_text(
+         self,
+diff --git a/src/alpamayo1_5/models/diffusion_expert_cuda_graph.py b/src/alpamayo1_5/models/diffusion_expert_cuda_graph.py
+index 2d79f0f..777b5db 100644
+--- a/src/alpamayo1_5/models/diffusion_expert_cuda_graph.py
++++ b/src/alpamayo1_5/models/diffusion_expert_cuda_graph.py
+@@ -29,8 +29,10 @@ class _ReadOnlyPromptCacheLayer(CacheLayerMixin):
+         self.values = values
+         self.is_initialized = True
+ 
+-    def lazy_initialization(self, key_states: torch.Tensor) -> None:
+-        del key_states
++    def lazy_initialization(
++        self, key_states: torch.Tensor, value_states: torch.Tensor
++    ) -> None:
++        del key_states, value_states
+         raise RuntimeError("Read-only prompt cache layers must be initialized")
+ 
+     def update(
+@@ -45,13 +47,13 @@ class _ReadOnlyPromptCacheLayer(CacheLayerMixin):
+             torch.cat((self.values, value_states), dim=-2),
+         )
+ 
+-    def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
+-        return self.get_seq_length() + cache_position.shape[0], 0
++    def get_mask_sizes(self, query_length: int) -> tuple[int, int]:
++        return self.get_seq_length() + query_length, 0
+ 
+     def get_seq_length(self) -> int:
+         return self.keys.shape[-2]
+ 
+-    def get_max_cache_shape(self) -> int:
++    def get_max_length(self) -> int:
+         return -1
+ 
+     def crop(self, max_length: int) -> None:

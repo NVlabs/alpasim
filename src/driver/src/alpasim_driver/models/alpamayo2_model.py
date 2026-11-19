@@ -96,6 +96,10 @@ class Alpamayo2Model(BaseTrajectoryModel):
             trajectory_candidate_microbatch_size=(
                 model_cfg.trajectory_candidate_microbatch_size
             ),
+            diffusion_expert_cuda_graph=model_cfg.diffusion_expert_cuda_graph,
+            diffusion_expert_cuda_graph_max_graphs=(
+                model_cfg.diffusion_expert_cuda_graph_max_graphs
+            ),
             selection_strategy=TrajectorySelectionStrategy(selection.strategy),
             max_num_distance_points=selection.max_num_distance_points,
             skip_first_n_distance_points=selection.skip_first_n_distance_points,
@@ -109,6 +113,8 @@ class Alpamayo2Model(BaseTrajectoryModel):
         context_length: int = DEFAULT_CONTEXT_LENGTH,
         num_traj_samples: int = 1,
         trajectory_candidate_microbatch_size: int | None = None,
+        diffusion_expert_cuda_graph: bool = False,
+        diffusion_expert_cuda_graph_max_graphs: int = 4,
         top_p: float = 0.98,
         temperature: float = 0.6,
         diffusion_steps: int = 10,
@@ -131,6 +137,10 @@ class Alpamayo2Model(BaseTrajectoryModel):
             num_traj_samples: Trajectory samples to draw before selection.
             trajectory_candidate_microbatch_size: Maximum candidates sampled in
                 each sequential model call. Unset samples all candidates at once.
+            diffusion_expert_cuda_graph: Replay diffusion expert forwards with
+                exact-shape CUDA graphs.
+            diffusion_expert_cuda_graph_max_graphs: Maximum prompt-shape graphs
+                retained before new shapes use eager execution.
             top_p: Top-p sampling parameter for CoT generation.
             temperature: Temperature for CoT sampling.
             diffusion_steps: Euler integration steps for the action-expert flow
@@ -193,9 +203,7 @@ class Alpamayo2Model(BaseTrajectoryModel):
             configure_deterministic_runtime()
 
         logger.info("Loading Alpamayo 2 Super checkpoint from %s", checkpoint_path)
-        # transformers 4.57.x runs local paths through huggingface_hub's repo-ID
-        # validator, causing HFValidationError. local_files_only bypasses that path;
-        # HF model IDs (no local dir) go through the normal hub flow.
+        # Local checkpoint directories do not need Hub access.
         load_kwargs: dict = {}
         if os.path.isdir(os.path.expanduser(checkpoint_path)):
             load_kwargs["local_files_only"] = True
@@ -206,6 +214,17 @@ class Alpamayo2Model(BaseTrajectoryModel):
             **load_kwargs,
         )
         self._model.eval()
+        if diffusion_expert_cuda_graph:
+            graph_max_batch_size = num_traj_samples
+            if trajectory_candidate_microbatch_size is not None:
+                graph_max_batch_size = min(
+                    graph_max_batch_size,
+                    trajectory_candidate_microbatch_size,
+                )
+            self._model.enable_diffusion_expert_cuda_graph(
+                max_batch_size=graph_max_batch_size,
+                max_graphs=diffusion_expert_cuda_graph_max_graphs,
+            )
 
         action_space = self._model.expert.action_space
         self._pred_num_waypoints, _ = action_space.get_action_space_dims()
@@ -245,6 +264,11 @@ class Alpamayo2Model(BaseTrajectoryModel):
             trajectory_candidate_microbatch_size,
             selection_strategy,
         )
+        if diffusion_expert_cuda_graph:
+            logger.info(
+                "Diffusion expert CUDA graphs enabled with at most %d signatures",
+                diffusion_expert_cuda_graph_max_graphs,
+            )
 
     # ------------------------------------------------------------------
     # BaseTrajectoryModel interface

@@ -29,6 +29,7 @@ data/alpackages/*
 data/huggingface
 data/vavam-driver
 data/trafficsim-models/
+data/nurec-quality/
 outputs/
 artifacts/
 asset_harvesting/
@@ -41,5 +42,4 @@ asset_harvesting/
 # Rollout viewer scratch output
 /rollout_viewer_data/
 /*.log
-/plugins/internal/src/tools/rollout_viewer/rollout_viewer_data/
-/plugins/internal/src/tools/rollout_viewer/**/*.log
+data/ego-textures/

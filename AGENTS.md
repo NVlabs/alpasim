@@ -33,6 +33,10 @@ Alpasim is a lightweight, data-driven research simulator for autonomous vehicle 
   `getattr` / `.get(..., default)` patterns that hide broken invariants.
 - Reuse existing project helpers and upstream libraries before adding local
   equivalents.
+- Treat the wizard config's `defines` section as YAML-only interpolation values:
+  reference them as `${defines.x}` in configs, never read `cfg.defines` in code.
+  A value the code needs gets a typed field in the wizard schema
+  (`src/wizard/alpasim_wizard/schema.py`), which configs then set or interpolate.
 - Keep dependency direction clear: generic/shared modules must not import from
   specific deployment, policy, or test modules.
 - Comments and docstrings must describe the current code. Do not add
@@ -48,7 +52,10 @@ Environment variables and external repository URLs are project- or environment-s
 ## Commit and pull request guidelines
 
 - Keep commits focused and imperative. Rebase onto `main` before submitting; force-pushes are expected after rebases.
-- Changelogs are append-only: add new entries, but never change previous entries.
+- Keep one concise changelog entry per MR and update it as the work evolves.
+  Changelogs are append-only relative to the MR target branch: never change
+  entries that already exist on that branch.
+- Internal MRs must update `plugins/internal/CHANGELOG.md`, not `CHANGELOG.md`; the public changelog summarizes internal changes only during public releases.
 - Pipelines auto-bump versions for touched packages; allow the bot-generated commit to land and re-trigger CI if needed.
 - PRs should explain scenario impact, reference issue IDs, and attach logs/screens for wizard/runtime regressions. Confirm tests and `pre-commit` pass before requesting review.
 - When pushing to a branch that has the auto-bump commit "Alpasim automatic version bump", force push over it if that's the only commit you'd overwrite. Do not manually update docker container versions; that is done by the CI pipeline.

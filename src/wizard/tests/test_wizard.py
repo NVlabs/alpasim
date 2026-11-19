@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from alpasim_wizard.__main__ import run_wizard
 from alpasim_wizard.schema import RunMethod
 from alpasim_wizard.wizard import AlpasimWizard
 
@@ -29,7 +31,6 @@ def test_wizard_selects_slurm_deployment_from_run_method(
                 driver_code_hash=None,
                 log_dir=str(tmp_path),
                 run_method=run_method,
-                enable_mps=False,
                 slurm_job_id=123,
             )
         )
@@ -78,7 +79,6 @@ def test_wizard_rejects_direct_enroot_without_slurm_allocation(
                 driver_code_hash=None,
                 log_dir=str(tmp_path),
                 run_method=RunMethod.SLURM_ENROOT,
-                enable_mps=False,
                 slurm_job_id=0,
             )
         )
@@ -90,3 +90,44 @@ def test_wizard_rejects_direct_enroot_without_slurm_allocation(
 
     with pytest.raises(ValueError, match="active Slurm allocation"):
         AlpasimWizard(context).cast()
+
+
+def test_run_wizard_starts_mps_before_scene_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    @contextmanager
+    def fake_mps_daemon(wizard_cfg):
+        events.append(("mps_start", wizard_cfg.mps_pipe_dir))
+        yield
+        events.append("mps_stop")
+
+    monkeypatch.setattr("alpasim_wizard.__main__.mps_daemon", fake_mps_daemon)
+    monkeypatch.setattr("alpasim_wizard.__main__.validate_config", lambda cfg: None)
+    monkeypatch.setattr(
+        "alpasim_wizard.__main__.update_scene_config",
+        lambda cfg: events.append("scenes"),
+    )
+    monkeypatch.setattr(
+        "alpasim_wizard.__main__.AlpasimWizard.create",
+        lambda cfg: SimpleNamespace(cast=lambda: events.append("cast")),
+    )
+    cfg = SimpleNamespace(
+        wizard=SimpleNamespace(
+            log_dir=str(tmp_path),
+            slurm_job_id=123,
+            enable_mps=True,
+            mps_pipe_dir=None,
+        )
+    )
+
+    run_wizard(cfg)
+
+    assert events == [
+        ("mps_start", "/tmp/nvidia-mps-123"),
+        "scenes",
+        "cast",
+        "mps_stop",
+    ]

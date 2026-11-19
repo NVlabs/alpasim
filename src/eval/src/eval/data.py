@@ -1349,7 +1349,9 @@ class CameraProjector:
 
     def __post_init__(self) -> None:
         self._param_kind = self.calibration.intrinsics.WhichOneof("camera_param")
-        # In logs, rig_to_camera is effectively camera->rig; use inverse only.
+        # rig_to_camera is the active pose of the camera in the rig. Its SE(3)
+        # matrix maps camera coordinates into rig coordinates, so invert it to
+        # express rig-frame points in camera coordinates.
         self._rig_to_cam = self.calibration.rig_to_camera.as_se3()  # (4,4)
         self._cam_to_rig = np.linalg.inv(self._rig_to_cam)
         if self._param_kind in ["opencv_pinhole_param", "opencv_fisheye_param"]:
@@ -1878,6 +1880,50 @@ class Routes:
 
 
 @dataclasses.dataclass
+class NavInstructionAtTime:
+    """One turn-by-turn navigation instruction the runtime sent to the driver."""
+
+    timestamp_us: int
+    instruction_text: str
+    remaining_distance_m: float
+    status: str
+    route_offset_m: float
+
+
+@dataclasses.dataclass
+class NavInstructions:
+    """Navigation instructions logged as ``navigation_instruction`` entries, by time."""
+
+    timestamps_us: list[int] = dataclasses.field(default_factory=list)
+    per_timestep: list[NavInstructionAtTime] = dataclasses.field(default_factory=list)
+
+    def add(self, instruction: NavInstructionAtTime) -> None:
+        """Append an instruction; entries are expected in time order."""
+        self.timestamps_us.append(int(instruction.timestamp_us))
+        self.per_timestep.append(instruction)
+
+    def at_time(self, time_us: int) -> NavInstructionAtTime | None:
+        """Return the most recent instruction at or before ``time_us``."""
+        if not self.timestamps_us:
+            return None
+        idx = int(np.searchsorted(self.timestamps_us, time_us, side="right")) - 1
+        return self.per_timestep[idx] if idx >= 0 else None
+
+    def label(self, time_us: int) -> str | None:
+        """One-line label for video overlays, or ``None`` when no instruction exists."""
+        instruction = self.at_time(time_us)
+        if instruction is None or not instruction.instruction_text:
+            return None
+        parts = [f"Nav: {instruction.instruction_text}"]
+        if instruction.status and instruction.status != "STATUS_UNSPECIFIED":
+            parts.append(instruction.status)
+        if instruction.remaining_distance_m > 0:
+            parts.append(f"{instruction.remaining_distance_m:.0f} m")
+        parts.append(f"offset {instruction.route_offset_m:.1f} m")
+        return " | ".join(parts)
+
+
+@dataclasses.dataclass
 class ScenarioEvalInput:
     """
     Raw input data for evaluating a completed scenario.
@@ -1930,6 +1976,8 @@ class ScenarioEvalInput:
 
     # Routes data (optional)
     routes: Routes | None = None
+    # Turn-by-turn navigation sent to the driver (optional, video overlay)
+    nav_instructions: NavInstructions | None = None
 
     # Duration during which the runtime forced the ego to follow the recorded
     # ground truth trajectory.  Pulled from RolloutMetadata.force_gt_duration.
@@ -1937,6 +1985,9 @@ class ScenarioEvalInput:
     # when computing the first "driven" timestamp.  ``None`` for ground-truth
     # baseline runs where this filtering should not apply.
     force_gt_duration_us: int | None = None
+
+    # Scalar time-series metrics produced by the runtime and persisted in ASL.
+    recorded_metrics: list["MetricReturn"] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -1969,6 +2020,9 @@ class SimulationResult:
     actor_polygons: ActorPolygons
     cameras: Cameras
     routes: Routes
+    nav_instructions: NavInstructions = dataclasses.field(
+        default_factory=NavInstructions
+    )
     # Traffic model forecast trajectories for non-static actors
     traffic_predictions: TrafficPredictions = dataclasses.field(
         default_factory=TrafficPredictions
@@ -2096,6 +2150,11 @@ class SimulationResult:
             actor_polygons=actor_polygons,
             cameras=cameras,
             routes=routes,
+            nav_instructions=(
+                scenario_input.nav_instructions
+                if scenario_input.nav_instructions is not None
+                else NavInstructions()
+            ),
             force_gt_duration_us=scenario_input.force_gt_duration_us,
         )
 
@@ -2108,6 +2167,7 @@ class AggregationType(StrEnum):
     MAX = "max"
     MIN = "min"
     LAST = "last"
+    P90 = "p90"
 
     def get_numpy_func(self) -> Callable[[np.ndarray], float]:
         """Return the numpy function for this aggregation type."""
@@ -2121,6 +2181,8 @@ class AggregationType(StrEnum):
             return np.min
         elif self == AggregationType.LAST:
             return lambda x: x[-1]
+        elif self == AggregationType.P90:
+            return lambda x: np.quantile(x, 0.9)
         else:
             raise ValueError(f"Unknown aggregation type: {self}")
 
@@ -2143,6 +2205,8 @@ class AggregationType(StrEnum):
             return pl.col(col_name).min()
         elif self == AggregationType.LAST:
             return pl.col(col_name).last()
+        elif self == AggregationType.P90:
+            return pl.col(col_name).quantile(0.9, interpolation="linear")
         else:
             raise ValueError(f"Unknown aggregation type: {self}")
 
@@ -2194,7 +2258,7 @@ class MetricReturn:
 
 def create_metrics_dataframe(
     metric_results: list["MetricReturn"],
-    clipgt_id: str,
+    scene_key: str,
     rollout_id: str,
     run_uuid: str,
     run_name: str,
@@ -2207,14 +2271,14 @@ def create_metrics_dataframe(
 
     Args:
         metric_results: List of MetricReturn objects with per-timestep metrics.
-        clipgt_id: Clip/ground truth identifier (typically scene_id).
+        scene_key: Canonical source-and-time scene identity.
         rollout_id: Rollout/session identifier.
         run_uuid: Unique identifier for the evaluation run.
         run_name: Human-readable name for the evaluation run.
 
     Returns:
         DataFrame with columns: name, timestamps_us, values, valid,
-        time_aggregation, clipgt_id, rollout_id, run_uuid, run_name.
+        time_aggregation, scene_key, rollout_id, run_uuid, run_name.
     """
     dictionaries = []
     for mr in metric_results:
@@ -2229,7 +2293,7 @@ def create_metrics_dataframe(
         # Add run metadata
         mr_dict.update(
             {
-                "clipgt_id": clipgt_id,
+                "scene_key": scene_key,
                 "rollout_id": rollout_id,
                 "run_uuid": run_uuid,
                 "run_name": run_name,

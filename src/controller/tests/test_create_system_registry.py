@@ -29,7 +29,12 @@ def _make_initial_state() -> common_pb2.StateAtTime:
 
 
 @pytest.mark.parametrize(
-    "mpc_impl", [MPCImplementation.LINEAR, MPCImplementation.NONLINEAR]
+    "mpc_impl",
+    [
+        MPCImplementation.LINEAR,
+        MPCImplementation.NONLINEAR,
+        MPCImplementation.SQP,
+    ],
 )
 def test_create_system_via_registry(mpc_impl: MPCImplementation) -> None:
     """create_system() returns a System with a controller from the plugin registry."""

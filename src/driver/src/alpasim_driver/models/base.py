@@ -13,7 +13,6 @@ from typing import Any, NamedTuple
 import numpy as np
 import torch
 from alpasim_utils.geometry import Pose, Trajectory
-from PIL import Image
 
 
 class DriveCommand(IntEnum):
@@ -64,6 +63,9 @@ class PredictionInput:
     # at the route's own timestamp.  None until the first route arrives, and
     # for scenarios that run without a route.
     route: Any | None  # Route
+    # Latest turn-by-turn instruction submitted for this session.  None until
+    # the first one arrives, and for scenarios that run without navigation.
+    navigation: Any | None  # NavigationInstruction
 
 
 @dataclass
@@ -190,46 +192,6 @@ class BaseTrajectoryModel(ABC):
         return BaseTrajectoryModel._compute_headings_from_trajectory_batch(
             trajectory_xy[np.newaxis, ...]
         )[0]
-
-    @staticmethod
-    def _resize_and_center_crop(
-        image: np.ndarray,
-        target_height: int,
-        target_width: int,
-    ) -> np.ndarray:
-        """Resize image to target height and center-crop to target width.
-
-        Args:
-            image: HWC uint8 numpy array
-            target_height: Target height in pixels
-            target_width: Target width in pixels
-
-        Returns:
-            Resized and cropped image as HWC uint8 numpy array.
-
-        Raises:
-            ValueError: If image is too narrow after resize to reach target width.
-        """
-        h, w = image.shape[:2]
-        if h == target_height and w == target_width:
-            return image
-
-        # Resize maintaining aspect ratio based on height
-        pil_img = Image.fromarray(image)
-        scale = target_height / h
-        new_w = int(w * scale)
-        pil_img = pil_img.resize((new_w, target_height), Image.Resampling.BILINEAR)
-
-        # Center crop width if needed
-        if new_w > target_width:
-            left = (new_w - target_width) // 2
-            pil_img = pil_img.crop((left, 0, left + target_width, target_height))
-        elif new_w < target_width:
-            raise ValueError(
-                f"Image width {new_w} too small after resize, need {target_width}"
-            )
-
-        return np.array(pil_img)
 
     def _validate_cameras(
         self,

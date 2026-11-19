@@ -10,18 +10,19 @@ from unittest.mock import patch
 import pytest
 from alpasim_grpc.v0 import runtime_pb2
 from alpasim_runtime.address_pool import AddressPool
-from alpasim_runtime.config import SceneAffineDispatchConfig
+from alpasim_runtime.config import ClipAffineDispatchConfig
 from alpasim_runtime.daemon.scheduler import (
+    ClipAffineDispatch,
     DaemonScheduler,
-    SceneAffineDispatch,
     _clear_retry_rollout_dir,
 )
 from alpasim_runtime.worker.ipc import JobResult, PendingRolloutJob
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
 
 
-def _affine_strategy(scheduler: DaemonScheduler) -> SceneAffineDispatch:
+def _affine_strategy(scheduler: DaemonScheduler) -> ClipAffineDispatch:
     """Return the scheduler's strategy with proper typing for test assertions."""
-    assert isinstance(scheduler._strategy, SceneAffineDispatch)
+    assert isinstance(scheduler._strategy, ClipAffineDispatch)
     return scheduler._strategy
 
 
@@ -68,14 +69,17 @@ def _make_pools_multi_gpu(
 
 def _pending(
     job_id: str,
-    scene_id: str = "scene-a",
+    clip_id: str = "clip-a",
     rollout_spec_index: int = 0,
     request_id: str = "req-a",
 ) -> PendingRolloutJob:
     return PendingRolloutJob(
         request_id=request_id,
         job_id=job_id,
-        scene_id=scene_id,
+        scene=Scene(
+            ClipDataSource(clip_id, f"uuid-for-{clip_id}"),
+            T0_AUTO,
+        ),
         rollout_spec_index=rollout_spec_index,
     )
 
@@ -129,7 +133,7 @@ async def test_scheduler_per_request_pool_releases_correctly() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools(capacity_per_service=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=True),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=True),
     )
 
     # Custom pool with capacity=1, so second job can only dispatch after first completes
@@ -156,40 +160,75 @@ async def test_scheduler_per_request_pool_releases_correctly() -> None:
     await scheduler.shutdown(reason="test cleanup")
 
 
+@pytest.mark.asyncio
+async def test_frame_quality_routes_without_limiting_dispatch() -> None:
+    runtime = _FakeRuntime()
+    pools = _make_pools(capacity_per_service=4)
+    pools["frame_quality"] = AddressPool(
+        ["quality-a:50056", "quality-b:50056"], n_concurrent=1, skip=False
+    )
+    scheduler = DaemonScheduler(
+        pools=pools,
+        runtime=runtime,
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=False),
+    )
+
+    await scheduler.submit_request(
+        "req-quality",
+        [_pending(f"j{i}", request_id="req-quality") for i in range(4)],
+    )
+
+    assert runtime.submitted_job_ids == ["j0", "j1", "j2", "j3"]
+    assert [job.endpoints.frame_quality.address for job in runtime.submitted_jobs] == [
+        "quality-a:50056",
+        "quality-b:50056",
+        "quality-a:50056",
+        "quality-b:50056",
+    ]
+    assert pools["frame_quality"].free_slot_counts() == {
+        "quality-a:50056": 1,
+        "quality-b:50056": 1,
+    }
+
+    await scheduler.shutdown(reason="test cleanup")
+
+
 # ---------------------------------------------------------------------------
-# Scene-affine dispatch
+# Clip-affine dispatch
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cold_dispatch_prefers_renderer_with_fewest_active_scenes() -> None:
+async def test_cold_dispatch_prefers_renderer_with_fewest_active_clips() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=4),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=True),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=True),
     )
     strategy = _affine_strategy(scheduler)
-    strategy.sync_scene_cache("gpu-0:50052", ["scene-A"])
-    strategy.sync_scene_cache("gpu-1:50052", ["scene-B", "scene-C"])
+    strategy.sync_clip_cache("gpu-0:50052", ["clip-A"])
+    strategy.sync_clip_cache("gpu-1:50052", ["clip-B", "clip-C"])
 
-    # gpu-0 ends up with 3 rollouts of one scene, gpu-1 with 2 rollouts of
-    # two scenes, so gpu-0 has fewer active scenes but fewer free slots.
+    # gpu-0 ends up with 3 rollouts of one clip, gpu-1 with 2 rollouts of
+    # two clips, so gpu-0 has fewer active clips but fewer free slots.
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
-            _pending("a3", scene_id="scene-A", request_id="req-1"),
-            _pending("b1", scene_id="scene-B", request_id="req-1"),
-            _pending("c1", scene_id="scene-C", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
+            _pending("a3", clip_id="clip-A", request_id="req-1"),
+            _pending("b1", clip_id="clip-B", request_id="req-1"),
+            _pending("c1", clip_id="clip-C", request_id="req-1"),
         ],
     )
-    a_jobs = [job for job in runtime.submitted_jobs if job.scene_id == "scene-A"]
+    a_jobs = [
+        job for job in runtime.submitted_jobs if job.scene.source.source_id == "clip-A"
+    ]
     assert {job.endpoints.renderer.address for job in a_jobs} == {"gpu-0:50052"}
 
     await scheduler.submit_request(
-        "req-2", [_pending("d1", scene_id="scene-D", request_id="req-2")]
+        "req-2", [_pending("d1", clip_id="clip-D", request_id="req-2")]
     )
 
     d1 = runtime.submitted_jobs[-1]
@@ -208,7 +247,7 @@ async def test_scheduler_retries_any_failure_up_to_configured_limit(
     scheduler = DaemonScheduler(
         pools=_make_pools(capacity_per_service=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=False),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=False),
         max_rollout_retries=2,
         rollouts_dir=str(tmp_path),
     )
@@ -218,7 +257,7 @@ async def test_scheduler_retries_any_failure_up_to_configured_limit(
 
     current_job_id = "j1"
     for retry_attempt in range(1, 3):
-        rollout_dir = tmp_path / original.scene_id / original.session_uuid
+        rollout_dir = tmp_path / original.scene.scene_key / original.session_uuid
         rollout_dir.mkdir(parents=True)
         (rollout_dir / "rollout.asl").write_text("failed attempt")
         (rollout_dir / "_complete").touch()
@@ -236,7 +275,7 @@ async def test_scheduler_retries_any_failure_up_to_configured_limit(
 
         retry_job = runtime.submitted_jobs[-1]
         assert retry_job.job_id != current_job_id
-        assert retry_job.scene_id == original.scene_id
+        assert retry_job.scene == original.scene
         assert retry_job.rollout_spec_index == original.rollout_spec_index
         assert retry_job.session_uuid == "requested-session"
         assert (
@@ -270,7 +309,7 @@ async def test_scheduler_does_not_retry_invalid_scene_failure(tmp_path: Path) ->
     scheduler = DaemonScheduler(
         pools=_make_pools(capacity_per_service=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=False),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=False),
         max_rollout_retries=2,
         rollouts_dir=str(tmp_path),
     )
@@ -301,7 +340,7 @@ async def test_scheduler_returns_successful_retry_instead_of_initial_failure() -
     scheduler = DaemonScheduler(
         pools=_make_pools(capacity_per_service=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=False),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=False),
         max_rollout_retries=2,
     )
     await scheduler.submit_request("req-retry", [_pending("j1")])
@@ -329,7 +368,7 @@ def test_scheduler_rejects_negative_retry_limit() -> None:
         DaemonScheduler(
             pools=_make_pools(capacity_per_service=1),
             runtime=_FakeRuntime(),
-            scene_affine_dispatch=SceneAffineDispatchConfig(enabled=False),
+            clip_affine_dispatch=ClipAffineDispatchConfig(enabled=False),
             max_rollout_retries=-1,
         )
 
@@ -349,30 +388,30 @@ def test_clear_retry_rollout_dir_rejects_path_traversal(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_max_scenes_per_renderer_defers_cold_dispatch() -> None:
+async def test_max_clips_per_renderer_defers_cold_dispatch() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=2),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_scenes_per_renderer=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_clips_per_renderer=1
         ),
     )
 
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("b1", scene_id="scene-B", request_id="req-1"),
-            _pending("c1", scene_id="scene-C", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("b1", clip_id="clip-B", request_id="req-1"),
+            _pending("c1", clip_id="clip-C", request_id="req-1"),
         ],
     )
 
     assert [job.job_id for job in runtime.submitted_jobs] == ["a1", "b1"]
     assert scheduler._strategy.pending_count == 1
 
-    # Completing scene-A leaves it cached but idle on gpu-0, so gpu-0 is
-    # eligible again: only loading or executing scenes count toward the cap.
+    # Completing clip-A leaves it cached but idle on gpu-0, so gpu-0 is
+    # eligible again: only loading or executing clips count toward the cap.
     scheduler.on_result(_result("req-1", "a1"))
     await scheduler.dispatch_once()
 
@@ -385,31 +424,31 @@ async def test_max_scenes_per_renderer_defers_cold_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_max_scenes_per_renderer_blocks_inactive_cached_scene() -> None:
+async def test_max_clips_per_renderer_blocks_inactive_cached_clip() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=4, num_renderers=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_scenes_per_renderer=2
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_clips_per_renderer=2
         ),
     )
     strategy = _affine_strategy(scheduler)
-    strategy.sync_scene_cache("gpu-0:50052", ["scene-A", "scene-B"])
+    strategy.sync_clip_cache("gpu-0:50052", ["clip-A", "clip-B"])
 
     await scheduler.submit_request(
-        "req-a", [_pending("a1", scene_id="scene-A", request_id="req-a")]
+        "req-a", [_pending("a1", clip_id="clip-A", request_id="req-a")]
     )
     await scheduler.submit_request(
-        "req-b1", [_pending("b1", scene_id="scene-B", request_id="req-b1")]
+        "req-b1", [_pending("b1", clip_id="clip-B", request_id="req-b1")]
     )
 
     scheduler.on_result(_result("req-b1", "b1"))
     await scheduler.submit_request(
-        "req-c", [_pending("c1", scene_id="scene-C", request_id="req-c")]
+        "req-c", [_pending("c1", clip_id="clip-C", request_id="req-c")]
     )
     await scheduler.submit_request(
-        "req-b2", [_pending("b2", scene_id="scene-B", request_id="req-b2")]
+        "req-b2", [_pending("b2", clip_id="clip-B", request_id="req-b2")]
     )
 
     assert [job.job_id for job in runtime.submitted_jobs] == ["a1", "b1", "c1"]
@@ -426,22 +465,22 @@ async def test_max_scenes_per_renderer_blocks_inactive_cached_scene() -> None:
 
 
 @pytest.mark.asyncio
-async def test_max_scenes_per_renderer_allows_active_cached_scene() -> None:
+async def test_max_clips_per_renderer_allows_active_cached_clip() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=2, num_renderers=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_scenes_per_renderer=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_clips_per_renderer=1
         ),
     )
-    _affine_strategy(scheduler).sync_scene_cache("gpu-0:50052", ["scene-A"])
+    _affine_strategy(scheduler).sync_clip_cache("gpu-0:50052", ["clip-A"])
 
     await scheduler.submit_request(
         "req-a",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-a"),
-            _pending("a2", scene_id="scene-A", request_id="req-a"),
+            _pending("a1", clip_id="clip-A", request_id="req-a"),
+            _pending("a2", clip_id="clip-A", request_id="req-a"),
         ],
     )
 
@@ -457,17 +496,17 @@ async def test_cached_affinity_chooses_least_loaded_matching_renderer() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=2),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=True),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=True),
     )
     strategy = _affine_strategy(scheduler)
-    strategy.sync_scene_cache("gpu-0:50052", ["scene-A", "scene-B"])
-    strategy.sync_scene_cache("gpu-1:50052", ["scene-A"])
+    strategy.sync_clip_cache("gpu-0:50052", ["clip-A", "clip-B"])
+    strategy.sync_clip_cache("gpu-1:50052", ["clip-A"])
 
     await scheduler.submit_request(
-        "req-1", [_pending("b1", scene_id="scene-B", request_id="req-1")]
+        "req-1", [_pending("b1", clip_id="clip-B", request_id="req-1")]
     )
     await scheduler.submit_request(
-        "req-2", [_pending("a1", scene_id="scene-A", request_id="req-2")]
+        "req-2", [_pending("a1", clip_id="clip-A", request_id="req-2")]
     )
 
     assert runtime.submitted_jobs[0].endpoints.renderer.address == "gpu-0:50052"
@@ -477,19 +516,19 @@ async def test_cached_affinity_chooses_least_loaded_matching_renderer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cold_scene_uses_at_most_one_rollout_per_renderer() -> None:
+async def test_cold_clip_uses_at_most_one_rollout_per_renderer() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=2),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=2
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=2
         ),
     )
 
     await scheduler.submit_request(
         "req-1",
-        [_pending(f"a{i}", scene_id="scene-A", request_id="req-1") for i in range(3)],
+        [_pending(f"a{i}", clip_id="clip-A", request_id="req-1") for i in range(3)],
     )
 
     assert [job.dispatch_kind for job in runtime.submitted_jobs] == [
@@ -506,27 +545,27 @@ async def test_cold_scene_uses_at_most_one_rollout_per_renderer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_earlier_scene_replicates_to_bound_before_later_scene_starts() -> None:
+async def test_earlier_clip_replicates_to_bound_before_later_clip_starts() -> None:
     runtime = _FakeRuntime()
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=1, num_renderers=3),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=2
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=2
         ),
     )
 
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
-            _pending("b1", scene_id="scene-B", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
+            _pending("b1", clip_id="clip-B", request_id="req-1"),
         ],
     )
 
-    # Scene-A arrived first, so it replicates to max_renderers_per_scene
-    # before scene-B gets its first location.
+    # Clip-A arrived first, so it replicates to max_renderers_per_clip
+    # before clip-B gets its first location.
     assert [(job.job_id, job.dispatch_kind) for job in runtime.submitted_jobs] == [
         ("a1", "cold_initial"),
         ("a2", "cold_replica"),
@@ -537,17 +576,17 @@ async def test_earlier_scene_replicates_to_bound_before_later_scene_starts() -> 
 
 
 @pytest.mark.asyncio
-async def test_cached_scene_full_starts_only_one_cold_replica() -> None:
+async def test_cached_clip_full_starts_only_one_cold_replica() -> None:
     runtime = _FakeRuntime()
     pools = _make_pools_multi_gpu(n_concurrent=2)
     scheduler = DaemonScheduler(
         pools=pools,
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=2
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=2
         ),
     )
-    _affine_strategy(scheduler).sync_scene_cache("gpu-0:50052", ["scene-A"])
+    _affine_strategy(scheduler).sync_clip_cache("gpu-0:50052", ["clip-A"])
     gpu0_slots = [
         pools["renderer"].try_acquire_for_address("gpu-0:50052") for _ in range(2)
     ]
@@ -555,7 +594,7 @@ async def test_cached_scene_full_starts_only_one_cold_replica() -> None:
 
     await scheduler.submit_request(
         "req-1",
-        [_pending(f"a{i}", scene_id="scene-A", request_id="req-1") for i in range(3)],
+        [_pending(f"a{i}", clip_id="clip-A", request_id="req-1") for i in range(3)],
     )
 
     assert [(job.job_id, job.dispatch_kind) for job in runtime.submitted_jobs] == [
@@ -576,15 +615,15 @@ async def test_failed_cold_rollout_allows_retry() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1
         ),
     )
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
         ],
     )
 
@@ -605,15 +644,15 @@ async def test_successful_cold_rollout_promotes_affinity_without_refresh() -> No
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1, cache_refresh_interval_s=None
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1, cache_refresh_interval_s=None
         ),
     )
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
         ],
     )
 
@@ -633,24 +672,24 @@ async def test_empty_cache_snapshot_does_not_clear_loading_location() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=2),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1
         ),
     )
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
         ],
     )
     first_address = runtime.submitted_jobs[0].endpoints.renderer.address
 
-    _affine_strategy(scheduler).sync_scene_cache(first_address, [])
+    _affine_strategy(scheduler).sync_clip_cache(first_address, [])
     await scheduler.dispatch_once()
     assert [job.job_id for job in runtime.submitted_jobs] == ["a1"]
 
-    _affine_strategy(scheduler).sync_scene_cache(first_address, ["scene-A"])
+    _affine_strategy(scheduler).sync_clip_cache(first_address, ["clip-A"])
     await scheduler.dispatch_once()
     assert [job.job_id for job in runtime.submitted_jobs] == ["a1", "a2"]
 
@@ -663,19 +702,19 @@ async def test_cache_snapshot_removes_optimistic_loaded_location() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1
         ),
     )
     await scheduler.submit_request(
-        "req-1", [_pending("a1", scene_id="scene-A", request_id="req-1")]
+        "req-1", [_pending("a1", clip_id="clip-A", request_id="req-1")]
     )
     first_address = runtime.submitted_jobs[0].endpoints.renderer.address
     scheduler.on_result(_result("req-1", "a1"))
 
-    _affine_strategy(scheduler).sync_scene_cache(first_address, [])
+    _affine_strategy(scheduler).sync_clip_cache(first_address, [])
     await scheduler.submit_request(
-        "req-2", [_pending("a2", scene_id="scene-A", request_id="req-2")]
+        "req-2", [_pending("a2", clip_id="clip-A", request_id="req-2")]
     )
 
     assert runtime.submitted_jobs[-1].dispatch_kind == "cold_initial"
@@ -684,7 +723,7 @@ async def test_cache_snapshot_removes_optimistic_loaded_location() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_service_reservation_does_not_mark_scene_loading() -> None:
+async def test_failed_service_reservation_does_not_mark_clip_loading() -> None:
     runtime = _FakeRuntime()
     pools = _make_pools_multi_gpu(n_concurrent=1)
     blocked_drivers = [pools["driver"].try_acquire() for _ in range(2)]
@@ -692,13 +731,13 @@ async def test_failed_service_reservation_does_not_mark_scene_loading() -> None:
     scheduler = DaemonScheduler(
         pools=pools,
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1
         ),
     )
 
     await scheduler.submit_request(
-        "req-1", [_pending("a1", scene_id="scene-A", request_id="req-1")]
+        "req-1", [_pending("a1", clip_id="clip-A", request_id="req-1")]
     )
     assert runtime.submitted_jobs == []
 
@@ -712,14 +751,14 @@ async def test_failed_service_reservation_does_not_mark_scene_loading() -> None:
 
 
 @pytest.mark.asyncio
-async def test_earlier_scene_cached_on_busy_renderer_replicates_first() -> None:
-    """Cold dispatch follows scene arrival order, not cache coverage.
+async def test_earlier_clip_cached_on_busy_renderer_replicates_first() -> None:
+    """Cold dispatch follows clip arrival order, not cache coverage.
 
-    Setup: gpu-0 has scene-A cached, gpu-1 has scene-B cached (via sync).
+    Setup: gpu-0 has clip-A cached, gpu-1 has clip-B cached (via sync).
     Block gpu-1, leaving gpu-0 (with A) free.
-    Submit jobs for scene-B (cached on busy gpu-1) and scene-C (new).
+    Submit jobs for clip-B (cached on busy gpu-1) and clip-C (new).
     Tier 1 fails (gpu-0 has A, not B or C).
-    Scene-B arrived first, so it replicates onto gpu-0 before scene-C
+    Clip-B arrived first, so it replicates onto gpu-0 before clip-C
     gets its first location.
     """
     runtime = _FakeRuntime()
@@ -727,21 +766,21 @@ async def test_earlier_scene_cached_on_busy_renderer_replicates_first() -> None:
     scheduler = DaemonScheduler(
         pools=pools,
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(enabled=True),
+        clip_affine_dispatch=ClipAffineDispatchConfig(enabled=True),
     )
-    _affine_strategy(scheduler).sync_scene_cache("gpu-0:50052", ["scene-A"])
-    _affine_strategy(scheduler).sync_scene_cache("gpu-1:50052", ["scene-B"])
+    _affine_strategy(scheduler).sync_clip_cache("gpu-0:50052", ["clip-A"])
+    _affine_strategy(scheduler).sync_clip_cache("gpu-1:50052", ["clip-B"])
 
     # Acquire gpu-1 slot directly to block it, then submit.
     slot = pools["renderer"].try_acquire_for_address("gpu-1:50052")
     assert slot is not None  # gpu-1 is now busy
 
-    # Submit scene-B (cached on busy gpu-1) and scene-C (new).
+    # Submit clip-B (cached on busy gpu-1) and clip-C (new).
     await scheduler.submit_request(
         "req-2",
         [
-            _pending("j3", scene_id="scene-B", request_id="req-2"),
-            _pending("j4", scene_id="scene-C", request_id="req-2"),
+            _pending("j3", clip_id="clip-B", request_id="req-2"),
+            _pending("j4", clip_id="clip-C", request_id="req-2"),
         ],
     )
 
@@ -775,11 +814,11 @@ async def test_warm_start_raises_on_unimplemented() -> None:
             )
         return None
 
-    with patch("alpasim_runtime.daemon.scheduler.get_loaded_scenes", _fake_get):
+    with patch("alpasim_runtime.daemon.scheduler.get_loaded_clips", _fake_get):
         scheduler = DaemonScheduler(
             pools=pools,
             runtime=runtime,
-            scene_affine_dispatch=SceneAffineDispatchConfig(
+            clip_affine_dispatch=ClipAffineDispatchConfig(
                 enabled=True, cache_refresh_interval_s=5.0
             ),
         )
@@ -809,23 +848,23 @@ async def test_cache_refresh_wakes_pending_affine_dispatch() -> None:
         if not refresh_started:
             return {}
         if address == "gpu-0:50052":
-            return {"scene-A": 1}
+            return {"clip-A": 1}
         return {}
 
-    with patch("alpasim_runtime.daemon.scheduler.get_loaded_scenes", _fake_get):
+    with patch("alpasim_runtime.daemon.scheduler.get_loaded_clips", _fake_get):
         scheduler = DaemonScheduler(
             pools=pools,
             runtime=runtime,
-            scene_affine_dispatch=SceneAffineDispatchConfig(
-                enabled=True, cache_refresh_interval_s=0.01, max_renderers_per_scene=1
+            clip_affine_dispatch=ClipAffineDispatchConfig(
+                enabled=True, cache_refresh_interval_s=0.01, max_renderers_per_clip=1
             ),
         )
         await scheduler.warm_start()
         await scheduler.submit_request(
             "req-1",
             [
-                _pending("a1", scene_id="scene-A", request_id="req-1"),
-                _pending("a2", scene_id="scene-A", request_id="req-1"),
+                _pending("a1", clip_id="clip-A", request_id="req-1"),
+                _pending("a2", clip_id="clip-A", request_id="req-1"),
             ],
         )
         assert [job.job_id for job in runtime.submitted_jobs] == ["a1"]
@@ -849,19 +888,19 @@ async def test_warm_cache_above_replica_limit_remains_usable() -> None:
     scheduler = DaemonScheduler(
         pools=_make_pools_multi_gpu(n_concurrent=1),
         runtime=runtime,
-        scene_affine_dispatch=SceneAffineDispatchConfig(
-            enabled=True, max_renderers_per_scene=1
+        clip_affine_dispatch=ClipAffineDispatchConfig(
+            enabled=True, max_renderers_per_clip=1
         ),
     )
     strategy = _affine_strategy(scheduler)
-    strategy.sync_scene_cache("gpu-0:50052", ["scene-A"])
-    strategy.sync_scene_cache("gpu-1:50052", ["scene-A"])
+    strategy.sync_clip_cache("gpu-0:50052", ["clip-A"])
+    strategy.sync_clip_cache("gpu-1:50052", ["clip-A"])
 
     await scheduler.submit_request(
         "req-1",
         [
-            _pending("a1", scene_id="scene-A", request_id="req-1"),
-            _pending("a2", scene_id="scene-A", request_id="req-1"),
+            _pending("a1", clip_id="clip-A", request_id="req-1"),
+            _pending("a2", clip_id="clip-A", request_id="req-1"),
         ],
     )
 

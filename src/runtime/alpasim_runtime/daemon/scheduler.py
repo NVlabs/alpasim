@@ -21,9 +21,9 @@ from alpasim_runtime.address_pool import (
     release_all,
     try_acquire_all,
 )
-from alpasim_runtime.config import BASE_SERVICE_NAMES, SceneAffineDispatchConfig
+from alpasim_runtime.config import ROLLOUT_SERVICE_NAMES, ClipAffineDispatchConfig
 from alpasim_runtime.daemon.request_store import RequestStore
-from alpasim_runtime.nre_introspection import get_loaded_scenes
+from alpasim_runtime.nre_introspection import get_loaded_clips
 from alpasim_runtime.worker.ipc import (
     AssignedRolloutJob,
     DispatchKind,
@@ -47,24 +47,24 @@ def _clear_retry_rollout_dir(pending_job: PendingRolloutJob, rollouts_dir: str) 
         return
 
     if (
-        Path(pending_job.scene_id).name != pending_job.scene_id
+        Path(pending_job.scene.scene_key).name != pending_job.scene.scene_key
         or Path(pending_job.session_uuid).name != pending_job.session_uuid
     ):
         raise ValueError(
             "Retry rollout scene and session identifiers must each be one path "
-            f"component: scene_id={pending_job.scene_id!r} "
+            f"component: scene_key={pending_job.scene.scene_key!r} "
             f"session_uuid={pending_job.session_uuid!r}"
         )
 
     rollouts_root = Path(rollouts_dir).resolve()
-    scene_dir = (rollouts_root / pending_job.scene_id).resolve()
+    scene_dir = (rollouts_root / pending_job.scene.scene_key).resolve()
     rollout_dir = scene_dir / pending_job.session_uuid
     resolved_rollout_dir = rollout_dir.resolve()
 
     if scene_dir.parent != rollouts_root or resolved_rollout_dir.parent != scene_dir:
         raise ValueError(
             "Retry rollout directory must be a direct child of the rollouts root "
-            f"and scene directory: scene_id={pending_job.scene_id!r} "
+            f"and scene directory: scene_key={pending_job.scene.scene_key!r} "
             f"session_uuid={pending_job.session_uuid!r}"
         )
     if rollout_dir.is_symlink():
@@ -117,7 +117,7 @@ class DispatchStrategy(Protocol):
     """Narrow interface for job-selection and pending-job bookkeeping.
 
     Two concrete implementations exist: ``FifoDispatch`` (strict submission
-    order) and ``SceneAffineDispatch`` (bounded cache-aware replication).
+    order) and ``ClipAffineDispatch`` (bounded cache-aware replication).
 
     Dispatch follows a two-phase reservation/commit protocol:
 
@@ -149,7 +149,7 @@ class DispatchStrategy(Protocol):
 
     def on_result(
         self,
-        scene_id: str,
+        clip_id: str,
         renderer_address: str,
         dispatch_kind: DispatchKind,
         success: bool,
@@ -195,7 +195,7 @@ class FifoDispatch:
 
     def on_result(
         self,
-        scene_id: str,
+        clip_id: str,
         renderer_address: str,
         dispatch_kind: DispatchKind,
         success: bool,
@@ -211,32 +211,32 @@ class FifoDispatch:
         pass
 
 
-class SceneAffineDispatch:
-    """Cache-aware dispatch with bounded per-scene renderer replication.
+class ClipAffineDispatch:
+    """Cache-aware dispatch with bounded per-clip renderer replication.
 
-    Pending jobs are queued per scene, and the strategy tracks the scene
+    Pending jobs are queued per clip, and the strategy tracks the clip
     "locations" of each renderer address: cache contents confirmed by NRE
-    introspection snapshots (``sync_scene_cache``) plus cold loads committed
+    introspection snapshots (``sync_clip_cache``) plus cold loads committed
     by this strategy that are still awaiting confirmation.
 
     ``try_reserve`` picks the next dispatch in two priority tiers:
 
     1. ``cached_affine``: a renderer whose confirmed cache holds a pending
-       scene and has active-scene headroom, so the rollout skips the cold load.
-       A scene already active on the renderer can reuse its existing headroom.
+       clip and has active-clip headroom, so the rollout skips the cold load.
+       A clip already active on the renderer can reuse its existing headroom.
        Among matches, the address with the most free slots wins, spreading work
        across replicas.
-    2. cold load: walk pending scenes in arrival order and cold-load the
-       first one with fewer than ``max_renderers_per_scene`` locations onto
+    2. cold load: walk pending clips in arrival order and cold-load the
+       first one with fewer than ``max_renderers_per_clip`` locations onto
        a renderer where it is absent.  The dispatch kind records whether the
-       load creates the scene's first location (``cold_initial``) or an
-       additional one (``cold_replica``).  Earlier-queued scenes replicate
-       up to the bound before later scenes get their first location, so a
-       later scene waits at most ``max_renderers_per_scene`` cold loads per
-       scene queued ahead of it.
+       load creates the clip's first location (``cold_initial``) or an
+       additional one (``cold_replica``).  Earlier-queued clips replicate
+       up to the bound before later clips get their first location, so a
+       later clip waits at most ``max_renderers_per_clip`` cold loads per
+       clip queued ahead of it.
 
-    All dispatches respect ``max_scenes_per_renderer`` when activating a scene.
-    Cold loads land on the least-loaded eligible renderer: fewest active scenes
+    All dispatches respect ``max_clips_per_renderer`` when activating a clip.
+    Cold loads land on the least-loaded eligible renderer: fewest active clips
     (loading or with in-flight rollouts) first, most free slots as tie-break.
     This keeps each renderer's working set within its NRE backend cache.
     """
@@ -245,95 +245,94 @@ class SceneAffineDispatch:
         self,
         *,
         renderer_pool: AddressPool,
-        max_renderers_per_scene: int,
-        max_scenes_per_renderer: int | None,
+        max_renderers_per_clip: int,
+        max_clips_per_renderer: int | None,
     ) -> None:
-        if max_renderers_per_scene <= 0:
-            raise ValueError("max_renderers_per_scene must be positive")
-        if max_scenes_per_renderer is not None and max_scenes_per_renderer <= 0:
-            raise ValueError("max_scenes_per_renderer must be positive")
+        if max_renderers_per_clip <= 0:
+            raise ValueError("max_renderers_per_clip must be positive")
+        if max_clips_per_renderer is not None and max_clips_per_renderer <= 0:
+            raise ValueError("max_clips_per_renderer must be positive")
         self._renderer_pool = renderer_pool
-        self._max_renderers_per_scene = max_renderers_per_scene
-        self._max_scenes_per_renderer = max_scenes_per_renderer
+        self._max_renderers_per_clip = max_renderers_per_clip
+        self._max_clips_per_renderer = max_clips_per_renderer
 
-        self._pending_by_scene: dict[str, deque[PendingRolloutJob]] = {}
+        self._pending_by_clip: dict[str, deque[PendingRolloutJob]] = {}
 
         # Successful introspection snapshots and committed cold loads respectively.
-        self._address_scenes: dict[str, set[str]] = {}
-        self._loading_addr_scenes: dict[str, set[str]] = defaultdict(set)
+        self._address_clips: dict[str, set[str]] = {}
+        self._loading_addr_clips: dict[str, set[str]] = defaultdict(set)
 
         # Last snapshot per address, kept only to log cache-change diffs.
         self._prev_snapshots: dict[str, frozenset[str]] = {}
 
-        # In-flight rollout counts per renderer address and scene.  A scene is
+        # In-flight rollout counts per renderer address and clip.  A clip is
         # "active" on an address while it is loading or has in-flight rollouts;
-        # idle cached scenes are evictable by NRE and do not count.
-        self._inflight_addr_scenes: dict[str, Counter[str]] = defaultdict(Counter)
+        # idle cached clips are evictable by NRE and do not count.
+        self._inflight_addr_clips: dict[str, Counter[str]] = defaultdict(Counter)
 
         self._dispatch_counts: Counter[DispatchKind] = Counter()
 
-    def sync_scene_cache(self, address: str, scene_ids: list[str]) -> bool:
+    def sync_clip_cache(self, address: str, clip_ids: list[str]) -> bool:
         """Apply one authoritative cache snapshot from a renderer address.
 
-        Replaces the cached-scene set for *address* with the snapshot; scenes
+        Replaces the cached-clip set for *address* with the snapshot; clips
         marked as loading that appear in it are confirmed and unmarked, while
-        loading scenes absent from it stay marked (the cold load is still in
+        loading clips absent from it stay marked (the cold load is still in
         flight — introspection only reports completed loads).
 
         Returns whether scheduler-relevant state changed: the cached set
-        differs, or a load was confirmed (which frees active-scene capacity
+        differs, or a load was confirmed (which frees active-clip capacity
         even when the cached set is unchanged), so the caller knows to run a
         dispatch pass.
         """
-        scenes = set(scene_ids)
-        previous = self._address_scenes.get(address, set())
-        loading = self._loading_addr_scenes.get(address)
-        confirmed_loading = set() if loading is None else loading & scenes
+        clips = set(clip_ids)
+        previous = self._address_clips.get(address, set())
+        loading = self._loading_addr_clips.get(address)
+        confirmed_loading = set() if loading is None else loading & clips
 
-        self._address_scenes[address] = scenes
+        self._address_clips[address] = clips
         if loading is not None:
             loading.difference_update(confirmed_loading)
             if not loading:
-                del self._loading_addr_scenes[address]
+                del self._loading_addr_clips[address]
 
-        return previous != scenes or bool(confirmed_loading)
+        return previous != clips or bool(confirmed_loading)
 
-    def cached_scenes(self, address: str) -> set[str]:
-        """Return the scenes known to be cached on *address*."""
-        return self._address_scenes.get(address, set())
+    def cached_clips(self, address: str) -> set[str]:
+        """Return the clips known to be cached on *address*."""
+        return self._address_clips.get(address, set())
 
-    def is_scene_cached(self, scene_id: str) -> bool:
-        """True if at least one address has *scene_id* in its cache."""
-        return any(scene_id in scenes for scenes in self._address_scenes.values())
+    def is_clip_cached(self, clip_id: str) -> bool:
+        """True if at least one address has *clip_id* in its cache."""
+        return any(clip_id in clips for clips in self._address_clips.values())
 
-    def _scene_locations(self, scene_id: str) -> set[str]:
+    def _clip_locations(self, clip_id: str) -> set[str]:
         return {
             address
             for address in self._renderer_pool.address_order
-            if scene_id in self._address_scenes.get(address, set())
-            or scene_id in self._loading_addr_scenes.get(address, set())
+            if clip_id in self._address_clips.get(address, set())
+            or clip_id in self._loading_addr_clips.get(address, set())
         }
 
-    def _active_scenes(self, address: str) -> set[str]:
-        """Distinct scenes loading or executing on one renderer address."""
-        return set(self._inflight_addr_scenes.get(address, {})) | (
-            self._loading_addr_scenes.get(address, set())
+    def _active_clips(self, address: str) -> set[str]:
+        """Distinct clips loading or executing on one renderer address."""
+        return set(self._inflight_addr_clips.get(address, {})) | (
+            self._loading_addr_clips.get(address, set())
         )
 
-    def _can_activate_scene(self, address: str, scene_id: str) -> bool:
-        """Whether dispatching *scene_id* preserves the active-scene limit."""
-        if self._max_scenes_per_renderer is None:
+    def _can_activate_clip(self, address: str, clip_id: str) -> bool:
+        """Whether dispatching *clip_id* preserves the active-clip limit."""
+        if self._max_clips_per_renderer is None:
             return True
-        active_scenes = self._active_scenes(address)
+        active_clips = self._active_clips(address)
         return (
-            scene_id in active_scenes
-            or len(active_scenes) < self._max_scenes_per_renderer
+            clip_id in active_clips or len(active_clips) < self._max_clips_per_renderer
         )
 
-    def _active_scene_counts(self) -> dict[str, int]:
-        """Distinct scenes loading or executing per renderer address."""
+    def _active_clip_counts(self) -> dict[str, int]:
+        """Distinct clips loading or executing per renderer address."""
         return {
-            address: len(self._active_scenes(address))
+            address: len(self._active_clips(address))
             for address in self._renderer_pool.address_order
         }
 
@@ -343,24 +342,24 @@ class SceneAffineDispatch:
         Returns whether scheduler-relevant state changed.  Raises
         ``IntrospectionNotSupportedError`` when *raise_on_unimplemented* is
         set and an NRE server returns UNIMPLEMENTED, allowing fast failure
-        at startup when the NRE image is incompatible with scene-affine
+        at startup when the NRE image is incompatible with clip-affine
         dispatch.
         """
         changed = False
         for address in sorted(self._renderer_pool.address_order):
-            loaded = await get_loaded_scenes(
+            loaded = await get_loaded_clips(
                 address, raise_on_unimplemented=raise_on_unimplemented
             )
             if loaded is None:
                 continue
-            scene_ids = list(loaded.keys())
-            current = frozenset(scene_ids)
+            clip_ids = list(loaded.keys())
+            current = frozenset(clip_ids)
             previous = self._prev_snapshots.get(address, frozenset())
             if current != previous:
                 added = sorted(current - previous)
                 removed = sorted(previous - current)
                 logger.info(
-                    "Cache changed on %s: +%d scene(s) %s, -%d scene(s) %s",
+                    "Cache changed on %s: +%d clip(s) %s, -%d clip(s) %s",
                     address,
                     len(added),
                     added or "[]",
@@ -368,91 +367,93 @@ class SceneAffineDispatch:
                     removed or "[]",
                 )
             self._prev_snapshots[address] = current
-            changed = self.sync_scene_cache(address, scene_ids) or changed
+            changed = self.sync_clip_cache(address, clip_ids) or changed
         return changed
 
     # -- pending-job bookkeeping --
 
     @property
     def pending_count(self) -> int:
-        return sum(len(q) for q in self._pending_by_scene.values())
+        return sum(len(q) for q in self._pending_by_clip.values())
 
     def add_pending(self, job: PendingRolloutJob) -> None:
-        scene = job.scene_id
-        if scene not in self._pending_by_scene:
-            self._pending_by_scene[scene] = deque()
-        self._pending_by_scene[scene].append(job)
+        clip_id = job.scene.source.source_id
+        if clip_id not in self._pending_by_clip:
+            self._pending_by_clip[clip_id] = deque()
+        self._pending_by_clip[clip_id].append(job)
 
-    def _pop_pending(self, scene_id: str) -> PendingRolloutJob:
-        q = self._pending_by_scene[scene_id]
+    def _pop_pending(self, clip_id: str) -> PendingRolloutJob:
+        q = self._pending_by_clip[clip_id]
         job = q.popleft()
         if not q:
-            del self._pending_by_scene[scene_id]
+            del self._pending_by_clip[clip_id]
         return job
 
     # -- job selection (two-tier priority) --
 
     def _best_affine_match(
         self,
-        address_scenes: dict[str, set[str]],
+        address_clips: dict[str, set[str]],
         free_slot_counts: dict[str, int],
     ) -> tuple[str, str] | None:
-        """Pair a pending scene with an address that already holds it.
+        """Pair a pending clip with an address that already holds it.
 
         Candidates are addresses that have a free slot and hold at least one
-        activatable pending scene.  Among those, the address with the most free
-        slots wins (spreading affine work across replicas); its scene is the
-        earliest-queued pending scene it holds.
+        activatable pending clip.  Among those, the address with the most free
+        slots wins (spreading affine work across replicas); its clip is the
+        earliest-queued pending clip it holds.
 
         Args:
-            address_scenes: Scene sets per renderer address to match pending
-                jobs against, e.g. ``_address_scenes`` for cached-scene
+            address_clips: Clip sets per renderer address to match pending
+                jobs against, e.g. ``_address_clips`` for cached-clip
                 affinity.
             free_slot_counts: Free slots per address, from ``try_reserve``.
 
         Returns:
-            The chosen ``(address, scene_id)`` pair, or ``None`` if no
-            address with a free slot holds an activatable pending scene.
+            The chosen ``(address, clip_id)`` pair, or ``None`` if no
+            address with a free slot holds an activatable pending clip.
         """
-        matching_scenes = {
+        matching_clips = {
             address: {
-                scene
-                for scene in address_scenes.get(address, {})
-                if scene in self._pending_by_scene
-                and self._can_activate_scene(address, scene)
+                clip_id
+                for clip_id in address_clips.get(address, {})
+                if clip_id in self._pending_by_clip
+                and self._can_activate_clip(address, clip_id)
             }
             for address in self._renderer_pool.address_order
             if free_slot_counts[address] > 0
         }
-        matching_scenes = {
-            address: scenes for address, scenes in matching_scenes.items() if scenes
+        matching_clips = {
+            address: clips for address, clips in matching_clips.items() if clips
         }
-        if not matching_scenes:
+        if not matching_clips:
             return None
-        address = max(matching_scenes, key=free_slot_counts.__getitem__)
-        scenes = matching_scenes[address]
-        scene = next(scene for scene in self._pending_by_scene if scene in scenes)
-        return address, scene
+        address = max(matching_clips, key=free_slot_counts.__getitem__)
+        clip_ids = matching_clips[address]
+        clip_id = next(
+            clip_id for clip_id in self._pending_by_clip if clip_id in clip_ids
+        )
+        return address, clip_id
 
     def _reserve_affine(
         self,
-        address_scenes: dict[str, set[str]],
+        address_clips: dict[str, set[str]],
         free_slot_counts: dict[str, int],
     ) -> PendingReservation | None:
-        """Reserve a slot for the best affine match in *address_scenes*.
+        """Reserve a slot for the best affine match in *address_clips*.
 
         Returns a ``cached_affine`` reservation for the head job of the
-        matched scene's queue, or ``None`` when no match exists.
+        matched clip's queue, or ``None`` when no match exists.
         """
-        match = self._best_affine_match(address_scenes, free_slot_counts)
+        match = self._best_affine_match(address_clips, free_slot_counts)
         if match is None:
             return None
-        address, scene = match
+        address, clip_id = match
         slot = self._renderer_pool.try_acquire_for_address(address)
         # _best_affine_match only returns addresses with free slots.
         assert slot is not None
         return PendingReservation(
-            self._pending_by_scene[scene][0],
+            self._pending_by_clip[clip_id][0],
             slot,
             dispatch_kind="cached_affine",
         )
@@ -464,7 +465,7 @@ class SceneAffineDispatch:
         cold_candidates: list[str],
         excluded_addresses: set[str],
     ) -> PendingReservation | None:
-        """Reserve a slot for *job* on a renderer that will cold-load its scene.
+        """Reserve a slot for *job* on a renderer that will cold-load its clip.
 
         Args:
             job: Pending job to reserve a slot for.
@@ -473,18 +474,18 @@ class SceneAffineDispatch:
             cold_candidates: Addresses with free slots from
                 ``try_reserve``, ranked best-first.
             excluded_addresses: Addresses to skip, typically ones that already
-                hold or are loading the job's scene.
+                hold or are loading the job's clip.
 
         Returns:
             The reservation with an acquired slot, or ``None`` if every
-            candidate is excluded or cannot activate the job's scene.
+            candidate is excluded or cannot activate the job's clip.
         """
         address = next(
             (
                 candidate
                 for candidate in cold_candidates
                 if candidate not in excluded_addresses
-                and self._can_activate_scene(candidate, job.scene_id)
+                and self._can_activate_clip(candidate, job.scene.source.source_id)
             ),
             None,
         )
@@ -499,38 +500,38 @@ class SceneAffineDispatch:
         )
 
     def try_reserve(self) -> PendingReservation | None:
-        # Slot and active-scene state only changes through commit/on_result,
+        # Slot and active-clip state only changes through commit/on_result,
         # so one snapshot serves the whole call.
         free_slot_counts = self._renderer_pool.free_slot_counts()
         if not any(free_slot_counts.values()):
             return None
 
         # Tier 1: confirmed cache affinity.
-        reservation = self._reserve_affine(self._address_scenes, free_slot_counts)
+        reservation = self._reserve_affine(self._address_clips, free_slot_counts)
         if reservation is not None:
             return reservation
 
         # Cold-load candidates: addresses with a free slot, ranked once for all
-        # cold-load attempts.  Scene-specific active-scene headroom is checked
-        # by _reserve_non_affine so an already-active scene can reuse its
+        # cold-load attempts.  Clip-specific active-clip headroom is checked
+        # by _reserve_non_affine so an already-active clip can reuse its
         # existing headroom.
-        active_scene_counts = self._active_scene_counts()
+        active_clip_counts = self._active_clip_counts()
         cold_candidates = sorted(
             (
                 address
                 for address in self._renderer_pool.address_order
                 if free_slot_counts[address] > 0
             ),
-            key=lambda addr: (active_scene_counts[addr], -free_slot_counts[addr]),
+            key=lambda addr: (active_clip_counts[addr], -free_slot_counts[addr]),
         )
         if not cold_candidates:
             return None
 
-        # Tier 2: cold-load scenes in arrival order, adding a location on a
-        # renderer where the scene is absent, up to the per-scene bound.
-        for scene, jobs in self._pending_by_scene.items():
-            locations = self._scene_locations(scene)
-            if len(locations) >= self._max_renderers_per_scene:
+        # Tier 2: cold-load clips in arrival order, adding a location on a
+        # renderer where the clip is absent, up to the per-clip bound.
+        for clip_id, jobs in self._pending_by_clip.items():
+            locations = self._clip_locations(clip_id)
+            if len(locations) >= self._max_renderers_per_clip:
                 continue
             reservation = self._reserve_non_affine(
                 jobs[0],
@@ -545,46 +546,43 @@ class SceneAffineDispatch:
     # -- dispatch / result hooks --
 
     def commit(self, reservation: PendingReservation) -> None:
-        self._pop_pending(reservation.job.scene_id)
-        self._inflight_addr_scenes[reservation.renderer_slot.address][
-            reservation.job.scene_id
-        ] += 1
+        clip_id = reservation.job.scene.source.source_id
+        self._pop_pending(clip_id)
+        self._inflight_addr_clips[reservation.renderer_slot.address][clip_id] += 1
         if reservation.dispatch_kind in {"cold_initial", "cold_replica"}:
-            self._loading_addr_scenes[reservation.renderer_slot.address].add(
-                reservation.job.scene_id
-            )
+            self._loading_addr_clips[reservation.renderer_slot.address].add(clip_id)
         self._dispatch_counts[reservation.dispatch_kind] += 1
 
     def on_result(
         self,
-        scene_id: str,
+        clip_id: str,
         renderer_address: str,
         dispatch_kind: DispatchKind,
         success: bool,
     ) -> None:
-        inflight = self._inflight_addr_scenes[renderer_address]
-        inflight[scene_id] -= 1
-        if inflight[scene_id] <= 0:
-            del inflight[scene_id]
+        inflight = self._inflight_addr_clips[renderer_address]
+        inflight[clip_id] -= 1
+        if inflight[clip_id] <= 0:
+            del inflight[clip_id]
         if not inflight:
-            del self._inflight_addr_scenes[renderer_address]
+            del self._inflight_addr_clips[renderer_address]
 
         if dispatch_kind not in {"cold_initial", "cold_replica"}:
             return
 
-        loading = self._loading_addr_scenes.get(renderer_address)
-        if loading is not None and scene_id in loading:
-            loading.remove(scene_id)
+        loading = self._loading_addr_clips.get(renderer_address)
+        if loading is not None and clip_id in loading:
+            loading.remove(clip_id)
             if not loading:
-                del self._loading_addr_scenes[renderer_address]
+                del self._loading_addr_clips[renderer_address]
         if success:
-            self._address_scenes.setdefault(renderer_address, set()).add(scene_id)
+            self._address_clips.setdefault(renderer_address, set()).add(clip_id)
 
     def drain_pending_request_ids(self) -> set[str]:
         ids = {
-            job.request_id for jobs in self._pending_by_scene.values() for job in jobs
+            job.request_id for jobs in self._pending_by_clip.values() for job in jobs
         }
-        self._pending_by_scene.clear()
+        self._pending_by_clip.clear()
         return ids
 
     # -- lifecycle --
@@ -595,7 +593,7 @@ class SceneAffineDispatch:
             affine_hits = self._dispatch_counts["cached_affine"]
             pct = affine_hits / total_dispatched * 100
             logger.info(
-                "Scene-affine dispatch summary: %d/%d affine hits (%.1f%%)",
+                "Clip-affine dispatch summary: %d/%d affine hits (%.1f%%)",
                 affine_hits,
                 total_dispatched,
                 pct,
@@ -624,7 +622,7 @@ class DaemonScheduler:
         *,
         pools: dict[str, AddressPool],
         runtime: WorkerRuntimeProtocol,
-        scene_affine_dispatch: SceneAffineDispatchConfig,
+        clip_affine_dispatch: ClipAffineDispatchConfig,
         max_rollout_retries: int = 2,
         rollouts_dir: str | None = None,
     ) -> None:
@@ -638,22 +636,24 @@ class DaemonScheduler:
         self._max_rollout_retries = max_rollout_retries
         self._rollouts_dir = rollouts_dir
         self._dispatch_lock = asyncio.Lock()
-        self._required_service_names = (*BASE_SERVICE_NAMES, "renderer")
+        self._required_service_names = tuple(
+            name for name in ROLLOUT_SERVICE_NAMES if name in pools
+        )
         self._request_store = RequestStore()
 
         renderer_pool = pools["renderer"]
-        if scene_affine_dispatch.enabled:
-            self._strategy: DispatchStrategy = SceneAffineDispatch(
+        if clip_affine_dispatch.enabled:
+            self._strategy: DispatchStrategy = ClipAffineDispatch(
                 renderer_pool=renderer_pool,
-                max_renderers_per_scene=scene_affine_dispatch.max_renderers_per_scene,
-                max_scenes_per_renderer=scene_affine_dispatch.max_scenes_per_renderer,
+                max_renderers_per_clip=clip_affine_dispatch.max_renderers_per_clip,
+                max_clips_per_renderer=clip_affine_dispatch.max_clips_per_renderer,
             )
-            logger.info("Scene-affine dispatch ENABLED for renderer")
+            logger.info("Clip-affine dispatch ENABLED for renderer")
         else:
             self._strategy = FifoDispatch(renderer_pool=renderer_pool)
-            logger.info("Scene-affine dispatch DISABLED")
+            logger.info("Clip-affine dispatch DISABLED")
 
-        self._cache_refresh_interval_s = scene_affine_dispatch.cache_refresh_interval_s
+        self._cache_refresh_interval_s = clip_affine_dispatch.cache_refresh_interval_s
         self._cache_refresh_task: asyncio.Task[None] | None = None
         self._in_flight: dict[str, _InFlightEntry] = {}
         self._request_pools: dict[str, dict[str, AddressPool]] = {}
@@ -663,11 +663,11 @@ class DaemonScheduler:
     async def warm_start(self) -> None:
         """Seed the strategy's cache from NRE servers and start the refresh loop.
 
-        Only meaningful for SceneAffineDispatch; no-op for FifoDispatch.
+        Only meaningful for ClipAffineDispatch; no-op for FifoDispatch.
         Raises ``IntrospectionNotSupportedError`` if the NRE image does not
         support GetLoadedScenes.
         """
-        if not isinstance(self._strategy, SceneAffineDispatch):
+        if not isinstance(self._strategy, ClipAffineDispatch):
             return
         if not self._pools["renderer"].address_order:
             return
@@ -678,13 +678,13 @@ class DaemonScheduler:
             self._cache_refresh_task = asyncio.create_task(self._cache_refresh_loop())
 
     async def _cache_refresh_loop(self) -> None:
-        """Periodically re-sync the scene cache from NRE and dispatch on changes.
+        """Periodically re-sync the clip cache from NRE and dispatch on changes.
 
         Cache changes (e.g. NRE evictions) can unblock pending jobs that no
         request or job-result event would re-dispatch, so a changed sync
         triggers a dispatch round.
         """
-        assert isinstance(self._strategy, SceneAffineDispatch)
+        assert isinstance(self._strategy, ClipAffineDispatch)
         assert self._cache_refresh_interval_s is not None
         logger.info(
             "Cache refresh loop started: interval=%.1fs",
@@ -708,8 +708,8 @@ class DaemonScheduler:
     ) -> None:
         """Register a new simulation request and enqueue its jobs for dispatch.
 
-        Jobs are grouped by scene_id before enqueuing so that consecutive
-        dispatches for the same scene benefit from renderer cache affinity.
+        Jobs are grouped by clip_id before enqueuing so that consecutive
+        dispatches for the same clip benefit from renderer cache affinity.
 
         If *driver_pool* is provided, it overrides the global driver pool for
         all jobs belonging to this request.  After enqueuing, immediately
@@ -795,12 +795,19 @@ class DaemonScheduler:
                 # try_acquire_all already released renderer_slot.
                 return
 
+            frame_quality_pool = pools.get("frame_quality")
+            frame_quality = (
+                frame_quality_pool.route_unreserved()
+                if frame_quality_pool is not None
+                else ServiceAddress("skip", skip=True)
+            )
+
             self._strategy.commit(reservation)
 
             assigned = AssignedRolloutJob(
                 request_id=job.request_id,
                 job_id=job.job_id,
-                scene_id=job.scene_id,
+                scene=job.scene,
                 rollout_spec_index=job.rollout_spec_index,
                 endpoints=ServiceEndpoints(
                     driver=acquired["driver"],
@@ -808,12 +815,13 @@ class DaemonScheduler:
                     physics=acquired["physics"],
                     trafficsim=acquired["trafficsim"],
                     controller=acquired["controller"],
+                    frame_quality=frame_quality,
                 ),
                 dispatch_kind=reservation.dispatch_kind,
                 scheduler_wait_seconds=max(0.0, monotonic() - job.enqueued_at),
                 session_uuid=job.session_uuid,
-                start_time_offset_us=job.start_time_offset_us,
                 session_seed=job.session_seed,
+                ego_history_bytes=job.ego_history_bytes,
             )
             self._runtime.submit_assigned_job(assigned)
             self._in_flight[assigned.job_id] = _InFlightEntry(
@@ -831,7 +839,7 @@ class DaemonScheduler:
         pending_job = entry.pending_job
         renderer_addr = entry.acquired["renderer"].address
         self._strategy.on_result(
-            pending_job.scene_id,
+            pending_job.scene.source.source_id,
             renderer_addr,
             entry.dispatch_kind,
             result.success,
@@ -840,7 +848,7 @@ class DaemonScheduler:
         release_all(entry.pools, entry.acquired)
 
         # INVALID_SCENE failures are deterministic: a retry reloads the same
-        # scene and fails identically, so don't waste attempts on them.
+        # clip and fails identically, so don't waste attempts on them.
         retryable = result.error_code != runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE
         if (
             not result.success
@@ -865,7 +873,7 @@ class DaemonScheduler:
             logger.warning(
                 "Retrying failed rollout: scene=%s failed_job=%s retry_job=%s "
                 "retry=%d/%d error=%s",
-                retry_job.scene_id,
+                retry_job.scene.scene_key,
                 result.job_id,
                 retry_job.job_id,
                 retry_job.retry_attempt,

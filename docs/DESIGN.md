@@ -26,6 +26,24 @@ communicate with a gRPC protocol defined in the [gRPC API](/src/grpc/).
 
 ![Alpasim architecture diagram](/docs/assets/images/alpasim-architecture.png)
 
+## Scene data model
+
+A **clip** is input data spanning a period of time, identified by `clip_id`.
+
+A **DataSource** describes the data used to construct a scene. `ClipDataSource`
+identifies a clip and pins its USDZ artifact UUID.
+
+A **scene** is a `DataSource` and a recording-relative `policy_start_us`. An
+integer selects the policy handoff timestamp. `AUTO` asks the runtime for the
+earliest valid handoff after its required ground-truth period.
+
+A **scene key** is `<source-id>@t0=<policy-start>`. It is derived from the scene
+and used for lookup, deduplication, paths, and labels.
+
+A **scene suite** is an ordered list of scenes selected together.
+
+A **rollout** is one simulation execution of a scene.
+
 ## Data flow of the simulation
 
 The diagram illustrates the logical flow of the simulation instance

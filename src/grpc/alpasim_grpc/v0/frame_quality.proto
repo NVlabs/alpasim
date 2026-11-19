@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 NVIDIA Corporation
+
+syntax = "proto3";
+
+package frame_quality;
+
+import "alpasim_grpc/v0/common.proto";
+
+service FrameQualityService {
+    rpc get_version(common.Empty) returns (common.VersionId);
+    rpc score_frame(FrameQualityRequest) returns (FrameQualityResponse);
+}
+
+message FrameQualityRequest {
+    fixed64 timestamp_us = 1;
+    bytes image_bytes = 2;
+    string session_uuid = 3;
+    string camera_logical_id = 4;
+}
+
+message FrameQualityResponse {
+    fixed64 timestamp_us = 1;
+    double score = 2;
+    string checkpoint_id = 3;
+    string checkpoint_sha256 = 4;
+    string session_uuid = 5;
+    string camera_logical_id = 6;
+}

@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass, replace
 
 import numpy as np
+from alpasim_grpc.v0 import common_pb2
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
     PhysicsUpdateMode,
@@ -20,12 +21,16 @@ from alpasim_runtime.config import (
     SimulationConfig,
     VehicleConfig,
 )
+from alpasim_runtime.ego_masks import EgoMaskOverride
 from alpasim_runtime.errors import InvalidSceneError
+from alpasim_runtime.nav_route import NavRouteLibrary, RouteNavigator
 from alpasim_runtime.services.renderer import RendererService
 from alpasim_runtime.services.sensorsim_service import ImageFormat
-from alpasim_utils.geometry import Pose, Trajectory
+from alpasim_utils.geometry import Pose, Trajectory, trajectory_from_grpc
 from alpasim_utils.scenario import AABB, Rig, TrafficObject, TrafficObjects
 from alpasim_utils.scene_data_source import SceneDataSource
+from alpasim_utils.scene_timing import derive_clip_start_offset_us
+from alpasim_utils.types import T0_AUTO, Scene, scene_to_proto
 from trajdata.maps import VectorMap
 
 logger = logging.getLogger(__name__)
@@ -64,12 +69,32 @@ def get_ds_rig_to_aabb_center_transform(vehicle_config: VehicleConfig) -> Pose:
     )
 
 
+def _synchronized_first_camera_frame_ranges(
+    camera_configs: list[RuntimeCameraConfig],
+    recorded_ranges: dict[str, range],
+    render_start_us: int,
+) -> dict[str, range]:
+    """Place each first exposure at one render anchor."""
+    synchronized_ranges: dict[str, range] = {}
+    for camera_cfg in camera_configs:
+        recorded_range = recorded_ranges[camera_cfg.logical_id]
+        duration_us = camera_cfg.shutter_duration_us or (
+            recorded_range.stop - recorded_range.start
+        )
+        synchronized_ranges[camera_cfg.logical_id] = range(
+            render_start_us - duration_us,
+            render_start_us,
+        )
+    return synchronized_ranges
+
+
 def _build_rollout_timing(
     simulation_config: SimulationConfig,
     rig: Rig,
     camera_configs: list[RuntimeCameraConfig],
     *,
     renderer_service: RendererService,
+    explicit_render_start_us: int | None = None,
 ) -> RolloutTiming:
     """Derive the rollout timing anchors from the (possibly clipped) rig.
 
@@ -89,12 +114,26 @@ def _build_rollout_timing(
         first_camera_frame_ranges_us = rig.first_camera_frame_ranges_us(
             camera_logical_ids
         )
-        render_start_us = rig.first_camera_frame_end_us(camera_logical_ids)
+        render_start_us = (
+            explicit_render_start_us
+            if explicit_render_start_us is not None
+            else rig.first_camera_frame_end_us(camera_logical_ids)
+        )
     else:
         first_camera_frame_ranges_us = {}
-        render_start_us = rig.trajectory.time_range_us.start
+        render_start_us = (
+            explicit_render_start_us
+            if explicit_render_start_us is not None
+            else rig.trajectory.time_range_us.start
+        )
 
-    if simulation_config.assert_zero_decision_delay and camera_configs:
+    if explicit_render_start_us is not None and camera_configs:
+        first_camera_frame_ranges_us = _synchronized_first_camera_frame_ranges(
+            camera_configs,
+            first_camera_frame_ranges_us,
+            render_start_us,
+        )
+    elif simulation_config.assert_zero_decision_delay and camera_configs:
         for camera_cfg in camera_configs:
             first_camera_frame_ranges_us[camera_cfg.logical_id] = range(
                 render_start_us - camera_cfg.shutter_duration_us,
@@ -146,6 +185,84 @@ def _build_rollout_timing(
     )
 
 
+def _prepare_fork_ego_history(
+    *,
+    ego_history_bytes: bytes,
+    timing: RolloutTiming,
+    recording_range_us: range,
+    control_timestep_us: int,
+    scene_key: str,
+) -> Trajectory:
+    """Parse and align the parent rollout's ego history for a fork."""
+    fork_timestamp_us = timing.closed_loop_start_us
+    if fork_timestamp_us not in recording_range_us:
+        raise InvalidSceneError(
+            scene_key,
+            "Fork timestamp is outside the recording",
+        )
+
+    try:
+        history = trajectory_from_grpc(
+            common_pb2.Trajectory.FromString(ego_history_bytes)
+        )
+    except ValueError as exc:
+        raise InvalidSceneError(scene_key, "ego_history is invalid") from exc
+    if len(history) < 2:
+        raise InvalidSceneError(
+            scene_key, "ego_history must contain at least two poses"
+        )
+    if (
+        not np.isfinite(history.positions).all()
+        or not np.isfinite(history.quaternions).all()
+    ):
+        raise InvalidSceneError(
+            scene_key, "ego_history contains a non-finite pose value"
+        )
+
+    history_start_us = int(history.timestamps_us[0])
+    history_end_us = int(history.timestamps_us[-1])
+    if history_end_us != fork_timestamp_us:
+        raise InvalidSceneError(
+            scene_key,
+            "ego_history must end at the policy start",
+        )
+    if history_start_us < recording_range_us.start:
+        raise InvalidSceneError(
+            scene_key,
+            "ego_history starts before the recording",
+        )
+    if history_start_us > timing.egomotion_context_start_us:
+        raise InvalidSceneError(
+            scene_key,
+            "ego_history does not cover the warm-up",
+        )
+    max_gap_us = int(np.diff(history.timestamps_us).max())
+    if max_gap_us > control_timestep_us:
+        raise InvalidSceneError(
+            scene_key,
+            "ego_history is too sparse",
+        )
+
+    # Preserve the complete recorded parent history, not only the rendered
+    # warm-up window. The renderer needs just ``force_gt_duration_us`` of
+    # frames, but Alpamayo's first policy call consumes a longer egomotion
+    # sampling grid. Add the exact render boundary without discarding the
+    # earlier parent poses that seed that model input.
+    timestamps_us = history.timestamps_us
+    sample_timestamps_us = np.unique(
+        np.concatenate(
+            [
+                np.array(
+                    [timing.egomotion_context_start_us, fork_timestamp_us],
+                    dtype=np.uint64,
+                ),
+                timestamps_us,
+            ]
+        )
+    )
+    return history.interpolate(sample_timestamps_us)
+
+
 @dataclass
 class UnboundRollout:
     """Metadata for a single rollout on a scene.
@@ -158,7 +275,7 @@ class UnboundRollout:
     """
 
     rollout_uuid: str
-    scene_id: str
+    scene: Scene
     gt_ego_trajectory: Trajectory
     traffic_objs: TrafficObjects
     version_ids: RolloutMetadata.VersionIds
@@ -189,7 +306,7 @@ class UnboundRollout:
     first_camera_frame_ranges_us: dict[str, range]
     force_gt_period: range
     image_format: ImageFormat
-    ego_mask_rig_config_id: str
+    ego_mask_rig_config_id: str | None
     assert_zero_decision_delay: bool
     transform_ego_coords_ds_to_aabb: Pose
     ego_aabb: AABB
@@ -197,19 +314,34 @@ class UnboundRollout:
     route_generator_type: RouteGeneratorType
     route_start_offset_m: float
     send_recording_ground_truth: bool
+    send_vectorized_observation: bool
+    write_asl: bool
     nre_runid: str
     nre_version: str
     nre_uuid: str
     vehicle_config: VehicleConfig
 
+    # Executed ego poses from a parent rollout, covering renderer/policy warm-up
+    # through the fork point. None identifies an ordinary recording-GT rollout.
+    fork_ego_history: Trajectory | None = None
+
     vector_map: VectorMap | None = None
     follow_log: str | None = None
+
+    # Recorded (position-based) navigation instructions; None unless the
+    # navigation source is ``recorded``.
+    route_navigator: RouteNavigator | None = None
+    # Send route-geometry navigation text (source ``geometry``); needs a route
+    # generator, otherwise the driver runs without navigation.
+    geometry_navigation: bool = False
 
     # Actors filtered out from simulation but still present in USDZ; we keep
     # a lowered-to-ground trajectory so we can override their rendering.
     hidden_traffic_objs: TrafficObjects | None = None
 
     render_bundling: RenderBundling = RenderBundling.NONE
+    # None preserves global bank behavior; a list is a validated per-clip selection.
+    ego_mask_camera_logical_ids: list[str] | None = None
 
     # Session seed shared by this rollout's driver and traffic sessions;
     # 0 ⇒ each service picks a random one (today's behaviour).
@@ -218,28 +350,98 @@ class UnboundRollout:
     @staticmethod
     def create(
         simulation_config: SimulationConfig,
-        scene_id: str,
+        scene: Scene,
         version_ids: RolloutMetadata.VersionIds,
         data_source: SceneDataSource,
         rollouts_dir: str,
         renderer_service: RendererService,
         session_uuid: str | None = None,
-        start_time_offset_us: int = 0,
         session_seed: int = 0,
+        ego_history_bytes: bytes | None = None,
+        nav_routes: NavRouteLibrary | None = None,
+        ego_mask_overrides: dict[str, EgoMaskOverride] | None = None,
     ) -> UnboundRollout:
-        """Create UnboundRollout from SceneDataSource.
+        """Create an unbound rollout from a scene and its loaded data source.
 
-        ``start_time_offset_us`` drops the first microseconds of the recording
-        so the rollout begins that far into the clip; the rest of the timing is
-        derived as if the recording were that much shorter.
+        A numeric ``policy_start_us`` sets the render anchor to the recording start
+        plus ``policy_start_us - force_gt_duration_us``. ``AUTO`` uses the rig's
+        first-frame end for the configured cameras, or the trajectory start when no
+        cameras are configured.
         """
+        scene_key = scene.scene_key
+        ego_mask_rig_config_id = simulation_config.ego_mask_rig_config_id
+        ego_mask_camera_logical_ids = None
+        if (
+            simulation_config.ego_mask_overrides_file is not None
+            and ego_mask_overrides is None
+        ):
+            raise ValueError(
+                "Ego mask overrides must be loaded before creating rollouts"
+            )
+        if ego_mask_overrides is not None:
+            override = ego_mask_overrides.get(scene.source.source_id)
+            if override is not None:
+                configured_cameras = {
+                    cam.logical_id for cam in simulation_config.cameras
+                }
+                ego_mask_rig_config_id = override.rig_config_id
+                ego_mask_camera_logical_ids = [
+                    camera
+                    for camera in override.camera_logical_ids
+                    if camera in configured_cameras
+                ]
+                if not ego_mask_camera_logical_ids:
+                    logger.warning(
+                        "Ego mask override for %s (bank %s) applies no patch: "
+                        "listed cameras %s do not intersect configured cameras %s",
+                        scene.source.source_id,
+                        override.rig_config_id,
+                        override.camera_logical_ids,
+                        sorted(configured_cameras),
+                    )
+        recording_start_us = data_source.rig.trajectory.time_range_us.start
         camera_configs = list(simulation_config.cameras)
         renderer_service.validate_timing_alignment(simulation_config)
-        rig = (
-            data_source.rig.clip_start(start_time_offset_us)
-            if start_time_offset_us
-            else data_source.rig
-        )
+        try:
+            clip_start_offset_us = derive_clip_start_offset_us(
+                scene.policy_start_us,
+                simulation_config.force_gt_duration_us,
+            )
+            explicit_render_start_us: int | None = None
+            if clip_start_offset_us is None:
+                rig = data_source.rig
+            else:
+                explicit_render_start_us = recording_start_us + clip_start_offset_us
+                context_start_us = explicit_render_start_us
+                if camera_configs:
+                    recorded_ranges = data_source.rig.first_camera_frame_ranges_us(
+                        camera_cfg.logical_id for camera_cfg in camera_configs
+                    )
+                    explicit_ranges = _synchronized_first_camera_frame_ranges(
+                        camera_configs,
+                        recorded_ranges,
+                        explicit_render_start_us,
+                    )
+                    context_start_us = min(
+                        frame_range.start for frame_range in explicit_ranges.values()
+                    )
+                if context_start_us < recording_start_us:
+                    raise InvalidSceneError(
+                        scene_key,
+                        "Explicit-T0 scene does not provide enough camera exposure "
+                        "history: "
+                        f"policy_start_us={scene.policy_start_us}, "
+                        f"force_gt_duration_us={simulation_config.force_gt_duration_us}, "
+                        f"required_context_start_us={context_start_us}, "
+                        f"recording_start_us={recording_start_us}",
+                    )
+                trajectory = data_source.rig.trajectory.clip(
+                    context_start_us,
+                    data_source.rig.trajectory.time_range_us.stop,
+                )
+                rig = replace(data_source.rig, trajectory=trajectory)
+        except ValueError as exc:
+            raise InvalidSceneError(scene_key, str(exc)) from exc
         # A clip that is too short — natively or after the start offset — cannot
         # host a rollout. Surface it as a deterministic (non-retryable) scene
         # error rather than the raw ValueError from timing construction.
@@ -249,13 +451,58 @@ class UnboundRollout:
                 rig,
                 camera_configs,
                 renderer_service=renderer_service,
+                explicit_render_start_us=explicit_render_start_us,
             )
         except ValueError as exc:
             detail = str(exc)
-            if start_time_offset_us:
-                detail = f"{detail} (start_time_offset_us={start_time_offset_us})"
-            raise InvalidSceneError(scene_id, detail) from exc
+            if scene.policy_start_us != T0_AUTO:
+                detail = (
+                    f"{detail} (policy_start_us={scene.policy_start_us}, "
+                    f"clip_start_offset_us={clip_start_offset_us})"
+                )
+            raise InvalidSceneError(scene_key, detail) from exc
+        # A fork may start too late in the recording for the configured horizon.
+        # It then runs the steps that ``_build_rollout_timing`` fits before the
+        # recording end; the post-handoff check below still requires one.
+        if (
+            scene.policy_start_us != T0_AUTO
+            and ego_history_bytes is None
+            and timing.n_sim_steps != simulation_config.n_sim_steps
+        ):
+            raise InvalidSceneError(
+                scene_key,
+                "Explicit-T0 scene requires the full configured horizon: "
+                f"expected {simulation_config.n_sim_steps} steps, got "
+                f"{timing.n_sim_steps}",
+            )
         gt_ego_trajectory = rig.trajectory
+        if (
+            ego_history_bytes is not None
+            and not simulation_config.skip_driver_during_force_gt
+        ):
+            raise InvalidSceneError(
+                scene_key,
+                "ego_history requires skip_driver_during_force_gt=true",
+            )
+        if (
+            ego_history_bytes is not None
+            and timing.end_timestamp_us <= timing.closed_loop_start_us
+        ):
+            raise InvalidSceneError(
+                scene_key,
+                "ego_history requires at least one post-handoff control step",
+            )
+        fork_ego_history = (
+            _prepare_fork_ego_history(
+                ego_history_bytes=ego_history_bytes,
+                timing=timing,
+                recording_range_us=data_source.rig.trajectory.time_range_us,
+                control_timestep_us=simulation_config.control_timestep_us,
+                scene_key=scene_key,
+            )
+            if ego_history_bytes is not None
+            else None
+        )
 
         # Filter out objects that are not in the time window
         all_objs_in_window = data_source.traffic_objects.clip_trajectories(
@@ -303,7 +550,8 @@ class UnboundRollout:
             vehicle = rig.vehicle_config
         else:
             raise InvalidSceneError(
-                scene_id, "no vehicle config in simulation config or rig"
+                scene_key,
+                "no vehicle config in simulation config or rig",
             )
 
         ego_aabb = AABB(
@@ -318,13 +566,27 @@ class UnboundRollout:
             raise
         except Exception as exc:
             raise InvalidSceneError(
-                scene_id, f"failed to load vector map: {exc}"
+                scene_key, f"failed to load vector map: {exc}"
             ) from exc
+
+        route_navigator = None
+        if nav_routes is not None:
+            try:
+                # The whole recording, so heading look-backs reach before an
+                # explicit T0's cropped trajectory.
+                route_navigator = RouteNavigator(
+                    nav_routes.route_index_for_clip(scene.source.source_id),
+                    data_source.rig.trajectory,
+                )
+            except (KeyError, ValueError) as exc:
+                raise InvalidSceneError(
+                    scene_key, f"navigation instructions unavailable: {exc}"
+                ) from exc
 
         return UnboundRollout(
             rollout_uuid=session_uuid or str(uuid.uuid1()),
             session_seed=session_seed,
-            scene_id=scene_id,
+            scene=scene,
             gt_ego_trajectory=gt_ego_trajectory,
             traffic_objs=traffic_objects,
             n_sim_steps=timing.n_sim_steps,
@@ -337,13 +599,14 @@ class UnboundRollout:
             skip_driver_during_force_gt=simulation_config.skip_driver_during_force_gt,
             use_cached_frames_during_force_gt=(
                 simulation_config.force_gt_frame_cache.enabled
+                and fork_ego_history is None
             ),
             force_gt_frame_cache_extra_key=(
                 simulation_config.force_gt_frame_cache.extra_key
             ),
             control_timestep_us=simulation_config.control_timestep_us,
             follow_log=None,
-            save_path_root=os.path.join(rollouts_dir, scene_id),
+            save_path_root=os.path.join(rollouts_dir, scene_key),
             version_ids=version_ids,
             camera_configs=camera_configs,
             first_camera_frame_ranges_us=timing.first_camera_frame_ranges_us,
@@ -352,7 +615,8 @@ class UnboundRollout:
             image_format={"jpeg": ImageFormat.JPEG, "png": ImageFormat.PNG}[
                 simulation_config.image_format
             ],
-            ego_mask_rig_config_id=simulation_config.ego_mask_rig_config_id,
+            ego_mask_rig_config_id=ego_mask_rig_config_id,
+            ego_mask_camera_logical_ids=ego_mask_camera_logical_ids,
             assert_zero_decision_delay=simulation_config.assert_zero_decision_delay,
             transform_ego_coords_ds_to_aabb=get_ds_rig_to_aabb_center_transform(
                 vehicle
@@ -366,17 +630,22 @@ class UnboundRollout:
             route_generator_type=simulation_config.route_generator_type,
             route_start_offset_m=simulation_config.route_start_offset_m,
             send_recording_ground_truth=simulation_config.send_recording_ground_truth,
+            send_vectorized_observation=simulation_config.send_vectorized_observation,
+            write_asl=simulation_config.write_asl,
             vehicle_config=vehicle,
+            fork_ego_history=fork_ego_history,
             vector_map=vector_map,
             hidden_traffic_objs=hidden_traffic_objs,
             render_bundling=simulation_config.render_bundling,
+            route_navigator=route_navigator,
+            geometry_navigation=(
+                simulation_config.nav_instruction.source == "geometry"
+            ),
         )
 
     def get_log_metadata(self) -> RolloutMetadata.SessionMetadata:
         return RolloutMetadata.SessionMetadata(
             session_uuid=self.rollout_uuid,
-            scene_id=self.scene_id,
-            batch_size=1,  # Always 1 since we only have one rollout
             n_sim_steps=self.n_sim_steps,
             start_timestamp_us=self.egomotion_context_start_us,
             render_start_timestamp_us=self.render_start_timestamp_us,
@@ -384,4 +653,5 @@ class UnboundRollout:
             nre_runid=self.nre_runid,
             nre_version=self.nre_version,
             nre_uuid=self.nre_uuid,
+            scene=scene_to_proto(self.scene),
         )

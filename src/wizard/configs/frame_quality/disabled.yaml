@@ -1,0 +1,10 @@
+# @package _global_
+
+services:
+  frame_quality: null
+
+runtime:
+  endpoints:
+    frame_quality:
+      skip: true
+      n_concurrent_rollouts: 0

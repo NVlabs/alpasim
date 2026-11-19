@@ -79,7 +79,7 @@ class PhysicsEvent(RecurringEvent):
         traj_aabb = traj.transform(ds_to_aabb, is_relative=True)
 
         corrected_aabb, _ = await physics.ground_intersection(
-            scene_id=state.unbound.scene_id,
+            clip_id=state.unbound.scene.source.source_id,
             delta_start_us=ctx.step_start_us,
             delta_end_us=ctx.target_time_us,
             ego_trajectory_aabb=traj_aabb,
@@ -145,7 +145,7 @@ class PhysicsEvent(RecurringEvent):
 
             gt_traffic_poses_future = traffic_poses_future
             _, physics_traffic_poses_future = await physics.ground_intersection(
-                scene_id=state.unbound.scene_id,
+                clip_id=state.unbound.scene.source.source_id,
                 delta_start_us=self.timestamp_us,
                 delta_end_us=target_time_us,
                 ego_trajectory_aabb=ego_traj_aabb,

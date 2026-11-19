@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import subprocess
 from contextlib import ExitStack
 from pathlib import Path
@@ -22,6 +24,7 @@ def _context(
     dry_run: bool = False,
     enable_mps: bool = False,
     node_local_sqsh_cache_dir: str | None = None,
+    gpu_allocation: tuple[int, ...] = (0, 1),
 ) -> WizardContext:
     cfg = SimpleNamespace(
         wizard=SimpleNamespace(
@@ -34,6 +37,7 @@ def _context(
             sqshcaches=[],
             slurm_cpu_bind_none=False,
             enable_mps=enable_mps,
+            mps_pipe_dir="/tmp/nvidia-mps-123" if enable_mps else None,
             fuse_dir="/cache/fuse-tools",
             node_local_sqsh_cache_dir=node_local_sqsh_cache_dir,
             node_local_sqsh_cache_max_gib=500,
@@ -49,8 +53,8 @@ def _context(
             process_exporter=6102,
             dcgm_exporter=6103,
         ),
-        artifact_list=[],
-        num_gpus=0,
+        gpu_allocation=gpu_allocation,
+        scene_list=[],
     )
 
 
@@ -60,6 +64,7 @@ def _deployment(
     dry_run: bool = False,
     enable_mps: bool = False,
     node_local_sqsh_cache_dir: str | None = None,
+    gpu_allocation: tuple[int, ...] = (0, 1),
 ) -> SlurmEnrootDeployment:
     deployment = SlurmEnrootDeployment.__new__(SlurmEnrootDeployment)
     deployment.context = _context(
@@ -67,8 +72,16 @@ def _deployment(
         dry_run=dry_run,
         enable_mps=enable_mps,
         node_local_sqsh_cache_dir=node_local_sqsh_cache_dir,
+        gpu_allocation=gpu_allocation,
     )
     deployment._staged_sqsh_paths = {}
+    deployment._gpu_uuids = None
+    deployment._command_rc_path = None
+    deployment.container_set = SimpleNamespace(
+        sim=[],
+        prometheus=SimpleNamespace(gpu=None),
+        runtime=None,
+    )
     return deployment
 
 
@@ -93,7 +106,19 @@ def test_enroot_run_uses_sqsh_and_preserves_container_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deployment = _deployment(tmp_path, enable_mps=True)
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="\n".join(f"{index}, GPU-{index}" for index in range(8)),
+        ),
+    )
+    deployment = _deployment(
+        tmp_path,
+        enable_mps=True,
+        gpu_allocation=(4, 5, 6, 7),
+    )
     container = _container(deployment, gpu=2)
     container.service_config.remap_root = True
     container.environments = ["HF_TOKEN", "HOME=/tmp"]
@@ -116,6 +141,14 @@ def test_enroot_run_uses_sqsh_and_preserves_container_settings(
         "enroot start --rw"
     )
     assert " --root " in command
+    # Enroot 4 would pass the command to the image entrypoint; the start script runs it.
+    rc_path = tmp_path / "enroot-configs" / "command-rc.sh"
+    assert f" --rc={rc_path} " in command
+    assert rc_path.read_text().endswith('exec "$@"\n')
+    # Later launches reuse the script instead of rewriting it under starting services.
+    rc_path.write_text("in use")
+    assert f" --rc={rc_path} " in deployment._to_enroot_run(container, RunMode.ONESHOT)
+    assert rc_path.read_text() == "in use"
     assert "srun" not in command
     assert "ENROOT_DATA_PATH" not in command
     assert "--conf=" not in command
@@ -127,12 +160,71 @@ def test_enroot_run_uses_sqsh_and_preserves_container_settings(
     assert "--env=HF_TOKEN" in command
     assert "--env=HOME=/tmp" in command
     assert "--env=SLURM_JOB_ID" in command
-    assert "--env=CUDA_VISIBLE_DEVICES=2" in command
-    assert "--env=NVIDIA_VISIBLE_DEVICES=all" in command
+    assert "ALPASIM_PHYSICAL_GPU_INDEX" not in command
+    assert "--env=CUDA_VISIBLE_DEVICES=GPU-6" in command
+    assert "--env=NVIDIA_VISIBLE_DEVICES=GPU-6" in command
     assert "--env=CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps-123" in command
     assert "cd /workspace && echo $HOME" in command
     assert "/cache/driver.sqsh" in command
     assert f"> {tmp_path}/txt-logs/out-123-attempt-0-driver-0-log.txt 2>&1" in command
+
+
+def test_enroot_run_resolves_gpu_uuid_from_a_renumbered_multi_gpu_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nvidia_smi_calls = []
+
+    def fake_nvidia_smi(*args, **kwargs):
+        nvidia_smi_calls.append(args[0])
+        return subprocess.CompletedProcess(
+            args[0], 0, stdout="0, GPU-physical-4\n1, GPU-physical-6\n"
+        )
+
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.subprocess.run",
+        fake_nvidia_smi,
+    )
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: "/cache/driver.sqsh",
+    )
+    deployment = _deployment(tmp_path, gpu_allocation=(4, 6))
+
+    first_command = deployment._to_enroot_run(
+        _container(deployment, gpu=0), RunMode.ONESHOT
+    )
+    second_command = deployment._to_enroot_run(
+        _container(deployment, gpu=1), RunMode.ONESHOT
+    )
+
+    assert "--env=NVIDIA_VISIBLE_DEVICES=GPU-physical-4" in first_command
+    assert "--env=NVIDIA_VISIBLE_DEVICES=GPU-physical-6" in second_command
+    assert "--env=CUDA_VISIBLE_DEVICES=GPU-physical-4" in first_command
+    assert "--env=CUDA_VISIBLE_DEVICES=GPU-physical-6" in second_command
+    assert nvidia_smi_calls == [
+        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"]
+    ]
+
+
+def test_enroot_run_rejects_an_ambiguous_gpu_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="4, GPU-physical-4\n7, GPU-outside-allocation\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: "/cache/driver.sqsh",
+    )
+    deployment = _deployment(tmp_path, gpu_allocation=(4, 5))
+
+    with pytest.raises(RuntimeError, match="Cannot reconcile Slurm GPU allocation"):
+        deployment._to_enroot_run(_container(deployment, gpu=0), RunMode.ONESHOT)
 
 
 def test_enroot_runtime_paths_are_isolated_per_service(tmp_path: Path) -> None:
@@ -168,7 +260,12 @@ def test_enroot_starts_process_exporter_on_host(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deployment = _deployment(tmp_path)
+    deployment = _deployment(tmp_path, gpu_allocation=(4, 6))
+    deployment.container_set.sim = [
+        SimpleNamespace(gpu=0),
+        SimpleNamespace(gpu=1),
+        SimpleNamespace(gpu=1),
+    ]
     process = MagicMock(spec=subprocess.Popen)
     process.poll.return_value = None
     commands = []
@@ -178,11 +275,11 @@ def test_enroot_starts_process_exporter_on_host(
         return process
 
     monkeypatch.setattr(
-        "alpasim_wizard.deployment.slurm_enroot.dispatch_background",
+        "alpasim_wizard.deployment.slurm.dispatch_background",
         fake_dispatch,
     )
     monkeypatch.setattr(
-        "alpasim_wizard.deployment.slurm_enroot.terminate_process",
+        "alpasim_wizard.deployment.slurm.terminate_process",
         lambda candidate: commands.append(("stop", candidate)),
     )
     monkeypatch.setattr(deployment, "_wait_for_host_exporter", MagicMock())
@@ -196,6 +293,9 @@ def test_enroot_starts_process_exporter_on_host(
     assert "--port=6102" in command
     assert "--procfs=/proc" in command
     assert "--cgroupfs=/sys/fs/cgroup" in command
+    assert "--gpu-index=4" in command
+    assert "--gpu-index=6" in command
+    assert command.count("--gpu-index=") == 2
     assert Path(log_dir) == tmp_path
     assert not dry_run
     deployment._wait_for_host_exporter.assert_called_once_with(process)
@@ -317,7 +417,90 @@ def test_enroot_stages_sqsh_in_node_local_cache(
         MagicMock(side_effect=AssertionError("cache hit must not copy")),
     )
 
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.time.time_ns",
+        lambda: source.stat().st_ctime_ns + 2_000_000_000,
+    )
     deployment._stage_sqsh_images(*cache_config)
+    original_digest = SlurmEnrootDeployment._sqsh_digest
+
+    def digest(path: Path) -> str:
+        assert path != source, "unchanged source must reuse its verified digest"
+        return original_digest(path)
+
+    monkeypatch.setattr(SlurmEnrootDeployment, "_sqsh_digest", staticmethod(digest))
+    # A new deployment object proves metadata survives process/run restarts.
+    restarted = _deployment(tmp_path, node_local_sqsh_cache_dir=str(cache_dir))
+    restarted.container_set = deployment.container_set
+    restarted._stage_sqsh_images(*cache_config)
+
+
+def test_enroot_rehashes_sources_verified_inside_coarse_timestamp_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.sqsh"
+    source.write_bytes(b"first")
+    fingerprint = SlurmEnrootDeployment._sqsh_fingerprint(source)
+    fingerprint[3:] = [1_000_000_000, 1_000_000_000]
+    monkeypatch.setattr(
+        SlurmEnrootDeployment, "_sqsh_fingerprint", lambda _: fingerprint
+    )
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.time.time_ns", lambda: 1_500_000_000
+    )
+    records = {}
+    first_digest = SlurmEnrootDeployment._cached_sqsh_digest(source, records)
+
+    # A same-size write within the coarse ctime tick leaves the fingerprint unchanged.
+    source.write_bytes(b"other")
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm_enroot.time.time_ns", lambda: 3_000_000_000
+    )
+    digest = SlurmEnrootDeployment._cached_sqsh_digest(source, records)
+    assert digest == hashlib.sha256(b"other").hexdigest()
+    assert digest != first_digest
+
+    monkeypatch.setattr(
+        SlurmEnrootDeployment,
+        "_sqsh_digest",
+        MagicMock(side_effect=AssertionError("stable source must reuse its digest")),
+    )
+    assert SlurmEnrootDeployment._cached_sqsh_digest(source, records) == digest
+
+
+def test_enroot_revalidates_same_size_changes_with_restored_mtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Source replacement and cached-file corruption cannot reuse an old digest."""
+    source = tmp_path / "source.sqsh"
+    source.write_bytes(b"first")
+    cache_dir = tmp_path / "cache"
+    deployment = _deployment(tmp_path, node_local_sqsh_cache_dir=str(cache_dir))
+    container = _container(deployment, gpu=None)
+    deployment.container_set = SimpleNamespace(
+        sim=[container], prometheus=container, runtime=None
+    )
+    monkeypatch.setattr(
+        "alpasim_wizard.deployment.slurm.ensure_sqsh_path",
+        lambda image, caches: str(source),
+    )
+    cache_config = deployment._node_local_cache_config()
+    assert cache_config is not None
+    deployment._stage_sqsh_images(*cache_config)
+    original_destination = Path(deployment._sqsh_path(container))
+    original_stat = source.stat()
+    source.write_bytes(b"other")
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    deployment._stage_sqsh_images(*cache_config)
+    replacement = Path(deployment._sqsh_path(container))
+    assert replacement != original_destination
+    assert replacement.read_bytes() == b"other"
+
+    cached_stat = replacement.stat()
+    replacement.write_bytes(b"wrong")
+    os.utime(replacement, ns=(cached_stat.st_atime_ns, cached_stat.st_mtime_ns))
+    deployment._stage_sqsh_images(*cache_config)
+    assert replacement.read_bytes() == b"other"
 
 
 def test_enroot_replaces_incomplete_cached_sqsh(

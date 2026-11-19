@@ -7,28 +7,32 @@ import "alpasim_grpc/v0/common.proto";
 
 service RuntimeService {
     rpc simulate (SimulationRequest) returns (SimulationReturn);
-    rpc prefetch_scene (ScenePrefetchRequest) returns (common.Empty);
+    rpc prefetch_clip (ClipPrefetchRequest) returns (common.Empty);
     rpc get_runtime_info (common.Empty) returns (RuntimeInfo);
     rpc shut_down (common.Empty) returns (common.Empty);
 }
 
-message ScenePrefetchRequest {
-    string scene_id = 1;
+message ClipPrefetchRequest {
+    // Prefetch operates on data shared by every scene for a clip.
+    string clip_id = 1;
 }
 
 message RolloutSpec {
-    string scenario_id = 1;
+    reserved 1, 4;
+    reserved "scenario_id", "start_time_offset_us";
     uint32 nr_rollouts = 2;
     // Optional client-supplied session UUIDs, one per rollout. If set,
     // length must equal nr_rollouts. Empty (default) ⇒ runtime generates.
     repeated string session_uuids = 3;
-    // Microseconds to skip from the start of the recording; the rollout begins
-    // that far into the clip. 0 (default) starts at the clip's first frame.
-    fixed64 start_time_offset_us = 4;
     // Base random seed for this spec's rollouts: rollout k uses random_seed + k as
     // its session seed, so a specific rollout can be reproduced on its own.
     // 0 (default) keeps today's behaviour: the runtime picks a random seed per session.
     fixed64 random_seed = 5;
+    SceneInfo scene = 6;
+    // Optional timestamped ego-rig poses executed by a parent rollout. When
+    // present, scene.policy_start_us must select the fork handoff and the
+    // history must end at the corresponding absolute source timestamp.
+    common.Trajectory ego_history = 7;
 }
 
 message SimulationRequest {
@@ -38,15 +42,16 @@ message SimulationRequest {
     }
 
     repeated DriverAddress available_drivers = 1;
-    repeated RolloutSpec rollout_specs = 2; // scenario may be repeated across specs
+    repeated RolloutSpec rollout_specs = 2; // a scene may be repeated across specs
     uint32 n_concurrent_per_driver = 3;
 }
 
 message SceneMetadata {
+    reserved 4;
+    reserved "uuid";
     string version_string = 1;
     string training_date = 2;
     string dataset_hash = 3;
-    string uuid = 4;
 
     repeated string camera_ids = 5;
     repeated string lidar_ids = 6;
@@ -55,10 +60,24 @@ message SceneMetadata {
     fixed64 end_time_us = 8;
 }
 
+message ClipDataSource {
+    string clip_id = 1;
+    string usdz_uuid = 2;
+}
+
+message DataSource {
+    oneof kind {
+        ClipDataSource clip = 1;
+    }
+}
+
 message SceneInfo {
-    string scene_id = 1;
-    string provider_kind = 2;
+    reserved 1, 2;
+    reserved "scene_id", "provider_kind";
     SceneMetadata metadata = 3;
+    DataSource source = 4;
+    // Recording-relative policy handoff. Absent represents AUTO.
+    optional fixed64 policy_start_us = 5;
 }
 
 message ServiceCapacity {
@@ -91,6 +110,7 @@ enum TimeAggregation {
     TIME_AGGREGATION_MAX = 3;
     TIME_AGGREGATION_MIN = 4;
     TIME_AGGREGATION_LAST = 5;
+    TIME_AGGREGATION_P90 = 6;
 }
 
 enum RolloutErrorCode {

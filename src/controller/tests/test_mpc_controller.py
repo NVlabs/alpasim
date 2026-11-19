@@ -20,6 +20,14 @@ class TestMPCGains:
         assert gains.acceleration_weight >= 0
         assert gains.rel_front_steering_angle_weight >= 0
         assert gains.rel_acceleration_weight >= 0
+        assert gains.velocity_weight >= 0
+        assert gains.lateral_velocity_weight >= 0
+        assert gains.yaw_rate_weight >= 0
+        assert gains.steering_state_weight >= 0
+        assert gains.sqp_state_step_weight >= 0
+        assert gains.sqp_control_step_weight >= 0
+        assert gains.sqp_max_iterations > 0
+        assert gains.sqp_step_tolerance >= 0
         assert gains.idx_start_penalty >= 0
 
 

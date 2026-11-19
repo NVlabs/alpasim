@@ -12,6 +12,7 @@ import dataclasses
 import logging
 
 import polars as pl
+from alpasim_utils.types import scene_from_proto
 
 from eval.data import (
     AggregationType,
@@ -95,13 +96,25 @@ class ScenarioEvaluator:
         )
 
         # Compute timestep metrics directly using the scorer group
-        timestep_metrics = self._scorer_group.calculate(simulation_result)
+        timestep_metrics = [
+            *self._scorer_group.calculate(simulation_result),
+            *scenario_input.recorded_metrics,
+        ]
+
+        metric_names = [metric.name for metric in timestep_metrics]
+        duplicate_names = sorted(
+            name
+            for name in set(metric_names)
+            if metric_names.count(name) > 1 or name == "eval_relevant"
+        )
+        if duplicate_names:
+            raise ValueError(f"Duplicate metric names: {duplicate_names}")
 
         # Aggregate metrics over time
         aggregated_metrics = {m.name: m.aggregate() for m in timestep_metrics}
 
         # Create metrics dataframe with run metadata for aggregation
-        clipgt_id = simulation_result.session_metadata.scene_id
+        scene_key = scene_from_proto(simulation_result.session_metadata.scene).scene_key
         rollout_id = simulation_result.session_metadata.session_uuid
 
         # Per-timestep ``eval_relevant`` flag: marks whether each timestep
@@ -133,7 +146,7 @@ class ScenarioEvaluator:
 
         metrics_df = create_metrics_dataframe(
             metric_results=timestep_metrics,
-            clipgt_id=clipgt_id,
+            scene_key=scene_key,
             rollout_id=rollout_id,
             run_uuid=scenario_input.run_uuid,
             run_name=scenario_input.run_name,

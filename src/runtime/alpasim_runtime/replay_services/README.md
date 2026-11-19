@@ -16,13 +16,13 @@ the recorded ASL logs every time they make an intentional change to runtime**
 
 To generate the needed files to be replayed, run, from src/wizard:
 
-```
-RUN_DIR=/home/migl/workspace/alpasim/.wizard \
+```bash
+RUN_DIR="$PWD/replay_run"
 uv run python -m alpasim_wizard \
-    wizard.log_dir=${RUN_DIR} \
+    wizard.log_dir="${RUN_DIR}" \
     deploy=local topology=1gpu driver=vavam \
     runtime.endpoints.trafficsim.skip=False \
-    scenes.scene_ids="[clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e]" \
+    scenes.clip_ids="[clipgt-c14c031a-8c17-4d08-aa4d-23c020a6871e]" \
     runtime.simulation_config.n_sim_steps=60
 ```
 
@@ -31,7 +31,7 @@ src/runtime/tests/data/integration.
 
 ## Changing the scene
 
-If you change the scene_id, make sure to also add the updated usdz file to the
+If you change the clip ID, make sure to also add the updated USDZ file to the
 folder - it's recommended to modify the contents of the usdz file and remove
 all the large rendering artifacts we don't need.
 You can zip it back up with (from within the unziped usdz folder)

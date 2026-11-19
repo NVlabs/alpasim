@@ -4,7 +4,7 @@ prometheus:
   url: http://127.0.0.1:9090
   worker_ports: [0]
 
-scene_provider:
+data_source_provider:
   kind: usdz
   usdz:
     data_dir: tests/data/mock
@@ -84,4 +84,8 @@ simulation_config:
   route_generator_type: MAP
   vehicle: null
 scenes:
-  - scene_id: clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71  # Note: needs to match file from tests/data/mock/dataset-clipgt-1ea7dc88...
+  # clip_id must match the ClipGT recording in tests/data/mock/dataset-clipgt-1ea7dc88...
+  - source:
+      clip_id: clipgt-1ea7dc88-88ed-4c91-81fe-b6eb489cfa71
+      usdz_uuid: 0203f75c-40e0-4e80-b734-a6ee48833dcb
+    policy_start_us: AUTO

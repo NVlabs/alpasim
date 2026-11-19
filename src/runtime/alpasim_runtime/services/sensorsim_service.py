@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from asyncio import Lock
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, cast
 
 from alpasim_grpc.v0.common_pb2 import Empty
 from alpasim_grpc.v0.logging_pb2 import LogEntry
@@ -22,6 +22,7 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
     BatchRGBRenderReturn,
     BatchRGBRenderReturnItem,
     DynamicObject,
+    EgoMaskId,
     ImageFormat,
     PosePair,
     RGBRenderRequest,
@@ -30,6 +31,7 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
 from alpasim_grpc.v0.sensorsim_pb2_grpc import SensorsimServiceStub
 from alpasim_runtime.camera_catalog import CameraCatalog
 from alpasim_runtime.config import SimulationConfig
+from alpasim_runtime.errors import InvalidSceneError
 from alpasim_runtime.services.service_base import ServiceBase, SessionInfo
 from alpasim_runtime.services.session_configs import RendererSessionConfig
 from alpasim_runtime.telemetry.rpc_wrapper import profiled_rpc_call
@@ -156,26 +158,26 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         return copied
 
     async def get_available_cameras(
-        self, scene_id: str
+        self, clip_id: str
     ) -> list[AvailableCamerasReturn.AvailableCamera]:
-        """Fetch available cameras for `scene_id`, skipping RPC in skip mode."""
+        """Fetch available cameras for `clip_id`, skipping RPC in skip mode."""
         if self.skip:
             return []
 
         session_info = self._require_session_info()
 
-        if scene_id in self._available_cameras:
-            return self._copy_available_cameras(self._available_cameras[scene_id])
+        if clip_id in self._available_cameras:
+            return self._copy_available_cameras(self._available_cameras[clip_id])
 
-        lock = self._available_cameras_locks.setdefault(scene_id, Lock())
+        lock = self._available_cameras_locks.setdefault(clip_id, Lock())
         async with lock:
-            if scene_id not in self._available_cameras:
-                request = AvailableCamerasRequest(scene_id=scene_id)
+            if clip_id not in self._available_cameras:
+                request = AvailableCamerasRequest(scene_id=clip_id)
                 await session_info.broadcaster.broadcast(
                     LogEntry(available_cameras_request=request)
                 )
 
-                logger.info(f"Requesting available cameras for {scene_id=}")
+                logger.info(f"Requesting available cameras for {clip_id=}")
                 response: AvailableCamerasReturn = await self._sensorsim_rpc(
                     "get_available_cameras",
                     self.stub.get_available_cameras,
@@ -186,9 +188,9 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                     LogEntry(available_cameras_return=response)
                 )
 
-                self._available_cameras[scene_id] = list(response.available_cameras)
+                self._available_cameras[clip_id] = list(response.available_cameras)
 
-        return self._copy_available_cameras(self._available_cameras[scene_id])
+        return self._copy_available_cameras(self._available_cameras[clip_id])
 
     async def get_available_ego_masks(self) -> AvailableEgoMasksReturn:
         """
@@ -237,12 +239,19 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         available_ego_masks: AvailableEgoMasksReturn,
         camera_logical_id: str,
         ego_mask_rig_config_id: str | None,
-    ) -> str | None:
+        ego_mask_camera_logical_ids: list[str] | None,
+    ) -> EgoMaskId | None:
         """
         Determine the ego mask ID for a given camera and rig configuration.
         Returns the ego mask ID if found, otherwise None.
         """
         if ego_mask_rig_config_id is None:
+            return None
+
+        if (
+            ego_mask_camera_logical_ids is not None
+            and camera_logical_id not in ego_mask_camera_logical_ids
+        ):
             return None
 
         ego_mask_id = None
@@ -263,7 +272,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         traffic_trajectories: Dict[str, Trajectory],
         camera: RuntimeCamera,
         trigger: Clock.Trigger,
-        scene_id: str,
+        clip_id: str,
         image_format: ImageFormat,
         ego_mask_id: str | None = None,
     ) -> RGBRenderRequest:
@@ -278,7 +287,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             traffic_trajectories: Mapping of track_id to traffic trajectories.
             camera: Camera to render from.
             trigger: Clock trigger defining the time range for rendering.
-            scene_id: Scene identifier for camera definition lookup.
+            clip_id: Clip ID for camera-definition lookup.
             image_format: Desired output image format.
             ego_mask_id: Optional ego mask identifier to include in the render.
         """
@@ -317,7 +326,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         ]
 
         definition = self._camera_catalog.get_camera_definition(
-            scene_id, camera.logical_id
+            clip_id, camera.logical_id
         )
         sensor_pose = trajectory_to_pose_pair(
             ego_trajectory,
@@ -325,7 +334,8 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         )
 
         return RGBRenderRequest(
-            scene_id=scene_id,
+            # SensorSim's wire schema names the clip ID scene_id.
+            scene_id=clip_id,
             resolution_h=camera.render_resolution_hw[0],
             resolution_w=camera.render_resolution_hw[1],
             camera_intrinsics=definition.intrinsics,
@@ -338,6 +348,33 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             insert_ego_mask=ego_mask_id is not None,
             ego_mask_id=ego_mask_id,
         )
+
+    @staticmethod
+    def _validate_rgb_metadata_matches_trigger(
+        request: RGBRenderRequest,
+        camera: RuntimeCamera,
+        trigger: Clock.Trigger,
+    ) -> None:
+        expected_start_us = trigger.time_range_us.start
+        expected_end_us = trigger.time_range_us.stop
+        if (
+            request.frame_start_us != expected_start_us
+            or request.frame_end_us != expected_end_us
+        ):
+            raise RuntimeError(
+                "RGB render request timing does not match camera trigger: "
+                f"camera={camera.logical_id!r}, "
+                f"request=[{request.frame_start_us}, {request.frame_end_us}), "
+                f"trigger=[{expected_start_us}, {expected_end_us})."
+            )
+
+        request_camera_id = request.camera_intrinsics.logical_id
+        if request_camera_id and request_camera_id != camera.logical_id:
+            raise RuntimeError(
+                "RGB render request camera does not match camera trigger: "
+                f"request camera={request_camera_id!r}, "
+                f"trigger camera={camera.logical_id!r}."
+            )
 
     @staticmethod
     def _batch_return_to_images(
@@ -394,7 +431,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         camera_triggers: list[tuple[RuntimeCamera, Clock.Trigger]],
         ego_trajectory: Trajectory,
         traffic_trajectories: Dict[str, Trajectory],
-        scene_id: str,
+        clip_id: str,
         image_format: ImageFormat,
         ego_mask_rig_config_id: str | None = None,
     ) -> (list[ImageWithMetadata], bytes | None):
@@ -423,6 +460,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             )
 
         session_info = self._require_session_info()
+        cfg = cast(RendererSessionConfig, session_info.session_config)
         available_ego_masks = await self.get_available_ego_masks()
 
         # camera_name -> trigger, to rebuild image metadata from the response
@@ -432,7 +470,10 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
 
         for camera, trigger in camera_triggers:
             ego_mask_id = self.determine_ego_mask_id(
-                available_ego_masks, camera.logical_id, ego_mask_rig_config_id
+                available_ego_masks,
+                camera.logical_id,
+                ego_mask_rig_config_id,
+                cfg.ego_mask_camera_logical_ids,
             )
 
             rgb_request = self.construct_rgb_render_request(
@@ -440,7 +481,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 traffic_trajectories,
                 camera,
                 trigger,
-                scene_id,
+                clip_id,
                 image_format,
                 ego_mask_id,
             )
@@ -471,7 +512,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         camera_triggers: list[tuple[RuntimeCamera, Clock.Trigger]],
         ego_trajectory: Trajectory,
         traffic_trajectories: Dict[str, Trajectory],
-        scene_id: str,
+        clip_id: str,
         image_format: ImageFormat,
         ego_mask_rig_config_id: str | None = None,
     ) -> (list[ImageWithMetadata], bytes | None):
@@ -481,13 +522,17 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         and optional driver data bytes (forwarded without processing to the driver).
         """
         session_info = self._require_session_info()
+        cfg = cast(RendererSessionConfig, session_info.session_config)
         available_ego_masks = await self.get_available_ego_masks()
 
         request = AggregatedRenderRequest()
 
         for camera, trigger in camera_triggers:
             ego_mask_id = self.determine_ego_mask_id(
-                available_ego_masks, camera.logical_id, ego_mask_rig_config_id
+                available_ego_masks,
+                camera.logical_id,
+                ego_mask_rig_config_id,
+                cfg.ego_mask_camera_logical_ids,
             )
 
             rgb_request = self.construct_rgb_render_request(
@@ -495,7 +540,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
                 traffic_trajectories,
                 camera,
                 trigger,
-                scene_id,
+                clip_id,
                 image_format,
                 ego_mask_id,
             )
@@ -512,14 +557,29 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             request,
         )
 
+        if len(response.rgb_returns) != len(camera_triggers):
+            raise RuntimeError(
+                f"sensorsim returned {len(response.rgb_returns)} rgb_returns "
+                f"for {len(camera_triggers)} camera triggers"
+            )
+
         images_with_metadata = []
-        for rgb_response in response.rgb_responses:
+        for rgb_return, rgb_request, (camera, trigger) in zip(
+            response.rgb_returns,
+            request.rgb_requests,
+            camera_triggers,
+        ):
+            self._validate_rgb_metadata_matches_trigger(
+                rgb_request,
+                camera,
+                trigger,
+            )
             images_with_metadata.append(
                 ImageWithMetadata(
-                    start_timestamp_us=rgb_response.start_timestamp_us,
-                    end_timestamp_us=rgb_response.end_timestamp_us,
-                    image_bytes=rgb_response.image_bytes,
-                    camera_logical_id=rgb_response.camera_logical_id,
+                    start_timestamp_us=trigger.time_range_us.start,
+                    end_timestamp_us=trigger.time_range_us.stop,
+                    image_bytes=rgb_return.image_bytes,
+                    camera_logical_id=camera.logical_id,
                 )
             )
 
@@ -531,7 +591,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
         traffic_trajectories: Dict[str, Trajectory],
         camera: RuntimeCamera,
         trigger: Clock.Trigger,
-        scene_id: str,
+        clip_id: str,
         image_format: ImageFormat,
         ego_mask_rig_config_id: str | None = None,
     ) -> ImageWithMetadata:
@@ -551,9 +611,13 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             )
 
         session_info = self._require_session_info()
+        cfg = cast(RendererSessionConfig, session_info.session_config)
         available_ego_masks = await self.get_available_ego_masks()
         ego_mask_id = self.determine_ego_mask_id(
-            available_ego_masks, camera.logical_id, ego_mask_rig_config_id
+            available_ego_masks,
+            camera.logical_id,
+            ego_mask_rig_config_id,
+            cfg.ego_mask_camera_logical_ids,
         )
 
         request = self.construct_rgb_render_request(
@@ -561,7 +625,7 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             traffic_trajectories,
             camera,
             trigger,
-            scene_id,
+            clip_id,
             image_format,
             ego_mask_id,
         )
@@ -574,6 +638,11 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             request,
         )
 
+        self._validate_rgb_metadata_matches_trigger(
+            request,
+            camera,
+            trigger,
+        )
         return ImageWithMetadata(
             start_timestamp_us=trigger.time_range_us.start,
             end_timestamp_us=trigger.time_range_us.stop,
@@ -600,8 +669,31 @@ class SensorsimService(ServiceBase[SensorsimServiceStub]):
             # Called without a RendererSessionConfig (direct-RPC tests, etc.).
             return
 
-        scene_id = cfg.data_source.scene_id
-        sensorsim_cameras = await self.get_available_cameras(scene_id)
+        clip_id = cfg.data_source.scene_id
+        sensorsim_cameras = await self.get_available_cameras(clip_id)
         await self._camera_catalog.merge_local_and_sensorsim_cameras(
-            scene_id, sensorsim_cameras
+            clip_id, sensorsim_cameras
         )
+        if not self.skip and cfg.ego_mask_rig_config_id is not None:
+            available = await self.get_available_ego_masks()
+            bank_masks = [
+                mask.ego_mask_id
+                for mask in available.ego_mask_metadata
+                if mask.ego_mask_id.rig_config_id == cfg.ego_mask_rig_config_id
+            ]
+            if not bank_masks:
+                raise InvalidSceneError(
+                    clip_id,
+                    f"Ego texture bank {cfg.ego_mask_rig_config_id!r} is not available "
+                    "in the renderer catalog",
+                )
+            for camera_id in cfg.ego_mask_camera_logical_ids or []:
+                matches = sum(
+                    mask.camera_logical_id == camera_id for mask in bank_masks
+                )
+                if matches != 1:
+                    raise InvalidSceneError(
+                        clip_id,
+                        f"Ego texture bank {cfg.ego_mask_rig_config_id!r} requires exactly "
+                        f"one mask for camera {camera_id!r}; renderer returned {matches}",
+                    )

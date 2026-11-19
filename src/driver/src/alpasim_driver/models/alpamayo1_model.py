@@ -11,6 +11,8 @@ import torch
 from alpamayo_r1 import helper
 from alpamayo_r1.models.alpamayo_r1 import AlpamayoR1
 
+from ..schema import ModelConfig
+
 # Re-export for backward compatibility (tests import these from here).
 from .alpamayo_base import (  # noqa: F401
     CAMERA_NAME_TO_INDEX,
@@ -26,6 +28,15 @@ logger = logging.getLogger(__name__)
 class Alpamayo1Model(AlpamayoBaseModel):
     """Alpamayo 1 wrapper implementing the common interface."""
 
+    @classmethod
+    def _variant_init_kwargs(cls, model_cfg: ModelConfig) -> dict[str, object]:
+        return {
+            "diffusion_expert_cuda_graph": model_cfg.diffusion_expert_cuda_graph,
+            "diffusion_expert_cuda_graph_max_graphs": (
+                model_cfg.diffusion_expert_cuda_graph_max_graphs
+            ),
+        }
+
     def __init__(
         self,
         checkpoint_path: str,
@@ -35,6 +46,8 @@ class Alpamayo1Model(AlpamayoBaseModel):
         num_traj_samples: int = 1,
         top_p: float = 0.98,
         temperature: float = 0.6,
+        diffusion_expert_cuda_graph: bool = False,
+        diffusion_expert_cuda_graph_max_graphs: int = 4,
         force_determinism: bool = False,
         selection_strategy: TrajectorySelectionStrategy = (
             TrajectorySelectionStrategy.ALWAYS_FIRST
@@ -52,6 +65,10 @@ class Alpamayo1Model(AlpamayoBaseModel):
             num_traj_samples: Number of trajectory samples to generate.
             top_p: Top-p sampling parameter for VLM generation.
             temperature: Temperature for VLM sampling.
+            diffusion_expert_cuda_graph: Replay diffusion expert forwards with
+                exact-shape CUDA graphs.
+            diffusion_expert_cuda_graph_max_graphs: Maximum prompt-shape graphs
+                retained before new shapes use eager execution.
             force_determinism: Whether to make stochastic inference repeatable from
                 each prediction's inference seed.
             selection_strategy: How to pick one of the sampled trajectories.
@@ -64,7 +81,15 @@ class Alpamayo1Model(AlpamayoBaseModel):
             configure_deterministic_runtime()
         logger.info("Loading Alpamayo 1 checkpoint from %s", checkpoint_path)
 
-        model = AlpamayoR1.from_pretrained(checkpoint_path, dtype=self.DTYPE).to(device)
+        model = AlpamayoR1.from_pretrained(
+            checkpoint_path, dtype=self.DTYPE, attn_implementation="sdpa"
+        ).to(device)
+        model.eval()
+        if diffusion_expert_cuda_graph:
+            model.enable_diffusion_expert_cuda_graph(
+                max_batch_size=num_traj_samples,
+                max_graphs=diffusion_expert_cuda_graph_max_graphs,
+            )
         processor = helper.get_processor(model.tokenizer)
 
         self._init_common(
@@ -82,6 +107,12 @@ class Alpamayo1Model(AlpamayoBaseModel):
             max_num_distance_points=max_num_distance_points,
             skip_first_n_distance_points=skip_first_n_distance_points,
         )
+
+        if diffusion_expert_cuda_graph:
+            logger.info(
+                "Diffusion expert CUDA graphs enabled with at most %d signatures",
+                diffusion_expert_cuda_graph_max_graphs,
+            )
 
     def _create_chat_message(
         self, image_frames: torch.Tensor, nav_text: str | None

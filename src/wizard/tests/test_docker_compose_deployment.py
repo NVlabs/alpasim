@@ -11,7 +11,7 @@ import pytest
 import yaml
 from alpasim_wizard.deployment.docker_compose import DockerComposeDeployment
 from alpasim_wizard.schema import RunMode
-from alpasim_wizard.services import Address, ContainerSet
+from alpasim_wizard.services import Address, ContainerDefinition, ContainerSet
 
 
 def _local_addresses(*ports: int) -> list[Address]:
@@ -29,7 +29,7 @@ def _deployment(tmp_path: Path, *, dry_run: bool) -> DockerComposeDeployment:
                 run_mode=RunMode.ONESHOT,
             )
         ),
-        num_gpus=0,
+        gpu_allocation=(),
     )
     deployment.container_set = SimpleNamespace(runtime=object())
     deployment.docker_compose_filepath = "docker-compose.yaml"
@@ -109,6 +109,36 @@ def test_docker_compose_service_uses_configured_pull_policy(tmp_path: Path) -> N
     assert service["pull_policy"] == "never"
 
 
+@pytest.mark.parametrize(
+    "environment",
+    ["CUDA_VISIBLE_DEVICES=0", "NVIDIA_VISIBLE_DEVICES"],
+)
+def test_service_rejects_user_controlled_gpu_visibility(environment: str) -> None:
+    context = SimpleNamespace(
+        cfg=SimpleNamespace(wizard=SimpleNamespace(validate_mount_points=False))
+    )
+    service_config = SimpleNamespace(
+        environments=[environment],
+        volumes=[],
+        workdir=None,
+        replicas_per_container=1,
+    )
+    instance = ContainerDefinition.ServiceInstance(
+        replica_idx=0,
+        command="echo ok",
+        address=None,
+    )
+
+    with pytest.raises(ValueError, match=r"services\.driver\.environments"):
+        ContainerDefinition.create(
+            name="driver",
+            service_instances=[instance],
+            gpu=0,
+            service_config=service_config,
+            context=context,
+        )
+
+
 def test_docker_compose_adds_prometheus_before_runtime(
     tmp_path: Path,
 ) -> None:
@@ -121,7 +151,7 @@ def test_docker_compose_adds_prometheus_before_runtime(
                 run_mode=RunMode.ONESHOT,
             )
         ),
-        num_gpus=0,
+        gpu_allocation=(),
     )
     runtime_container = SimpleNamespace(
         uuid="runtime-0",

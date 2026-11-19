@@ -14,7 +14,7 @@ server later.
 
 By default, AlpaSim publishes Prometheus file-SD targets under
 `${defines.filesystem}/prometheus/file-sd`. For `deploy=local`, this resolves under the repo data
-directory. For `deploy=iad`, it resolves under the shared IAD Lustre filesystem.
+directory. Cluster deployments use the filesystem root selected by their deploy config.
 
 The wizard publishes one central discovery file:
 
@@ -34,8 +34,8 @@ scrape_configs:
 ```
 
 On Slurm, the process exporter also publishes `alpasim_gpu_workload_info{gpu}` for every
-node-local physical GPU assigned to a discovered AlpaSim process. Cross-system dashboards can join
-this ownership signal to DCGM metrics by run, node, and GPU index.
+node-local physical GPU assigned to the AlpaSim deployment. Cross-system dashboards can join this
+ownership signal to DCGM metrics by run, node, and GPU index.
 
 For normal Docker Compose and Slurm runs, the wizard removes this file when the deployment exits.
 If a run crashes before cleanup, later AlpaSim startups conservatively remove old discovery files
@@ -48,10 +48,12 @@ src/tools/scripts/start-prometheus-grafana.sh /shared/prometheus/alpasim
 ```
 
 The file-SD directory can also be an SSH path. The script mounts it locally with `sshfs`:
+use the resolved `${defines.filesystem}/prometheus/file-sd` from the run's wizard
+config and the SSH target used to access that host.
 
 ```bash
 src/tools/scripts/start-prometheus-grafana.sh \
-  <iad-login>:/lustre/fsw/portfolios/av/projects/av_alpamayo_reasoning/data/av_alpamayo_sim/.cache/prometheus/file-sd
+  <ssh-target>:/path/to/cache/prometheus/file-sd
 ```
 
 The script prints the Prometheus and Grafana URLs.

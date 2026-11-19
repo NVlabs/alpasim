@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ from alpasim_driver.models.base import (
     ModelPrediction,
     PredictionInput,
 )
+from alpasim_driver.models.image_preprocessing import resize_and_center_crop_batch
 from alpasim_driver.schema import ModelConfig
 
 from .transfuser_impl import load_tf
@@ -101,22 +103,46 @@ class TransfuserModel(BaseTrajectoryModel):
     def output_frequency_hz(self) -> int:
         return 2  # NAVSIM config: waypoints_spacing=10 at 20fps → 2Hz
 
-    def _concatenate_cameras(self, camera_images: dict[str, np.ndarray]) -> np.ndarray:
-        """Resize each camera and concatenate horizontally in camera_ids order.
+    def _preprocess_batch(self, images: list[np.ndarray]) -> torch.Tensor:
+        """Preprocess camera images using batched GPU tensor operations.
+
+        Resizes each camera to height 270, center-crops to width 480, and
+        operates on all B*4 images at once before concatenating each sample.
 
         Args:
-            camera_images: Dict mapping camera_id to HWC uint8 image.
+            images: List of B*4 HWC uint8 numpy arrays, ordered as
+                [sample0_cam0, sample0_cam1, ..., sample1_cam0, ...].
 
         Returns:
-            Concatenated image as HWC uint8 array.
+            Tensor of shape ``(B, C, H, W_total)`` where
+            ``W_total = NUM_CAMERAS * EXPECTED_WIDTH_PER_CAM``, uint8,
+            ready for the model (normalization happens inside backbone).
         """
-        resized_images = []
-        for cam_id in self._camera_ids:
-            resized = self._resize_and_center_crop(
-                camera_images[cam_id], self._per_cam_height, self._per_cam_width
-            )
-            resized_images.append(resized)
-        return np.concatenate(resized_images, axis=1)  # Horizontal concat
+        num_images = len(images)
+        batch_size = num_images // self.NUM_CAMERAS
+
+        batch = resize_and_center_crop_batch(
+            images,
+            target_height=self._per_cam_height,
+            target_width=self._per_cam_width,
+            device=self._device,
+        )
+
+        # Reshape (B*4, C, H, W) → (B, 4, C, H, W) and concatenate horizontally
+        num_channels = batch.shape[1]
+        batch = batch.reshape(
+            batch_size,
+            self.NUM_CAMERAS,
+            num_channels,
+            self._per_cam_height,
+            self._per_cam_width,
+        )
+        batch = batch.permute(0, 2, 3, 1, 4)  # (B, C, H, 4, W)
+        batch = batch.reshape(
+            batch_size, num_channels, self._per_cam_height, -1
+        )  # (B, C, H, 4*W)
+
+        return batch
 
     def _encode_command(self, command: DriveCommand) -> int:
         """Convert DriveCommand to Transfuser format.
@@ -164,8 +190,8 @@ class TransfuserModel(BaseTrajectoryModel):
 
         batch_size = len(prediction_inputs)
 
-        # --- Validate and collect per-sample tensors ---
-        rgb_tensors: list[torch.Tensor] = []
+        # --- Validate and collect all camera images ---
+        all_images: list[np.ndarray] = []
         encoded_commands: list[int] = []
         speeds: list[float] = []
         accelerations: list[float] = []
@@ -181,25 +207,17 @@ class TransfuserModel(BaseTrajectoryModel):
                         f"got {len(frames)} for {cam_id}"
                     )
 
-            # Extract single frame from each camera
-            current_images = {
-                cam_id: frames[0][1] for cam_id, frames in inp.camera_images.items()
-            }
-
-            # Resize each camera and concatenate horizontally
-            concatenated = self._concatenate_cameras(current_images)
-
-            # Convert to tensor: HWC uint8 -> CHW uint8
-            rgb = torch.from_numpy(concatenated).permute(2, 0, 1)
-            rgb_tensors.append(rgb)
+            # Collect images in camera_ids order for this sample
+            for cam_id in self._camera_ids:
+                all_images.append(inp.camera_images[cam_id][0][1])
 
             encoded_commands.append(self._encode_command(inp.command))
             speeds.append(inp.speed)
             accelerations.append(inp.acceleration)
 
-        # --- Stack into batch tensors ---
-        # RGB: (B, 3, H, W)
-        batched_rgb = torch.stack(rgb_tensors, dim=0).to(self._device)
+        # --- Batch preprocess: resize + concatenate on GPU ---
+        # (B, 3, H, W_total) uint8
+        batched_rgb = self._preprocess_batch(all_images)
 
         # Command: (B, 4) one-hot encoded float
         batched_command = torch.nn.functional.one_hot(
@@ -222,7 +240,15 @@ class TransfuserModel(BaseTrajectoryModel):
         }
 
         # --- Single forward pass ---
-        with torch.no_grad():
+        # Model weights are float32, but `torch_float_type` may be bfloat16 on
+        # A100/H100/L40S and inputs are cast accordingly; autocast lets conv2d
+        # and friends handle the mixed dtype.
+        autocast_ctx = (
+            torch.amp.autocast(self._device.type, dtype=self._config.torch_float_type)
+            if self._config.use_mixed_precision_training and self._device.type == "cuda"
+            else nullcontext()
+        )
+        with torch.no_grad(), autocast_ctx:
             prediction = self._model(data)
 
         # --- Convert to rig frame and compute headings on batch ---

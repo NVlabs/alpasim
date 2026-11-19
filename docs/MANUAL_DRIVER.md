@@ -48,7 +48,7 @@ uv run --project src/wizard alpasim_wizard \
   driver_source=external_static \
   topology=1gpu \
   wizard.log_dir=$PWD/manual_run \
-  scenes.scene_ids='["your-scene-id"]'
+  scenes.clip_ids='["your-clip-id"]'
 ```
 
 The runtime will connect to your driver at `localhost:6789`.
@@ -64,7 +64,7 @@ uv run --project src/wizard alpasim_wizard \
   driver_source=external_static \
   topology=1gpu \
   wizard.log_dir=$PWD/manual_run \
-  scenes.scene_ids='["your-scene-id"]' \
+  scenes.clip_ids='["your-clip-id"]' \
   wizard.external_services.driver='["192.168.1.100:6789"]'
 ```
 

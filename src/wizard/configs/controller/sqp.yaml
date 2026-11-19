@@ -1,0 +1,25 @@
+defaults:
+  - default
+  - _self_
+
+mpc_implementation: sqp
+
+gains:
+  long_position_weight: 5.0
+  lat_position_weight: 0.5
+  heading_weight: 4.0
+  acceleration_weight: 0.2
+  rel_front_steering_angle_weight: 40.0
+  rel_acceleration_weight: 0.5
+  velocity_weight: 5.0
+  lateral_velocity_weight: 0.2
+  yaw_rate_weight: 5.0
+  steering_state_weight: 0.1
+  sqp_state_step_weight: 0.001
+  sqp_control_step_weight: 0.01
+  sqp_max_iterations: 2
+  sqp_step_tolerance: 0.001
+  idx_start_penalty: 0
+  # Correct near-term lateral error through heading: the lateral position weight ramps
+  # in over the whole 2 s horizon instead of commanding an immediate steering correction.
+  sqp_lat_position_ramp_steps: 20

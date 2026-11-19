@@ -1,0 +1,61 @@
+# @package _global_
+# 8-GPU topology: 128 concurrent rollouts. Use with renderer=internal_nre so
+# nre_max_backends_per_scene is enforced. Intended for standard Slurm runs.
+
+defines:
+  # Cache floor = min(renderer concurrency, max clips per renderer)
+  #             * max backends per clip = min(8, 2) * 1 = 2.
+  nre_cache_size: 2
+  nre_max_backends_per_scene: 1
+  physics_cache_size: 16
+
+eval:
+  num_processes: 32
+
+services:
+  renderer:
+    replicas_per_container: 1
+    gpus: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]
+
+  driver:
+    replicas_per_container: 1
+    gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+
+  physics:
+    replicas_per_container: 1
+    gpus: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]
+
+  controller:
+    replicas_per_container: 32
+    gpus: null
+
+  trafficsim:
+    replicas_per_container: 1
+    gpus: null
+
+runtime:
+  clip_affine_dispatch:
+    enabled: true
+    max_renderers_per_clip: 2
+    max_clips_per_renderer: 2
+    cache_refresh_interval_s: 3.0
+  nr_workers: 32 # 4 rollouts per worker
+  endpoints:
+    # Total capacity per service = containers x replicas per container x concurrent rollouts.
+    # REND: 16 x 1  x 8  = 128
+    # DRIV: 8  x 1  x 16 = 128
+    # PHYS: 16 x 1  x 8  = 128
+    # CONT: 1  x 32 x 4  = 128
+    renderer:
+      n_concurrent_rollouts: 8
+    driver:
+      n_concurrent_rollouts: 16
+      skip: false
+    physics:
+      n_concurrent_rollouts: 8
+      skip: false
+    controller:
+      n_concurrent_rollouts: 4
+      skip: false
+    trafficsim:
+      skip: true

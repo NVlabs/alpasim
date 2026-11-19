@@ -397,19 +397,22 @@ def test_catk_synthetic():
 @_skip_no_usdz
 def test_catk_scene_adapter():
     """Sanity-check: load a ClipGT USDZ and verify the env_data structure."""
-    from alpasim_runtime.scene_loader import ArtifactSceneProvider, SceneLoader
+    from alpasim_runtime.data_source_loader import (
+        ArtifactDataSourceProvider,
+        DataSourceLoader,
+    )
     from alpasim_trafficsim.catk.scene_adapter import CATKSceneAdapter
 
     usdz_path = _test_usdz
 
-    scene_loader = SceneLoader(
-        ArtifactSceneProvider.from_path(
+    data_source_loader = DataSourceLoader(
+        ArtifactDataSourceProvider.from_path(
             usdz_path,
             smooth_trajectories=False,
         )
     )
-    scene_id = next(iter(scene_loader.scene_ids))
-    env_data = CATKSceneAdapter().load(scene_loader.get_data_source(scene_id))
+    clip_id = next(iter(data_source_loader.source_ids))
+    env_data = CATKSceneAdapter().load(data_source_loader.get_data_source(clip_id))
 
     assert "map" in env_data
     assert "ego" in env_data
@@ -429,23 +432,26 @@ def test_catk_scene_adapter():
 @_skip_no_torch_cluster
 def test_catk_inference():
     """Full end-to-end: ClipGT USDZ → CATK model → predictions."""
-    from alpasim_runtime.scene_loader import ArtifactSceneProvider, SceneLoader
+    from alpasim_runtime.data_source_loader import (
+        ArtifactDataSourceProvider,
+        DataSourceLoader,
+    )
     from alpasim_trafficsim.catk.model_adapter import CATK
     from alpasim_trafficsim.catk.scene_adapter import CATKSceneAdapter
 
     usdz_path = _test_usdz
 
-    scene_loader = SceneLoader(
-        ArtifactSceneProvider.from_path(
+    data_source_loader = DataSourceLoader(
+        ArtifactDataSourceProvider.from_path(
             usdz_path,
             smooth_trajectories=False,
         )
     )
-    scene_id = next(iter(scene_loader.scene_ids))
+    clip_id = next(iter(data_source_loader.source_ids))
     env_data = CATKSceneAdapter(
         num_history_steps=16,
         motion_stepsize=0.1,
-    ).load(scene_loader.get_data_source(scene_id))
+    ).load(data_source_loader.get_data_source(clip_id))
 
     catk_dir = MODELS_DIR / "catk_v120"
     model = CATK(

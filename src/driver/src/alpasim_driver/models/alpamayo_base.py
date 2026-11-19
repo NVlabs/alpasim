@@ -14,9 +14,7 @@ from typing import Any
 import numpy as np
 import torch
 from alpasim_grpc.v0.common_pb2 import PoseAtTime
-from alpasim_grpc.v0.egodriver_pb2 import Route
 from alpasim_utils.geometry import Pose, Trajectory
-from scipy.interpolate import interp1d
 
 from ..schema import ModelConfig
 from .base import (
@@ -27,7 +25,6 @@ from .base import (
     ModelPrediction,
     PredictionInput,
 )
-from .nav_text import route_to_nav_text
 from .trajectory_selection import (
     TrajectorySelectionStrategy,
     plan_in_local_frame,
@@ -86,86 +83,6 @@ def _trajectory_from_pose_messages(poses: list[PoseAtTime]) -> Trajectory:
     )
 
 
-def _adjust_quaternion_orientation(quaternions: np.ndarray) -> np.ndarray:
-    """Match the internal driver's antipodal-quaternion adjustment."""
-    signs = np.ones(len(quaternions), dtype=quaternions.dtype)
-    signs[1:] = np.where(
-        0 <= (quaternions[:-1] * quaternions[1:]).sum(axis=1), 1.0, -1.0
-    )
-    return quaternions * np.cumprod(signs).reshape((-1, 1))
-
-
-def _quaternion_wxyz_to_matrix(quaternion: torch.Tensor) -> torch.Tensor:
-    """Match Kornia 0.8.2's float32 quaternion-to-matrix arithmetic."""
-    quaternion = torch.nn.functional.normalize(quaternion, p=2.0, dim=-1, eps=1.0e-12)
-    w, x, y, z = quaternion.unbind(dim=-1)
-    tx = 2.0 * x
-    ty = 2.0 * y
-    tz = 2.0 * z
-    twx = tx * w
-    twy = ty * w
-    twz = tz * w
-    txx = tx * x
-    txy = ty * x
-    txz = tz * x
-    tyy = ty * y
-    tyz = tz * y
-    tzz = tz * z
-    one = torch.tensor(1.0)
-    return torch.stack(
-        (
-            one - (tyy + tzz),
-            txy - twz,
-            txz + twy,
-            txy + twz,
-            one - (txx + tzz),
-            tyz - twx,
-            txz - twy,
-            tyz + twx,
-            one - (txx + tyy),
-        ),
-        dim=-1,
-    ).reshape((*quaternion.shape[:-1], 3, 3))
-
-
-def route_in_rig_at_t0(
-    route: Route,
-    ego_pose_history: list[PoseAtTime],
-    pose_local_to_rig_t0: Pose,
-) -> np.ndarray:
-    """Re-express route waypoints in the rig frame at t0.
-
-    A route carries the rig frame of its own timestamp, which trails t0 (the
-    newest camera frame the model conditions on) whenever routes and camera
-    frames arrive on different schedules.  Hopping through the local frame takes
-    the ego motion in between back out.
-
-    Args:
-        route: Route with waypoints in the rig frame at ``route.timestamp_us``.
-            NaN waypoints, which pad a route shorter than the requested
-            lookahead, stay NaN.
-        ego_pose_history: Rig poses in the local frame (``pose_local_to_rig`` at
-            each ``timestamp_us``), spanning the route timestamp.
-        pose_local_to_rig_t0: Pose of the rig at t0 in the local frame.
-
-    Returns:
-        Waypoints of shape ``(N, 3)`` in the rig frame at t0.
-    """
-    waypoints_in_rig_route = np.array(
-        [[w.x, w.y, w.z] for w in route.waypoints], dtype=np.float32
-    ).reshape(-1, 3)
-    rig_route_in_local = _trajectory_from_pose_messages(
-        ego_pose_history
-    ).interpolate_pose(np.uint64(route.timestamp_us))
-    rig_route_in_rig_t0 = (
-        pose_local_to_rig_t0.inverse().as_se3() @ rig_route_in_local.as_se3()
-    )
-    return (
-        waypoints_in_rig_route @ rig_route_in_rig_t0[:3, :3].T
-        + rig_route_in_rig_t0[:3, 3]
-    )
-
-
 def build_ego_history(
     poses: list[PoseAtTime],
     current_timestamp_us: int,
@@ -191,85 +108,43 @@ def build_ego_history(
             - pose_local_to_rig_t0: pose of the rig at t0 in the local frame, which
               relates model outputs to the frame the driver reports in
     """
-    # Mirror the internal driver at the model boundary: float32 relative times,
-    # SciPy linear interpolation over concatenated XYZ/WXYZ, quaternion
-    # normalization/orientation adjustment, Kornia rotation conversion, then
-    # the torch global-to-local transform.
-
     # 1. Interpolate the ego poses at the target history timestamps
-    pose_data = sorted(
-        [(pose.timestamp_us, pose.pose) for pose in poses], key=lambda item: item[0]
-    )
-    timestamps_us = [timestamp for timestamp, _ in pose_data]
-    xyz = np.array(
-        [[pose.vec.x, pose.vec.y, pose.vec.z] for _, pose in pose_data],
-        dtype=np.float32,
-    )
-    quaternion_wxyz = np.array(
-        [[pose.quat.w, pose.quat.x, pose.quat.y, pose.quat.z] for _, pose in pose_data],
-        dtype=np.float32,
-    )
-    tparam = np.array(
-        [(timestamp - current_timestamp_us) * 1e-6 for timestamp in timestamps_us],
-        dtype=np.float32,
-    )
-    if not np.all(0 <= tparam[1:] - tparam[:-1]):
-        raise ValueError(f"ego pose timestamps not sorted {tparam=}")
+    trajectory_of_rig_in_local = _trajectory_from_pose_messages(poses)
 
-    quaternion_norm = np.linalg.norm(quaternion_wxyz, axis=1)
-    quaternion_wxyz = _adjust_quaternion_orientation(
-        quaternion_wxyz / quaternion_norm[:, None]
-    )
-    interpolate_pose = interp1d(
-        tparam,
-        np.concatenate((xyz, quaternion_wxyz), axis=1),
-        kind="linear",
-        axis=0,
-        copy=False,
-        bounds_error=True,
-        assume_sorted=True,
-    )
-    history_timestamps_us = [
-        int(index * history_time_step * 1_000_000) + current_timestamp_us
-        for index in range(-num_history_steps + 1, 1)
-    ]
-    teval = np.array(
+    history_timestamps_us = np.array(
         [
-            (timestamp - current_timestamp_us) * 1e-6
-            for timestamp in history_timestamps_us
+            current_timestamp_us - int(i * history_time_step * 1_000_000)
+            for i in range(num_history_steps - 1, -1, -1)
         ],
-        dtype=np.float32,
-    )
-    interpolated = interpolate_pose(teval)
-    history_xyz = interpolated[..., :3]
-    history_quaternion_wxyz = interpolated[..., 3:]
-    history_quaternion_wxyz /= np.linalg.norm(
-        history_quaternion_wxyz, axis=-1, keepdims=True
+        dtype=np.uint64,
     )
 
-    # 2. Convert to torch tensors and rotation matrices
-    history_xyz_tensor = torch.tensor(history_xyz)
-    history_quaternion_tensor = torch.tensor(history_quaternion_wxyz)
-    history_rotation_tensor = _quaternion_wxyz_to_matrix(history_quaternion_tensor)
+    interpolated_rig_in_local = trajectory_of_rig_in_local.interpolate(
+        history_timestamps_us
+    )
 
-    # 3. Transform to rig frame relative to t0 (last history step) and add
-    #    batch dimensions: (B=1, n_traj_group=1, T, ...)
-    xyz_t0 = history_xyz_tensor[[-1]]
-    rotation_t0 = history_rotation_tensor[[-1]]
+    # 2. Transform to rig frame relative to t0 (last history step)
+    pose_local_to_rig_t0 = interpolated_rig_in_local.last_pose
+    interpolated_rig_in_rig_t0 = interpolated_rig_in_local.transform(
+        pose_local_to_rig_t0.inverse()
+    )
+
+    # 3. Extract positions and rotation matrices as numpy arrays
+    ego_history_xyz_in_rig_t0 = interpolated_rig_in_rig_t0.positions  # (N, 3)
+    ego_history_rot_rig_to_rig_t0 = (
+        interpolated_rig_in_rig_t0.rotation_matrices()  # (N, 3, 3)
+    )
+
+    # 4. Convert to torch tensors with batch dimensions: (B=1, n_traj_group=1, T, ...)
     ego_history_xyz_tensor = (
-        (rotation_t0.mT @ (history_xyz_tensor - xyz_t0).unsqueeze(-1))
-        .squeeze(-1)
-        .unsqueeze(0)
-        .unsqueeze(0)
+        torch.from_numpy(ego_history_xyz_in_rig_t0).float().unsqueeze(0).unsqueeze(0)
     )
     ego_history_rot_tensor = (
-        (rotation_t0.mT @ history_rotation_tensor).unsqueeze(0).unsqueeze(0)
+        torch.from_numpy(ego_history_rot_rig_to_rig_t0)
+        .float()
+        .unsqueeze(0)
+        .unsqueeze(0)
     )
-
-    # 4. Keep the t0 pose in the local frame, reordering WXYZ to the XYZW that
-    #    `Pose` expects, so callers can map model outputs back to that frame.
-    quaternion_t0_xyzw = history_quaternion_wxyz[-1, [1, 2, 3, 0]]
-    pose_local_to_rig_t0 = Pose(history_xyz[-1], quaternion_t0_xyzw)
 
     return ego_history_xyz_tensor, ego_history_rot_tensor, pose_local_to_rig_t0
 
@@ -651,18 +526,13 @@ class AlpamayoBaseModel(BaseTrajectoryModel):
             self.HISTORY_TIME_STEP,
         )
 
-        # Alpamayo takes navigation intent as text, so the route reaches the
-        # model only through this string.  Without it the model has to guess
-        # which way to go at intersections.
+        # Alpamayo takes navigation intent as text.  The runtime sends the
+        # turn-by-turn instruction in the trained wording (from route geometry
+        # or the recorded route); without one the model has to guess which way
+        # to go at intersections.
         nav_text = (
-            route_to_nav_text(
-                route_in_rig_at_t0(
-                    prediction_input.route,
-                    prediction_input.ego_pose_history,
-                    pose_local_to_rig_t0,
-                )
-            )
-            if prediction_input.route is not None
+            prediction_input.navigation.instruction_text
+            if prediction_input.navigation is not None
             else None
         )
         logger.debug("nav_text=%r", nav_text)

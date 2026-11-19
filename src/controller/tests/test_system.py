@@ -5,15 +5,229 @@ import argparse
 import faulthandler
 import math
 
+import numpy as np
 import pytest
-from alpasim_controller.mpc_controller import ControllerConfig, MPCImplementation
+from alpasim_controller.mpc_controller import (
+    ControllerConfig,
+    ControllerOutput,
+    MPCImplementation,
+)
+from alpasim_controller.mpc_impl import SQPMPC, LinearMPC, NonlinearMPC
+from alpasim_controller.system import System, create_system
 from alpasim_controller.system_manager import SystemManager
 from alpasim_grpc.v0 import common_pb2, controller_pb2
+from alpasim_grpc.v0.logging_pb2 import LogEntry
+from alpasim_utils.geometry import pose_from_grpc
+from alpasim_utils.logs import LogWriter, async_read_pb_log
 
 X_ORIGINAL = 100.0
 Y_ORIGINAL = 200.0
 DT = 100000  # 0.1 seconds
 SESSION_UUID = "session_uuid"
+
+
+@pytest.mark.parametrize(
+    "statuses,failed_count",
+    [
+        (["solved"], 0),
+        (["failed: primal infeasible"], 1),
+        (["failed: primal infeasible", "solved inaccurate", "solved"], 1),
+    ],
+)
+def test_response_counts_each_mpc_update(tmp_path, monkeypatch, statuses, failed_count):
+    request = run_controller_and_vehicle_model_request(len(statuses) * DT)
+    request.pose_reporting_interval_us = DT // 10
+    controller = LinearMPC()
+    outcomes = iter(statuses)
+
+    def compute(_):
+        status = next(outcomes)
+        return ControllerOutput(
+            None if status.startswith("failed:") else np.zeros(2), 0.0, status
+        )
+
+    monkeypatch.setattr(controller, "compute_control", compute)
+    system = System(str(tmp_path / "controller.csv"), request.state, controller)
+    response = system.run_controller_and_vehicle_model(request)
+    assert response.HasField("solver_stats")
+    assert response.solver_stats.solve_count == len(statuses)
+    assert response.solver_stats.failed_solve_count == failed_count
+
+
+def test_held_command_reports_zero_solves_after_failed_request(tmp_path, monkeypatch):
+    request = run_controller_and_vehicle_model_request(DT // 2)
+    controller = LinearMPC()
+    monkeypatch.setattr(
+        controller,
+        "compute_control",
+        lambda _: ControllerOutput(None, 0.0, "failed: primal infeasible"),
+    )
+    system = System(str(tmp_path / "controller.csv"), request.state, controller)
+    first = system.run_controller_and_vehicle_model(request)
+    assert first.solver_stats.solve_count == first.solver_stats.failed_solve_count == 1
+    state = first.states[-1]
+    request.state.timestamp_us = state.timestamp_us
+    request.state.pose.CopyFrom(state.pose_local_to_rig)
+    request.state.state.CopyFrom(state.dynamic_state)
+    request.future_time_us = state.timestamp_us + DT // 10
+    response = system.run_controller_and_vehicle_model(request)
+    assert response.HasField("solver_stats")
+    assert (
+        response.solver_stats.solve_count
+        == response.solver_stats.failed_solve_count
+        == 0
+    )
+
+
+@pytest.mark.parametrize("backend", [LinearMPC, NonlinearMPC, SQPMPC])
+@pytest.mark.parametrize("coerce", [False, True])
+def test_failed_solves_retain_active_command_after_optional_coercion(
+    tmp_path, monkeypatch, backend, coerce
+):
+    request = run_controller_and_vehicle_model_request(DT)
+    controller = backend(n_horizon=5)
+    system = System(str(tmp_path / "controller.csv"), request.state, controller)
+    state = system.run_controller_and_vehicle_model(request).states[-1]
+    request.state.timestamp_us = state.timestamp_us
+    request.state.pose.CopyFrom(state.pose_local_to_rig)
+    request.state.state.CopyFrom(state.dynamic_state)
+    request.future_time_us = state.timestamp_us + 2 * DT
+    request.coerce_dynamic_state = coerce
+    system.control_input = np.array([0.12, 1.0])
+    expected = system.current_control_input
+    if coerce:
+        request.state.state.linear_velocity.x = 10.0
+        request.state.state.angular_velocity.z = 0.4
+        request.state.state.linear_acceleration.x = 2.0
+        expected = np.array(
+            [
+                math.atan(
+                    request.state.state.angular_velocity.z
+                    / request.state.state.linear_velocity.x
+                    * system._vehicle_model.parameters.wheelbase
+                ),
+                2.0,
+            ]
+        )
+    resets = []
+    native_reset = controller.reset_warm_start
+
+    def reset():
+        resets.append(True)
+        native_reset()
+
+    monkeypatch.setattr(controller, "reset_warm_start", reset)
+    monkeypatch.setattr(
+        controller, "_compute_control", lambda _: (None, "native failure")
+    )
+    response = system.run_controller_and_vehicle_model(request)
+    np.testing.assert_array_equal(system.current_control_input, expected)
+    assert system.last_controller_status == "failed: native failure"
+    assert (
+        response.solver_stats.solve_count
+        == response.solver_stats.failed_solve_count
+        == 2
+    )
+    assert len(resets) == 2 + coerce
+
+
+@pytest.mark.parametrize("counts", [None, (0, 0), (3, 1)])
+async def test_asl_preserves_solver_stats_presence_and_counts(tmp_path, counts):
+    response = controller_pb2.RunControllerAndVehicleModelResponse()
+    if counts is not None:
+        response.solver_stats.CopyFrom(
+            controller_pb2.RunControllerAndVehicleModelResponse.SolverStats(
+                solve_count=counts[0], failed_solve_count=counts[1]
+            )
+        )
+    asl_path = str(tmp_path / "controller.asl")
+    async with LogWriter(asl_path) as writer:
+        await writer.on_message(LogEntry(controller_return=response))
+    entries = [entry async for entry in async_read_pb_log(asl_path)]
+    assert len(entries) == 1
+    logged_response = entries[0].controller_return
+    assert logged_response.HasField("solver_stats") == (counts is not None)
+    assert logged_response == response
+
+
+@pytest.mark.parametrize("mpc_impl", list(MPCImplementation))
+def test_held_plan_keeps_first_waypoint_frame_between_requests(tmp_path, mpc_impl):
+    """Reusing a plan preserves its world targets as the ego advances."""
+    config = ControllerConfig(mpc_implementation=mpc_impl)
+    request = run_controller_and_vehicle_model_request(dt_propagation_us=500000)
+    request.pose_reporting_interval_us = 100000
+    bulk = create_system(str(tmp_path / "bulk.csv"), request.state, config)
+    expected = bulk.run_controller_and_vehicle_model(request)
+
+    ticks = create_system(str(tmp_path / "ticks.csv"), request.state, config)
+    for state_expected in expected.states:
+        request.future_time_us = request.state.timestamp_us + 100000
+        observed = ticks.run_controller_and_vehicle_model(request).states[-1]
+        np.testing.assert_allclose(
+            pose_from_grpc(observed.pose_local_to_rig).vec3,
+            pose_from_grpc(state_expected.pose_local_to_rig).vec3,
+            rtol=0,
+            atol=1e-5,
+        )
+        assert observed.dynamic_state.angular_velocity.z == pytest.approx(
+            state_expected.dynamic_state.angular_velocity.z, abs=1e-4
+        )
+        request.state.timestamp_us = observed.timestamp_us
+        request.state.pose.CopyFrom(observed.pose_local_to_rig)
+        request.state.state.CopyFrom(observed.dynamic_state)
+
+
+@pytest.mark.parametrize("mpc_impl", list(MPCImplementation))
+def test_coercion_discards_previous_optimizer_state(tmp_path, mpc_impl) -> None:
+    """After coercion, a used optimizer behaves exactly like a fresh optimizer."""
+    config = ControllerConfig(mpc_implementation=mpc_impl)
+    stop = run_controller_and_vehicle_model_request()
+    del stop.planned_trajectory_in_rig.poses[2:]
+    used = create_system(str(tmp_path / "used.csv"), stop.state, config)
+    first = used.run_controller_and_vehicle_model(stop).states[-1]
+    request = run_controller_and_vehicle_model_request()
+    delta = first.timestamp_us - request.state.timestamp_us
+    request.state.timestamp_us += delta
+    request.future_time_us += delta
+    for sample in request.planned_trajectory_in_rig.poses:
+        sample.timestamp_us += delta
+    request.coerce_dynamic_state = True
+    observed = used.run_controller_and_vehicle_model(request)
+
+    fresh = create_system(str(tmp_path / "fresh.csv"), request.state, config)
+    expected = fresh.run_controller_and_vehicle_model(request)
+    np.testing.assert_array_equal(
+        used.current_control_input, fresh.current_control_input
+    )
+    assert (
+        observed.states[-1].SerializeToString()
+        == expected.states[-1].SerializeToString()
+    )
+
+
+@pytest.mark.parametrize("controller_type", [LinearMPC, NonlinearMPC, SQPMPC])
+def test_coercion_replaces_held_commands_between_mpc_ticks(
+    tmp_path, monkeypatch, controller_type
+) -> None:
+    """No pre-coercion steering or brake command survives until the next solve."""
+    request = run_controller_and_vehicle_model_request(dt_propagation_us=50000)
+    controller = controller_type()
+    monkeypatch.setattr(
+        controller,
+        "compute_control",
+        lambda _: ControllerOutput(np.array([0.5, -9.0]), 0.0, "solved"),
+    )
+    system = System(str(tmp_path / "controller.csv"), request.state, controller)
+    first = system.run_controller_and_vehicle_model(request).states[-1]
+    request.state.timestamp_us = first.timestamp_us
+    request.state.pose.CopyFrom(first.pose_local_to_rig)
+    request.state.state.linear_velocity.x = get_vx()
+    request.state.state.linear_acceleration.x = 2.0
+    request.future_time_us = first.timestamp_us + 10000
+    request.coerce_dynamic_state = True
+    response = system.run_controller_and_vehicle_model(request)
+    np.testing.assert_array_equal(system.current_control_input, [0.0, 2.0])
+    assert response.states[-1].dynamic_state.linear_acceleration.x == pytest.approx(2.0)
 
 
 def get_vx(slow: bool = False) -> float:
@@ -54,7 +268,7 @@ def run_controller_and_vehicle_model_request(
 
 @pytest.mark.parametrize("dt_propagation_us", [100000, 500000])
 def test_alpasimvdc_one_step(dt_propagation_us) -> None:
-    "Run a single step of the controller and vehicle model simulation."
+    """Run a single step of the controller and vehicle model simulation."""
     system_manager = SystemManager(".", controller_config=ControllerConfig())
 
     # Must start session before running controller
@@ -99,13 +313,13 @@ def test_coerce_dynamic_state_preserves_yaw_rate(tmp_path) -> None:
     """Coercing dynamic state initializes the model from ground-truth yaw rate."""
     system_manager = SystemManager(str(tmp_path), controller_config=ControllerConfig())
     system_manager.start_session(SESSION_UUID)
-    request = run_controller_and_vehicle_model_request()
+    request = run_controller_and_vehicle_model_request(dt_propagation_us=1)
     request.state.state.angular_velocity.z = 0.2
     request.coerce_dynamic_state = True
 
     response = system_manager.run_controller_and_vehicle_model(request)
 
-    assert response.states[-1].dynamic_state.angular_velocity.z != 0.0
+    assert response.states[-1].dynamic_state.angular_velocity.z == pytest.approx(0.2)
 
 
 def test_session_lifecycle() -> None:
@@ -188,14 +402,12 @@ def generate_run_controller_request(
     ],
 )
 def test_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
-    "Run multiple steps of the controller and vehicle model simulation."
+    """Run multiple steps of the controller and vehicle model simulation."""
     run_mini_sim(slow, mpc_impl)
 
 
 def run_mini_sim(slow: bool, mpc_impl: MPCImplementation) -> None:
-    """
-    Simulate multiple steps of the simulation, with a constant velocity trajectory.
-    """
+    """Simulate multiple steps of the simulation, with a constant velocity trajectory."""
     system_manager = SystemManager(
         ".", controller_config=ControllerConfig(mpc_implementation=str(mpc_impl))
     )

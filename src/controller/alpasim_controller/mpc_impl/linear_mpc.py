@@ -1,31 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 NVIDIA Corporation
 
-"""
-Linear MPC controller using OSQP.
+"""Linear MPC controller using OSQP.
 
 Linearizes bicycle dynamics around current state and solves a QP for optimal control.
-Uses matrix exponential discretization for accuracy with the dynamic bicycle model.
+Uses an affine linearization of the shared discrete bicycle model.
 """
 
 import logging
 import math
-import time
 
+import casadi
 import numpy as np
 import osqp
-import scipy.linalg
-import scipy.sparse as sparse
 from alpasim_controller.mpc_controller import (
     DEFAULT_DT_MPC,
+    DEFAULT_MAX_SPEED_MPS,
     DEFAULT_N_HORIZON,
     ControllerInput,
-    ControllerOutput,
     MPCController,
     MPCGains,
 )
-from alpasim_controller.vehicle_model import VehicleModel
+from alpasim_controller.vehicle_model import VehicleModel, integrate_vehicle_state
 from alpasim_utils.geometry import Trajectory
+from scipy import sparse
 
 
 class LinearMPC(MPCController):
@@ -75,6 +73,20 @@ class LinearMPC(MPCController):
         self._n_horizon = n_horizon
         self._dt_mpc = dt_mpc
 
+        state = casadi.SX.sym("state", self.NX)
+        control = casadi.SX.sym("control", self.NU)
+        next_state, _ = integrate_vehicle_state(
+            state, control, self._dt_mpc, self._vehicle_params
+        )
+        self._dynamics_linearization = casadi.Function(
+            "linear_mpc_dynamics",
+            [state, control],
+            [
+                next_state,
+                casadi.jacobian(next_state, state),
+                casadi.jacobian(next_state, control),
+            ],
+        )
         self._qp_solver = osqp.OSQP()
 
         # Build/cache cost matrices
@@ -116,7 +128,7 @@ class LinearMPC(MPCController):
         self._x_max_constrained = np.array(
             [
                 math.pi / 2,  # yaw (rad)
-                40.0,  # vx (m/s) - ~145 km/h
+                DEFAULT_MAX_SPEED_MPS,  # vx (m/s)
                 math.pi / 4,  # steering (rad)
                 6.0,  # accel (m/s²) - acceleration limit
             ]
@@ -128,7 +140,11 @@ class LinearMPC(MPCController):
     def name(self) -> str:
         return "linear_mpc"
 
-    def compute_control(self, input: ControllerInput) -> ControllerOutput:
+    def reset_warm_start(self) -> None:
+        """Each solve replaces the native workspace, so no warm state is reused."""
+        return
+
+    def _compute_control(self, input: ControllerInput) -> tuple[np.ndarray | None, str]:
         """Compute optimal control using linearized MPC.
 
         Args:
@@ -137,8 +153,6 @@ class LinearMPC(MPCController):
         Returns:
             Optimal control command and solver metadata
         """
-        start_time = time.perf_counter()
-
         x0 = input.state
 
         # Interpolate reference trajectory at MPC horizon timesteps
@@ -148,17 +162,12 @@ class LinearMPC(MPCController):
         )
 
         # Solve QP
-        u_opt, status = self._solve_qp(
-            x0, x_ref, self._Q, self._R, self._Qf, self._gains.idx_start_penalty
-        )
-
-        solve_time_ms = (time.perf_counter() - start_time) * 1000
-
-        return ControllerOutput(
-            control=u_opt,
-            solve_time_ms=solve_time_ms,
-            status=status,
-        )
+        try:
+            return self._solve_qp(
+                x0, x_ref, self._Q, self._R, self._Qf, self._gains.idx_start_penalty
+            )
+        except osqp.OSQPException as exc:
+            return None, str(exc)
 
     def _interpolate_reference(
         self,
@@ -198,126 +207,19 @@ class LinearMPC(MPCController):
 
         return x_ref
 
-    def _linearize_dynamics(self, x_op: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Linearize the bicycle model around operating point.
+    def _linearize_dynamics(
+        self, x_op: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return A, B, c for x_next = A x + B u + c about zero command.
 
-        Returns discrete-time matrices (A_d, B_d) such that:
-            x_{k+1} = A_d @ x_k + B_d @ u_k
-
-        Args:
-            x_op: Operating point state vector (8,)
-
-        Returns:
-            A_d: Discrete-time state matrix (NX, NX)
-            B_d: Discrete-time input matrix (NX, NU)
+        The affine residual preserves the operating-point prediction when
+        differentiating products such as speed times steering.
         """
-        params = self._vehicle_params
-        dt = self._dt_mpc
-
-        # Extract operating point values
-        yaw = x_op[self.IYAW]
-        v_cg_x = x_op[self.IVX]
-        v_cg_y = x_op[self.IVY]
-        yaw_rate = x_op[self.IYAW_RATE]
-
-        # Use kinematic model at low speeds
-        use_kinematic = v_cg_x < params.kinematic_threshold_speed
-
-        # Initialize Jacobians
-        A = np.zeros((self.NX, self.NX))
-        B = np.zeros((self.NX, self.NU))
-
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
-
-        if use_kinematic:
-            # Kinematic model linearization.
-            A[self.IX, self.IYAW] = -v_cg_x * sin_yaw
-            A[self.IX, self.IVX] = cos_yaw
-
-            A[self.IY, self.IYAW] = v_cg_x * cos_yaw
-            A[self.IY, self.IVX] = sin_yaw
-
-            A[self.IYAW, self.IYAW_RATE] = 1.0
-            A[self.IVX, self.IACCEL] = 1.0
-
-            # Freeze v_cg_x as a scheduling parameter. Adding its product derivatives
-            # without an affine residual would double the operating-point terms.
-            GAIN = 10.0
-            l_r = params.l_rig_to_cg
-            L = params.wheelbase
-            A[self.IVY, self.IVY] = -GAIN
-            A[self.IVY, self.ISTEERING] = GAIN * v_cg_x * l_r / L
-
-            A[self.IYAW_RATE, self.ISTEERING] = GAIN * v_cg_x / L
-            A[self.IYAW_RATE, self.IYAW_RATE] = -GAIN
-
-        else:
-            # Dynamic model linearization
-            kinetic_mass = params.mass * v_cg_x
-            kinetic_inertia = params.inertia * v_cg_x
-
-            lf = params.wheelbase - params.l_rig_to_cg
-            lr = params.l_rig_to_cg
-            Caf = params.front_cornering_stiffness
-            Car = params.rear_cornering_stiffness
-
-            lf_caf = lf * Caf
-            lr_car = lr * Car
-
-            a_00 = -2 * (Caf + Car) / kinetic_mass
-            a_01 = -v_cg_x - 2 * (lf_caf - lr_car) / kinetic_mass
-            a_10 = -2 * (lf_caf - lr_car) / kinetic_inertia
-            a_11 = -2 * (lf * lf_caf + lr * lr_car) / kinetic_inertia
-
-            b_00 = 2 * Caf / params.mass
-            b_10 = 2 * lf_caf / params.inertia
-
-            v_rig_y = v_cg_y - lr * yaw_rate
-
-            A[self.IX, self.IYAW] = -v_cg_x * sin_yaw - v_rig_y * cos_yaw
-            A[self.IX, self.IVX] = cos_yaw
-            A[self.IX, self.IVY] = -sin_yaw
-            A[self.IX, self.IYAW_RATE] = lr * sin_yaw
-
-            A[self.IY, self.IYAW] = v_cg_x * cos_yaw - v_rig_y * sin_yaw
-            A[self.IY, self.IVX] = sin_yaw
-            A[self.IY, self.IVY] = cos_yaw
-            A[self.IY, self.IYAW_RATE] = -lr * cos_yaw
-
-            A[self.IYAW, self.IYAW_RATE] = 1.0
-            A[self.IVX, self.IACCEL] = 1.0
-
-            A[self.IVY, self.IVY] = a_00
-            A[self.IVY, self.IYAW_RATE] = a_01
-            A[self.IVY, self.ISTEERING] = b_00
-
-            A[self.IYAW_RATE, self.IVY] = a_10
-            A[self.IYAW_RATE, self.IYAW_RATE] = a_11
-            A[self.IYAW_RATE, self.ISTEERING] = b_10
-
-        # Steering dynamics
-        tau_s = params.steering_time_constant
-        A[self.ISTEERING, self.ISTEERING] = -1.0 / tau_s
-        B[self.ISTEERING, 0] = 1.0 / tau_s
-
-        # Acceleration dynamics
-        tau_a = params.acceleration_time_constant
-        A[self.IACCEL, self.IACCEL] = -1.0 / tau_a
-        B[self.IACCEL, 1] = 1.0 / tau_a
-
-        # Discretize using matrix exponential
-        nx = self.NX
-        nu = self.NU
-        M = np.zeros((nx + nu, nx + nu))
-        M[:nx, :nx] = A * dt
-        M[:nx, nx:] = B * dt
-
-        expM = scipy.linalg.expm(M)
-        A_d = expM[:nx, :nx]
-        B_d = expM[:nx, nx:]
-
-        return A_d, B_d
+        next_state, A, B = self._dynamics_linearization(x_op, np.zeros(self.NU))
+        A = np.asarray(A)
+        B = np.asarray(B)
+        residual = np.asarray(next_state).reshape(self.NX) - A @ x_op
+        return A, B, residual
 
     def _solve_qp(
         self,
@@ -327,7 +229,7 @@ class LinearMPC(MPCController):
         R: np.ndarray,
         Qf: np.ndarray,
         idx_start_penalty: int,
-    ) -> tuple[np.ndarray, str]:
+    ) -> tuple[np.ndarray | None, str]:
         """Solve the MPC QP problem using condensed formulation.
 
         Cost: J = sum_k (x_k - x_ref_k)' Q (x_k - x_ref_k) + u_k' R u_k
@@ -353,18 +255,20 @@ class LinearMPC(MPCController):
         nu = self.NU
 
         # Linearize around current state
-        A_d, B_d = self._linearize_dynamics(x0)
+        A_d, B_d, residual = self._linearize_dynamics(x0)
 
         # Build condensed prediction matrices
-        # x_k = S_x[k] @ x_0 + S_u[k] @ U
+        # x_k = S_x[k] @ x_0 + S_c[k] + S_u[k] @ U
         S_x = np.zeros(((N + 1) * nx, nx))
         S_u = np.zeros(((N + 1) * nx, N * nu))
 
+        S_c = np.zeros((N + 1, nx))
         A_pow = np.eye(nx)
         for k in range(N + 1):
             S_x[k * nx : (k + 1) * nx, :] = A_pow
             if k < N:
                 A_pow = A_d @ A_pow
+                S_c[k + 1] = A_d @ S_c[k] + residual
 
         for j in range(N):
             Psi = B_d
@@ -388,7 +292,7 @@ class LinearMPC(MPCController):
         x_ref_flat = x_ref.flatten()
 
         # Predicted state with zero control
-        x_pred_free = S_x @ x0
+        x_pred_free = S_x @ x0 + S_c.ravel()
 
         # Condensed QP cost: min 0.5 * U' H U + g' U
         H = S_u.T @ Q_blk @ S_u + R_blk
@@ -433,12 +337,12 @@ class LinearMPC(MPCController):
             eps_abs=self.OSQP_EPS_ABS,
             eps_rel=self.OSQP_EPS_REL,
             max_iter=self.OSQP_MAX_ITER,
-            polish=False,
+            polishing=False,
         )
-        result = self._qp_solver.solve()
+        result = self._qp_solver.solve(raise_error=False)
 
-        if result.info.status not in ("solved", "solved_inaccurate"):
+        if result.info.status not in ("solved", "solved inaccurate"):
             logging.debug(f"OSQP solver status: {result.info.status}")
-            return np.zeros(nu), result.info.status
+            return None, result.info.status
 
         return result.x[:nu], result.info.status

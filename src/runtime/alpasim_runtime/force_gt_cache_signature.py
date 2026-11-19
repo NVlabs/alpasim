@@ -101,6 +101,10 @@ def build_force_gt_render_signature(
         "renderer_version": renderer_version,
         "extra_key": getattr(unbound, "force_gt_frame_cache_extra_key", None),
     }
+    if unbound.ego_mask_camera_logical_ids is not None:
+        payload["ego_mask_camera_logical_ids"] = sorted(
+            unbound.ego_mask_camera_logical_ids
+        )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     return f"{ImageFormat.Name(int(unbound.image_format)).lower()}-{digest}"

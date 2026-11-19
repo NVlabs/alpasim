@@ -15,6 +15,8 @@ from typing import Any
 
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import SimulatorConfig
+from alpasim_runtime.ego_masks import EgoMaskOverride
+from alpasim_runtime.nav_route import NavRouteLibrary
 from alpasim_runtime.telemetry.rpc_wrapper import init_shared_rpc_tracking
 from alpasim_runtime.worker.ipc import (
     SHUTDOWN_SENTINEL,
@@ -136,6 +138,8 @@ def start_worker_runtime(
     log_dir: str,
     eval_config: EvalConfig,
     version_ids: RolloutMetadata.VersionIds,
+    nav_routes: NavRouteLibrary | None = None,
+    ego_mask_overrides: dict[str, EgoMaskOverride] | None = None,
 ) -> WorkerRuntime:
     """Create and start a WorkerRuntime for the given configuration.
 
@@ -161,6 +165,9 @@ def start_worker_runtime(
             version_ids=version_ids,
             parent_pid=None,
             telemetry_port=worker_ports[0],
+            ego_mask_overrides=ego_mask_overrides,
+            log_level=logger.getEffectiveLevel(),
+            nav_routes=nav_routes,
         )
         runtime = WorkerRuntime(
             job_queue=job_queue,
@@ -185,6 +192,9 @@ def start_worker_runtime(
                 parent_pid=parent_pid,
                 shared_rpc_tracking=shared_rpc_tracking,
                 telemetry_port=worker_ports[worker_id],
+                ego_mask_overrides=ego_mask_overrides,
+                log_level=logger.getEffectiveLevel(),
+                nav_routes=nav_routes,
             )
             for worker_id in range(nr_workers)
         ]

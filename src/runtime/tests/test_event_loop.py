@@ -9,16 +9,112 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-from alpasim_runtime.event_loop import EventBasedRollout, create_event_rollout
+from alpasim_runtime.event_loop import (
+    EventBasedRollout,
+    _build_initial_ego_trajectory,
+    _build_traffic_session_trajectory,
+    create_event_rollout,
+)
 from alpasim_runtime.events.base import Event, SimulationEndEvent
 from alpasim_runtime.events.policy import PolicyEvent
+from alpasim_runtime.events.step import InitialStepEvent
 from alpasim_utils.geometry import DynamicTrajectory, Pose, Trajectory
+from alpasim_utils.logs import LogWriter
 from alpasim_utils.scenario import TrafficObjects
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
+
+
+def test_three_arm_fork_initialization_preserves_parent_and_known_shift() -> None:
+    timestamps_us = np.array([0, 100_000, 200_000], dtype=np.uint64)
+    parent_history = Trajectory.from_poses(
+        timestamps_us,
+        [
+            Pose(
+                np.array([x, 0.0, 0.0], dtype=np.float32),
+                np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            )
+            for x in [0.0, 1.0, 2.0]
+        ],
+    )
+    shifted_history = parent_history.transform(
+        Pose(
+            np.array([5.0, 0.0, 0.0], dtype=np.float32),
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+        ),
+        is_relative=True,
+    )
+    recording_gt = parent_history
+
+    def _unbound(fork_history: Trajectory | None) -> SimpleNamespace:
+        return SimpleNamespace(
+            fork_ego_history=fork_history,
+            gt_ego_trajectory=recording_gt,
+            egomotion_context_start_us=0,
+            first_policy_timestamp_us=200_000,
+            end_timestamp_us=200_000,
+            transform_ego_coords_ds_to_aabb=Pose.identity(),
+        )
+
+    parent_unbound = _unbound(None)
+    matching_unbound = _unbound(parent_history)
+    shifted_unbound = _unbound(shifted_history)
+
+    parent_seed = _build_initial_ego_trajectory(parent_unbound)
+    matching_seed = _build_initial_ego_trajectory(matching_unbound)
+    shifted_seed = _build_initial_ego_trajectory(shifted_unbound)
+
+    np.testing.assert_allclose(matching_seed.positions, parent_seed.positions)
+    np.testing.assert_allclose(
+        shifted_seed.positions,
+        parent_seed.positions + np.array([5.0, 0.0, 0.0], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        shifted_seed.dynamics[:, :3], matching_seed.dynamics[:, :3]
+    )
+
+    matching_traffic_ego = _build_traffic_session_trajectory(matching_unbound)
+    shifted_traffic_ego = _build_traffic_session_trajectory(shifted_unbound)
+    np.testing.assert_allclose(matching_traffic_ego.positions, parent_seed.positions)
+    np.testing.assert_allclose(
+        shifted_traffic_ego.positions,
+        parent_seed.positions + np.array([5.0, 0.0, 0.0], dtype=np.float32),
+    )
+
+
+def test_fork_initialization_keeps_history_before_render_warmup() -> None:
+    timestamps_us = np.array([0, 100_000, 200_000], dtype=np.uint64)
+    history = Trajectory.from_poses(
+        timestamps_us,
+        [
+            Pose(
+                np.array([x, 0.0, 0.0], dtype=np.float32),
+                np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            )
+            for x in [0.0, 1.0, 2.0]
+        ],
+    )
+    common = {
+        "gt_ego_trajectory": history,
+        "egomotion_context_start_us": 100_000,
+        "first_policy_timestamp_us": 200_000,
+    }
+
+    fork_seed = _build_initial_ego_trajectory(
+        SimpleNamespace(fork_ego_history=history, **common)
+    )
+    recording_seed = _build_initial_ego_trajectory(
+        SimpleNamespace(fork_ego_history=None, **common)
+    )
+
+    assert fork_seed.timestamps_us.tolist() == [0, 100_000, 200_000]
+    assert recording_seed.timestamps_us.tolist() == [100_000, 200_000]
 
 
 def test_initial_event_schedule_uses_policy_and_end_timestamps() -> None:
     rollout = cast(Any, object.__new__(EventBasedRollout))
     rollout.unbound = SimpleNamespace(
+        route_navigator=None,
+        geometry_navigation=False,
         egomotion_context_start_us=100,
         render_start_timestamp_us=150,
         first_policy_timestamp_us=150,
@@ -26,12 +122,14 @@ def test_initial_event_schedule_uses_policy_and_end_timestamps() -> None:
         end_timestamp_us=300,
         control_timestep_us=100,
         send_recording_ground_truth=False,
+        send_vectorized_observation=False,
     )
     rollout.runtime_cameras = []
     rollout.driver = MagicMock()
     rollout.controller = MagicMock()
     rollout.physics = MagicMock()
     rollout.trafficsim = MagicMock()
+    rollout.frame_quality = MagicMock()
     rollout.broadcaster = MagicMock()
     rollout.planner_delay_buffer = MagicMock()
     rollout.route_generator = None
@@ -54,12 +152,21 @@ def test_initial_event_schedule_uses_policy_and_end_timestamps() -> None:
     policy = next(e for e in events if isinstance(e, PolicyEvent))
     end = next(e for e in events if isinstance(e, SimulationEndEvent))
     render = next(e for e in events if isinstance(e, _FakeRenderEvent))
+    same_timestamp_events = sorted(e for e in events if e.timestamp_us == 100)
 
     # ``scene_start_us`` is anchored to the rollout start so the renderer's
     # scheduling/prefetch covers any prerun before the first GT camera frame.
     assert render.timestamp_us == 100
+    assert isinstance(same_timestamp_events[0], InitialStepEvent)
+    assert isinstance(same_timestamp_events[1], _FakeRenderEvent)
     assert policy.timestamp_us == 150
     assert end.timestamp_us == 300
+    assert (
+        rollout.renderer_service.make_initial_render_event.call_args.kwargs[
+            "frame_quality"
+        ]
+        is rollout.frame_quality
+    )
 
 
 def test_create_event_rollout_uses_renderer_service() -> None:
@@ -83,6 +190,7 @@ def test_create_event_rollout_uses_renderer_service() -> None:
             physics=MagicMock(),
             trafficsim=MagicMock(),
             controller=MagicMock(),
+            frame_quality=MagicMock(),
             camera_catalog=MagicMock(),
             eval_config=MagicMock(),
             eval_executor=MagicMock(),
@@ -108,16 +216,21 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
         first_policy_timestamp_us=100_000,
         closed_loop_start_us=300_000,
         gt_ego_trajectory=simple_trajectory,
+        fork_ego_history=None,
         traffic_objs=TrafficObjects(),
         planner_delay_us=0,
         vector_map=None,
         route_generator_type="RECORDED",
         route_start_offset_m=0.0,
+        route_navigator=None,
+        geometry_navigation=False,
         rollout_uuid="rollout",
-        scene_id="scene",
+        scene=Scene(ClipDataSource("scene", "test-uuid"), T0_AUTO),
         save_path_root=str(tmp_path),
+        write_asl=False,
     )
 
+    frame_quality = MagicMock(skip=False)
     rollout = EventBasedRollout(
         unbound=unbound,
         data_source=MagicMock(),
@@ -126,14 +239,38 @@ def test_initial_ego_context_uses_all_gt_samples_through_first_policy(
         physics=MagicMock(),
         trafficsim=MagicMock(),
         controller=MagicMock(),
+        frame_quality=frame_quality,
         camera_catalog=MagicMock(),
-        eval_config=MagicMock(),
+        eval_config=SimpleNamespace(enabled=True),
         eval_executor=MagicMock(),
     )
 
     assert rollout.ego_trajectory_estimate.timestamps_us.tolist() == [0, 100_000]
+    assert not any(
+        isinstance(handler, LogWriter) for handler in rollout.broadcaster.handlers
+    )
+    assert frame_quality not in rollout.broadcaster.handlers
     state = rollout._create_rollout_state()
     assert state.last_egopose_update_us is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_work_drains_step_tasks_before_quality() -> None:
+    order: list[str] = []
+    rollout = cast(Any, object.__new__(EventBasedRollout))
+    rollout._frame_quality_enabled = True
+    rollout.frame_quality = SimpleNamespace(
+        drain=AsyncMock(side_effect=lambda: order.append("quality"))
+    )
+    state = SimpleNamespace(
+        step_context=SimpleNamespace(
+            drain_outstanding_tasks=AsyncMock(side_effect=lambda: order.append("step"))
+        )
+    )
+
+    await rollout._drain_runtime_work(state)
+
+    assert order == ["step", "quality"]
 
 
 @pytest.mark.asyncio
@@ -142,6 +279,8 @@ async def test_force_gt_physics_blend_extends_through_controller_lookahead(
 ) -> None:
     rollout = cast(Any, object.__new__(EventBasedRollout))
     rollout.unbound = SimpleNamespace(
+        route_navigator=None,
+        geometry_navigation=False,
         gt_ego_trajectory=simple_trajectory,
         egomotion_context_start_us=0,
         render_start_timestamp_us=100_000,
@@ -192,6 +331,8 @@ async def test_force_gt_physics_blend_caps_huge_duration_to_rollout_end(
 ) -> None:
     rollout = cast(Any, object.__new__(EventBasedRollout))
     rollout.unbound = SimpleNamespace(
+        route_navigator=None,
+        geometry_navigation=False,
         gt_ego_trajectory=simple_trajectory,
         egomotion_context_start_us=0,
         render_start_timestamp_us=100_000,
@@ -241,6 +382,8 @@ async def test_force_gt_physics_blend_zero_duration_is_noop() -> None:
     )
     rollout = cast(Any, object.__new__(EventBasedRollout))
     rollout.unbound = SimpleNamespace(
+        route_navigator=None,
+        geometry_navigation=False,
         gt_ego_trajectory=gt_trajectory,
         egomotion_context_start_us=0,
         render_start_timestamp_us=100_000,

@@ -75,7 +75,7 @@ tutorial/
 │           │   └── clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4 -> ../../all/clipgt-026d6a39-bd8f-4175-bc61-fe50ed0403a3_814f3c22-bb78-11f0-a5f3-2f64b47b8685_0.mp4
 │           └── offroad
 ├── rollouts
-│   ├── clipgt-f7020b3e-3d61-4cb6-b157-2f4aac1a7d8d
+│   ├── clipgt-f7020b3e-3d61-4cb6-b157-2f4aac1a7d8d@t0=AUTO
 │   │   └── 86513b18-96c5-11ef-8b6f-b83fd26d88f0
 │   │       ├── rollout.asl
 │   │       ├── rollout_indexed
@@ -86,9 +86,9 @@ tutorial/
 │   │       │   └── rclog-all-indexed.log
 │   │       ├── rollout.rclog
 │   │       ├── metrics.parquet
-│   │       ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│   │       ├── {scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4
 │   │       └── _complete
-│   ├── clipgt-fa369408-2787-41cb-b629-a7885d7c46e2
+│   ├── clipgt-fa369408-2787-41cb-b629-a7885d7c46e2@t0=AUTO
 │   │   └── 8656ecb6-96c5-11ef-8b6f-b83fd26d88f0
 │   │       ├── rollout.asl
 │   │       ├── rollout_indexed
@@ -99,9 +99,9 @@ tutorial/
 │   │       │   └── rclog-all-indexed.log
 │   │       ├── rollout.rclog
 │   │       ├── metrics.parquet
-│   │       ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│   │       ├── {scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4
 │   │       └── _complete
-│   └── clipgt-fe127c3f-8b06-4c4f-9933-1e5089a1a731
+│   └── clipgt-fe127c3f-8b06-4c4f-9933-1e5089a1a731@t0=AUTO
 │       └── 864da3ea-96c5-11ef-8b6f-b83fd26d88f0
 │           ├── rollout.asl
 │           ├── rollout_indexed
@@ -112,7 +112,7 @@ tutorial/
 │           │   └── rclog-all-indexed.log
 │           ├── rollout.rclog
 │           ├── metrics.parquet
-│           ├── {clipgt_id}_{batch_id}_{rollout_id}.mp4
+│           ├── {scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4
 │           └── _complete
 ├── driver
 │   └── vam-driver.yaml
@@ -145,15 +145,14 @@ Some noteworthy files and directories:
 
 - `rollouts` contains logs of simulation behavior in each rollout, used to analyze AV behavior and
   calculate metrics. The logs are organized into
-  `rollouts/{scenario.scene_id}/{batch_uuid}/rollout.*` - in this case we have 3 scenes with one
-  batch of a single rollout each. The subdivision into batches is historical and can be ignored for
-  most purposes.
+  `rollouts/{scene_key}/{batch_uuid}/rollout.*` - in this case we have 3 scenes with one batch of a
+  single rollout each. The batch subdivision can be ignored for most purposes.
   - `.asl` files which record the messages exchanged within the simulation. These are useful for
     debugging the simulator behavior and replaying events. More in
     [asl log format](#asl-log-format).
   - `metrics.parquet` contains per-rollout evaluation metrics.
-  - `{clipgt_id}_{batch_id}_{rollout_id}.mp4` evaluation videos (when video rendering is enabled),
-    where `clipgt_id=f"clipgt-{scene_id}"`, `batch_id="0"`, `rollout_id=rollout_uuid`.
+  - `{scene_key}_{rollout_id}_{camera_id}_{layout_id}.mp4` evaluation videos (when video
+    rendering is enabled), where `scene_key` identifies the source and policy start.
   - `_complete` is a marker file created when a rollout finishes successfully. Used by the
     autoresume feature to track which rollouts completed and to remove incomplete rollout
     directories on restart.
@@ -206,7 +205,7 @@ The wizard requires three config groups:
 |-------|---------|----------|
 | `deploy=` | Where to run (filesystem paths, SLURM vs Docker) | `local`, `docker_build_only` |
 | `topology=` | How many GPUs, replicas, and workers | `1gpu`, `2gpu`, `8gpu_64rollouts` |
-| `driver=` | Which driving model to use | `vavam`, `alpamayo1`, `alpamayo1_5`, `manual` |
+| `driver=` | Which driving model to use | `vavam`, `alpamayo1`, `alpamayo1_5`, `alpamayo2`, `alpamayo2_edge`, `manual` |
 | `driver_source=` | Optional non-managed driver source | `external_static`, `external_dynamic` |
 
 By default, the wizard launches and owns the configured driver service. Use
@@ -269,7 +268,7 @@ uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=<di
 ### Evaluation video layouts
 You can choose which video layouts to render via `eval.video.video_layouts`. Available layouts are `DEFAULT` (BEV map, camera, metrics) and `REASONING_OVERLAY` (first-person camera with reasoning text overlay and trajectory chart). To generate reasoning-overlay videos only, override when invoking the wizard, for example:
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_reasoning_overlay eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 You can also set `eval.video.video_layouts=[DEFAULT,REASONING_OVERLAY]` to render both layouts per rollout.
 
@@ -289,10 +288,10 @@ The wizard uses [VaVAM](https://github.com/valeoai/VideoActionModel) as the defa
 explicitly define the driver config, one can use:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_alpamayo
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_vavam
 ```
 
-### Alpamayo (1 and 1.5)
+### Alpamayo
 
 Both [Alpamayo 1](https://github.com/NVlabs/alpamayo) and
 [Alpamayo 1.5](https://github.com/NVlabs/alpamayo1.5) are 10B-parameter
@@ -302,15 +301,18 @@ running:
 
 ```bash
 # Alpamayo 1
-huggingface-cli download nvidia/Alpamayo-R1-10B
+uv run hf download nvidia/Alpamayo-R1-10B
+
+# Alpamayo 2 Edge
+uv run hf download nvidia/Alpamayo2-Edge
 
 # Alpamayo 1.5 — both the model and its VLM backbone are gated;
 # accept the license agreements first, then authenticate:
 #   https://huggingface.co/nvidia/Alpamayo-1.5-10B
 #   https://huggingface.co/nvidia/Cosmos-Reason2-8B
-huggingface-cli login            # paste your HF token when prompted
-huggingface-cli download nvidia/Alpamayo-1.5-10B
-huggingface-cli download nvidia/Cosmos-Reason2-8B
+uv run hf auth login            # paste your HF token when prompted
+uv run hf download nvidia/Alpamayo-1.5-10B
+uv run hf download nvidia/Cosmos-Reason2-8B
 ```
 
 The wizard will use the `HF_HOME` environment variable to find the system HuggingFace cache
@@ -322,23 +324,29 @@ Alternatively, you can specify the path to the model directory by setting the
 Run with Alpamayo 1:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo1
 ```
 
 Run with Alpamayo 1.5:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_dir=$PWD/tutorial_alpamayo
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5 wizard.log_dir=$PWD/tutorial_alpamayo1_5
 ```
 
-> :warning: Both models are large (10B parameters). Alpamayo 1 requires ~40 GB VRAM;
+Run with Alpamayo 2 Edge:
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo2_edge wizard.log_dir=$PWD/tutorial_alpamayo2edge
+```
+
+> :warning: Alpamayo 1 and 1.5 are large (10B parameters). Alpamayo 1 requires ~40 GB VRAM;
 > Alpamayo 1.5 standard inference also requires ~40 GB VRAM.
 
 To strengthen how much Alpamayo 1.5 follows the navigation instruction derived from
 the route, run the classifier-free guidance variant (requires ~60 GB VRAM):
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5_cfg_guidance wizard.log_dir=$PWD/tutorial_alpamayo
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1_5_cfg_guidance wizard.log_dir=$PWD/tutorial_alpamayo1_5_cfg
 ```
 
 Each planning cycle Alpamayo 1.5 sees the newest four frames of every configured camera, an
@@ -349,7 +357,7 @@ conditioning and drives on imagery and ego history alone.
 To visualize the predicted chain-of-causation reasoning you can change the generated video layout:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo eval.video.video_layouts=[REASONING_OVERLAY]
+uv run alpasim_wizard deploy=local topology=1gpu driver=alpamayo1 wizard.log_dir=$PWD/tutorial_alpamayo1_reasoning eval.video.video_layouts=[REASONING_OVERLAY]
 ```
 
 ### Transfuser (provisional)
@@ -366,8 +374,8 @@ To run with the Transfuser model use `driver=transfuser`.
 First, one must download the Transfuser model weights/config from HuggingFace:
 
 ```bash
-huggingface-cli download longpollehn/tfv6_navsim model_0060.pth --local-dir=data/drivers/transfuser/
-huggingface-cli download longpollehn/tfv6_navsim config.json --local-dir=data/drivers/transfuser/
+uv run hf download longpollehn/tfv6_navsim model_0060.pth --local-dir=data/drivers/transfuser/
+uv run hf download longpollehn/tfv6_navsim config.json --local-dir=data/drivers/transfuser/
 ```
 
 Then, run the wizard with the following command:
@@ -391,42 +399,52 @@ and the OmniDreams video-model renderer both use these artifacts; OmniDreams add
 on ClipGT data packaged in the USDZ, including recorded first-frame JPEGs, camera calibration, and
 HD map data.
 
-Publicly available scene artifacts are stored on
+Public artifacts are stored on
 [Hugging Face](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec/tree/26.01/sample_set/26.01_release)
-and, once downloaded, are placed under `data/nre-artifacts/all-usdzs`. The scenes are identified by
-their uuid, rather than their filenames, to prevent versioning issues. The list of currently
-available scenes exists in [scenes set](/data/scenes/sim_scenes.csv) and the set of available
-suites exists in [scene suites](/data/scenes/sim_suites.csv).
+and downloaded to `data/nre-artifacts/all-usdzs`. The
+[clip catalogs](/data/scenes/README.md) map ClipGT IDs and versioned UUIDs to those artifacts.
 
-#### Selecting Individual Scenes
+#### Selecting Clips Directly
 
-For custom scene selection, you can specify scenes manually using `scenes.scene_ids`:
+Select clips by ClipGT ID:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_2 scenes.scene_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam wizard.log_dir=$PWD/tutorial_2 scenes.clip_ids=['clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6']
 ```
 
-If necessary, the scene will automatically be downloaded from Hugging Face to your local
-`data/nre-artifacts/all-usdzs` directory. If the download is necessary, ensure you have set your
-Hugging Face token in the `HF_TOKEN` environment variable as described in the onboarding
-instructions.
+The Wizard selects the newest catalog artifact for each clip. Set `HF_TOKEN` if it must download
+an artifact from Hugging Face.
 
-> :green_book: Scene ids are defined/viewable in `data/scenes/sim_scenes.csv` :warning: A scene id
-> does not uniquely identify the `usdz` file as the scene id comes from the `metadata.yaml` file
-> inside the `usdz` zip file. The proper artifact file will be chosen to satisfy the NRE version
-> requirements.
+#### Using Local Clip Artifacts
+
+Set `scenes.local_usdz_dir=/foo/bar` to select every USDZ in a directory. Subdirectories are
+scanned recursively. Add `scenes.clip_ids=[...]` to filter the discovered clips.
 
 #### Using Scene Suites
 
-Scene suites provide pre-validated collections of scenes for testing. To use the public
-`public_2601` suite (:warning: this will download every scene in the suite):
+Scene suites are ordered, UUID-pinned clip selections. Selecting one downloads every clip in the
+suite. Select checked-in suites by ID:
 
 ```bash
-uv run alpasim_wizard deploy=local topology=1gpu driver=vavam scenes.test_suite_id=public_2601 wizard.log_dir=$PWD/tutorial_suite
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
+  'scenes.suite_ids=[public_2601]' \
+  wizard.log_dir=$PWD/tutorial_suite
 ```
 
-This will run simulations across every scene currently listed for the `public_2601` suite in
-[`data/scenes/sim_suites.csv`](/data/scenes/sim_suites.csv).
+See the [scene-suite guide](/data/scenes/scene_suites/README.md) for composition and authoring.
+
+To omit known-incompatible or unusually expensive clips while preserving the suite's exact
+artifact versions, set `scenes.exclude_clip_ids`:
+
+```bash
+uv run alpasim_wizard deploy=local topology=1gpu driver=vavam \
+  'scenes.suite_ids=[public_2601]' \
+  scenes.exclude_clip_ids='["clipgt-02eadd92-02f1-46d8-86fe-a9e338fed0b6"]' \
+  wizard.log_dir=$PWD/tutorial_suite_filtered
+```
+
+Excluded IDs must belong to the selected suites or explicit `scenes.clip_ids` list. Exclusions are
+applied before `scenes.limit_to_first_n`.
 
 ## Custom components
 

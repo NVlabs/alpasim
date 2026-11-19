@@ -20,7 +20,7 @@ class RecordingBroadcaster:
 
 
 @pytest.mark.asyncio
-async def test_traffic_session_request_uses_scene_id() -> None:
+async def test_traffic_session_request_maps_clip_id_to_external_scene_id() -> None:
     broadcaster = RecordingBroadcaster()
     service = TrafficService(address="localhost:0", skip=True)
 
@@ -30,7 +30,7 @@ async def test_traffic_session_request_uses_scene_id() -> None:
             broadcaster=broadcaster,
             session_config=TrafficSessionConfig(
                 traffic_objs={},
-                scene_id="clipgt-01d503d4-449b-46fc-8d78-9085e70d3554",
+                clip_id="clipgt-01d503d4-449b-46fc-8d78-9085e70d3554",
                 ego_aabb=AABB(x=4.5, y=2.0, z=1.7),
                 gt_ego_aabb_trajectory=Trajectory.create_empty(),
                 start_timestamp_us=0,
@@ -56,7 +56,7 @@ async def test_traffic_session_request_uses_configured_seed() -> None:
             broadcaster=broadcaster,
             session_config=TrafficSessionConfig(
                 traffic_objs={},
-                scene_id="clipgt-01d503d4-449b-46fc-8d78-9085e70d3554",
+                clip_id="clipgt-01d503d4-449b-46fc-8d78-9085e70d3554",
                 ego_aabb=AABB(x=4.5, y=2.0, z=1.7),
                 gt_ego_aabb_trajectory=Trajectory.create_empty(),
                 start_timestamp_us=0,

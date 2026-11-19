@@ -48,25 +48,25 @@ def image_to_sqsh_basename(image: str) -> str:
 
 def extract_ids_from_path(file_path: str) -> tuple[str, str]:
     """
-    Extract clipgt_id and rollout_id from a file path.
+    Extract scene_key and rollout_id from a file path.
 
     Parses the rollout directory layout produced by the runtime::
 
-        <log_dir>/rollouts/<clipgt_id>/<rollout_uuid>/
+        <log_dir>/rollouts/<scene_key>/<rollout_uuid>/
             rollout.asl
             metrics.parquet
             *.mp4
 
     Example::
 
-        >>> extract_ids_from_path(".../rollouts/clipgt-01d5…3554/4fe6…dbfc/rollout.asl")
-        ('clipgt-01d5…3554', '4fe6…dbfc')
+        >>> extract_ids_from_path(".../rollouts/clipgt-01d5@t0=AUTO/4fe6/rollout.asl")
+        ('clipgt-01d5@t0=AUTO', '4fe6')
 
     Args:
         file_path: Path to any file inside a rollout directory.
 
     Returns:
-        ``(clipgt_id, rollout_id)`` extracted from the two parent directories.
+        ``(scene_key, rollout_id)`` extracted from the two parent directories.
         Returns ``("unknown", "unknown")`` if the path is too short.
     """
     path = Path(file_path)

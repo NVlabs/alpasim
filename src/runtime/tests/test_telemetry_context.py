@@ -46,6 +46,19 @@ def test_renderer_metrics_exclude_scene_and_renderer_identity() -> None:
     assert "renderer_address" not in metrics
 
 
+def test_frame_quality_metrics_record_pending_backpressure_and_drain() -> None:
+    ctx = TelemetryContext(port=9200, worker_id=3)
+
+    ctx.record_frame_quality_pending_requests(7)
+    ctx.record_frame_quality_backpressure()
+    ctx.record_frame_quality_drain(0.25)
+
+    metrics = generate_latest(ctx.registry).decode("utf-8")
+    assert 'alpasim_frame_quality_pending_requests{worker_id="3"} 7.0' in metrics
+    assert 'alpasim_frame_quality_backpressure_total{worker_id="3"} 1.0' in metrics
+    assert 'alpasim_frame_quality_drain_seconds_sum{worker_id="3"} 0.25' in metrics
+
+
 def test_refresh_gauges_snapshots_event_loop_and_gc_stats(monkeypatch) -> None:
     ctx = TelemetryContext(port=9200, worker_id=0)
     monkeypatch.setattr(

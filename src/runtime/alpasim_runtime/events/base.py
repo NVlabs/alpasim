@@ -27,6 +27,7 @@ class EventPriority:
     ===  ==================  ==========================================
     Pri  Event               Role
     ===  ==================  ==========================================
+    5    InitialStepEvent    Establish and log initial state
     10   CameraFrameEvent     Render/register camera frames
     11   CameraRenderFlushEvent Render grouped camera frames
     20   PolicyEvent          Gather observations, query driver
@@ -39,6 +40,7 @@ class EventPriority:
     ===  ==================  ==========================================
     """
 
+    INITIAL_STEP = 5
     CAMERA = 10
     CAMERA_FLUSH = 11
     POLICY = 20

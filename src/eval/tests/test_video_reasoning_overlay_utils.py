@@ -24,6 +24,7 @@ from eval.data import (
     Routes,
     SimulationResult,
 )
+from eval.video import VIDEO_FILE_NAME_FORMAT
 from eval.video_reasoning_overlay_utils import _render_single_reasoning_overlay_frame
 
 
@@ -38,6 +39,20 @@ def _make_renderable_trajectory(
         Trajectory(timestamps_us, positions.astype(np.float32), quaternions),
         raabb,
     )
+
+
+def test_video_filenames_distinguish_two_t0s_for_one_source() -> None:
+    names = {
+        VIDEO_FILE_NAME_FORMAT.format(
+            scene_key=f"clip-a@t0={policy_start_us}",
+            rollout_id="rollout",
+            camera_id="camera",
+            layout_id="layout",
+        )
+        for policy_start_us in (100, 200)
+    }
+
+    assert len(names) == 2
 
 
 def test_render_single_reasoning_overlay_frame_uses_renderable_trajectory_api() -> None:
@@ -77,8 +92,14 @@ def test_render_single_reasoning_overlay_frame_uses_renderable_trajectory_api() 
     sim_result = SimulationResult(
         session_metadata=RolloutMetadata.SessionMetadata(
             session_uuid="test-session",
-            scene_id="test-scene",
-            batch_size=1,
+            scene={
+                "source": {
+                    "clip": {
+                        "clip_id": "test-scene",
+                        "usdz_uuid": "test-artifact",
+                    }
+                }
+            },
             n_sim_steps=3,
             start_timestamp_us=0,
             control_timestep_us=100_000,

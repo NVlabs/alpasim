@@ -25,9 +25,10 @@ Use one persistent local Prometheus/Grafana instance for the whole experiment.
    `src/tools/scripts/start-prometheus-grafana.sh <file-sd-dir-or-ssh-path>
    --grafana-port 3003 --prometheus-port 9093`. Use the non-default ports to
    avoid conflicts with user-started telemetry stacks.
-2. The `<file-sd-dir-or-ssh-path>` argument is provided by the experiment logs.
-   For example, the default value on IAD is
-   `<iad-ssh-alias>:/lustre/fsw/portfolios/av/projects/av_alpamayo_reasoning/data/av_alpamayo_sim/.cache/prometheus/file-sd`
+2. Find the file-SD directory in the experiment logs or resolved wizard config:
+   `${defines.filesystem}/prometheus/file-sd`. Use the resolved filesystem path,
+   not the literal Hydra expression. For a remote deployment, prefix it with the
+   SSH target used for the run: `<ssh-target>:<resolved-file-sd-directory>`.
 3. Keep the local telemetry stack running until all experiment candidates have
    been evaluated. Then stop it with `src/tools/scripts/start-prometheus-grafana.sh stop`
 4. Create a repo-local experiment record from `references/experiment-record.md`.

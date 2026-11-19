@@ -37,9 +37,6 @@ class AlpasimWizard:
     def create(cfg: AlpasimConfig) -> AlpasimWizard:
         """Factory method to create AlpasimWizard instance."""
 
-        if cfg.wizard.slurm_job_id is None:
-            cfg.wizard.slurm_job_id = int(os.environ.get("SLURM_JOB_ID", "0"))
-
         context = WizardContext.create(cfg)
         return AlpasimWizard(
             context=context,
@@ -99,12 +96,6 @@ class AlpasimWizard:
         # With the container set, we can now generate the configs and save them.
         config_manager = ConfigurationManager(self.context.cfg.wizard.log_dir)
         config_manager.generate_all(container_set, self.context)
-
-        if (
-            self.context.cfg.wizard.enable_mps
-            and not self.context.cfg.wizard.run_method.is_slurm
-        ):
-            raise ValueError("wizard.enable_mps is only supported on SLURM")
 
         # Handle different run methods
         try:

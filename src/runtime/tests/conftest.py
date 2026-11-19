@@ -22,6 +22,7 @@ from alpasim_runtime.services.controller_service import (
     PropagatedPosesAtTime,
 )
 from alpasim_runtime.services.driver_service import DriverService
+from alpasim_runtime.services.frame_quality_service import FrameQualityService
 from alpasim_runtime.services.physics_service import PhysicsService
 from alpasim_runtime.services.sensorsim_service import SensorsimService
 from alpasim_runtime.services.traffic_service import TrafficService
@@ -29,6 +30,7 @@ from alpasim_runtime.types import Clock, RuntimeCamera
 from alpasim_runtime.unbound_rollout import UnboundRollout
 from alpasim_utils.geometry import DynamicTrajectory, Pose, Trajectory
 from alpasim_utils.scenario import AABB, TrafficObjects
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
 
 
 def _identity_pose() -> Pose:
@@ -93,9 +95,20 @@ def mock_driver() -> AsyncMock:
     driver.submit_image = AsyncMock()
     driver.submit_trajectory = AsyncMock()
     driver.submit_route = AsyncMock()
+    driver.submit_vectorized_observation = AsyncMock()
+
+    driver.submit_navigation = AsyncMock()
     driver.submit_recording_ground_truth = AsyncMock()
     driver.drive = AsyncMock()
     return driver
+
+
+@pytest.fixture
+def mock_frame_quality() -> AsyncMock:
+    frame_quality = AsyncMock(spec=FrameQualityService)
+    frame_quality.skip = False
+    frame_quality.submit_frame = AsyncMock()
+    return frame_quality
 
 
 @pytest.fixture
@@ -159,8 +172,12 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound = MagicMock(spec=UnboundRollout)
 
     unbound.rollout_uuid = "test-uuid-1234"
-    unbound.scene_id = "test-scene"
+    unbound.scene = Scene(
+        ClipDataSource("test-scene", "test-usdz-uuid"),
+        T0_AUTO,
+    )
     unbound.gt_ego_trajectory = simple_trajectory
+    unbound.fork_ego_history = None
     unbound.n_sim_steps = 10
     unbound.egomotion_context_start_us = 0
     unbound.render_start_timestamp_us = 0
@@ -177,12 +194,14 @@ def mock_unbound(simple_trajectory: Trajectory) -> MagicMock:
     unbound.save_path_root = "/tmp/test"
     unbound.image_format = 2  # JPEG
     unbound.ego_mask_rig_config_id = "default"
+    unbound.ego_mask_camera_logical_ids = None
     unbound.assert_zero_decision_delay = False
     unbound.planner_delay_us = 0
     unbound.send_recording_ground_truth = False
     unbound.render_bundling = RenderBundling.NONE
     unbound.route_generator_type = "NONE"
     unbound.route_start_offset_m = 0.0
+    unbound.route_navigator = None
     unbound.physics_update_mode = PhysicsUpdateMode.NONE
 
     unbound.transform_ego_coords_ds_to_aabb = _identity_pose()

@@ -52,16 +52,16 @@ class PhysicsSimService(PhysicsServiceServicer):
         )
 
         self.visualize = visualize
-        logger.info(f"Available scenes: {list(self.artifacts.keys())}.")
+        logger.info(f"Available clips: {list(self.artifacts.keys())}.")
 
         # instantiate the method here to avoid caching `self`
         @functools.lru_cache(maxsize=cache_size)
-        def get_backend(scene_id: str) -> PhysicsBackend:
-            if scene_id not in self.artifacts:
-                raise KeyError(f"Scene {scene_id=} not available.")
+        def get_backend(clip_id: str) -> PhysicsBackend:
+            if clip_id not in self.artifacts:
+                raise KeyError(f"Clip {clip_id=} not available.")
 
-            artifact = self.artifacts[scene_id]
-            logger.info(f"Cache miss, loading {artifact.scene_id=}")
+            artifact = self.artifacts[clip_id]
+            logger.info("Cache miss, loading clip_id=%s", artifact.scene_id)
             mesh_ply = artifact.mesh_ply
 
             # don't keep the .ply file once the backend is evicted from the lru_cache
@@ -77,7 +77,8 @@ class PhysicsSimService(PhysicsServiceServicer):
     def ground_intersection(
         self, request: PhysicsGroundIntersectionRequest, context: grpc.ServicerContext
     ) -> PhysicsGroundIntersectionReturn:
-        logger.debug(f"Received request for scene_id={request.scene_id}")
+        # PhysicsService's wire schema names the clip ID scene_id.
+        logger.debug(f"Received request for clip_id={request.scene_id}")
         logger.debug(f"full request={request}")
         try:
             backend = self.get_backend(request.scene_id)
@@ -169,7 +170,7 @@ def parse_args(
         "--cache-size",
         type=int,
         default=16,
-        help="Number of scene backends to keep in LRU cache. Set to match or exceed concurrent scenes.",
+        help="Number of clip backends to keep in LRU cache. Set to match or exceed concurrent clips.",
     )
     parser.add_argument(
         "--log-level",

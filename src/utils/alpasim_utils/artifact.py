@@ -126,18 +126,19 @@ class Artifact(SceneDataSource):
             for path in glob.glob(glob_query, recursive=recursive)
         }
 
-        scene_id_to_artifact_paths: dict[str, list[str]] = {}
+        clip_id_to_artifact_paths: dict[str, list[str]] = {}
         for path, artifact in artifacts.items():
-            scene_id_to_artifact_paths.setdefault(artifact.scene_id, []).append(path)
+            clip_id_to_artifact_paths.setdefault(artifact.scene_id, []).append(path)
 
         duplicates = {
-            artifact: paths
-            for artifact, paths in scene_id_to_artifact_paths.items()
+            clip_id: paths
+            for clip_id, paths in clip_id_to_artifact_paths.items()
             if len(paths) >= 2
         }
         if duplicates:
             raise AssertionError(
-                f"Duplicate scene IDs found. Duplicates (scene_id: artifact paths): {duplicates}."
+                "Duplicate clip IDs found. "
+                f"Duplicates (clip_id: artifact paths): {duplicates}."
             )
 
         return {artifact.scene_id: artifact for artifact in artifacts.values()}
@@ -178,9 +179,7 @@ class Artifact(SceneDataSource):
 
     @property
     def scene_id(self) -> str:
-        """
-        The name used to identify the scene via `scene_id=` when requesting
-        """
+        """The clip identifier exposed through the legacy ``scene_id`` API."""
         return self.metadata.scene_id
 
     @property

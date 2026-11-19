@@ -33,9 +33,10 @@ _FUSE_OVERLAYFS_SHA256 = (
 )
 
 # squashfuse: Ubuntu 18.04 packages. Version 0.1.103 supports the uid/gid FUSE
-# options used by Enroot while remaining compatible with IAD's glibc and libfuse2.
-# Its private libraries are installed beside the tools and added to
-# LD_LIBRARY_PATH by the direct-Enroot launcher.
+# options used by Enroot while supporting older glibc versions. Bundle its
+# libfuse2 dependency so it can also run on hosts that provide only libfuse3.
+# Libraries are installed beside the tools and added to LD_LIBRARY_PATH by the
+# direct-Enroot launcher.
 _SQUASHFUSE_DEB_URL = (
     "https://archive.ubuntu.com/ubuntu/pool/universe/s/squashfuse/"
     "squashfuse_0.1.103-2_amd64.deb"
@@ -50,8 +51,17 @@ _LIBSQUASHFUSE_DEB_URL = (
 _LIBSQUASHFUSE_DEB_SHA256 = (
     "92f21e67051ed629d2b6117e0d38d48e4899c9ae6edd9f83fcd288b18590ce91"
 )
+_LIBFUSE2_DEB_URL = "https://archive.ubuntu.com/ubuntu/pool/main/f/fuse/libfuse2_2.9.7-1ubuntu1_amd64.deb"
+_LIBFUSE2_DEB_SHA256 = (
+    "4f332bcabd466dbff28ad0614b5eaeef49a7ff9140c2cc3c1749a0ed06b0c75a"
+)
 _REQUIRED_TOOLS = ("fuse-overlayfs", "fusermount3", "squashfuse")
-_SQUASHFUSE_LIBRARIES = ("libsquashfuse.so.0", "libfuseprivate.so.0")
+# Library name -> its directory inside the extracted packages.
+_SQUASHFUSE_LIBRARIES = {
+    "libsquashfuse.so.0": "usr/lib/x86_64-linux-gnu",
+    "libfuseprivate.so.0": "usr/lib/x86_64-linux-gnu",
+    "libfuse.so.2": "lib/x86_64-linux-gnu",
+}
 _DOWNLOAD_ATTEMPTS = 3
 _DOWNLOAD_TIMEOUT_SECONDS = 60
 _DOWNLOAD_USER_AGENT = "AlpaSim/1.0"
@@ -61,6 +71,7 @@ _SOURCE_DIGESTS = {
     _FUSE_OVERLAYFS_URL: _FUSE_OVERLAYFS_SHA256,
     _SQUASHFUSE_DEB_URL: _SQUASHFUSE_DEB_SHA256,
     _LIBSQUASHFUSE_DEB_URL: _LIBSQUASHFUSE_DEB_SHA256,
+    _LIBFUSE2_DEB_URL: _LIBFUSE2_DEB_SHA256,
 }
 
 
@@ -156,19 +167,13 @@ def _fetch_squashfuse(bin_dir: Path) -> None:
     target = bin_dir / "squashfuse"
     logger.info("Downloading squashfuse from Ubuntu package")
     with tempfile.TemporaryDirectory() as tmp:
-        deb_path = Path(tmp) / "squashfuse.deb"
-        library_deb_path = Path(tmp) / "libsquashfuse.deb"
-        _download_verified(
-            _SQUASHFUSE_DEB_URL,
-            deb_path,
-            _SQUASHFUSE_DEB_SHA256,
-        )
-        _download_verified(
-            _LIBSQUASHFUSE_DEB_URL,
-            library_deb_path,
-            _LIBSQUASHFUSE_DEB_SHA256,
-        )
-        for package in (deb_path, library_deb_path):
+        for name, url, sha256 in (
+            ("squashfuse.deb", _SQUASHFUSE_DEB_URL, _SQUASHFUSE_DEB_SHA256),
+            ("libsquashfuse.deb", _LIBSQUASHFUSE_DEB_URL, _LIBSQUASHFUSE_DEB_SHA256),
+            ("libfuse2.deb", _LIBFUSE2_DEB_URL, _LIBFUSE2_DEB_SHA256),
+        ):
+            package = Path(tmp) / name
+            _download_verified(url, package, sha256)
             subprocess.run(
                 ["dpkg-deb", "-x", str(package), tmp],
                 check=True,
@@ -176,11 +181,12 @@ def _fetch_squashfuse(bin_dir: Path) -> None:
             )
         _install_file(Path(tmp) / "usr" / "bin" / "squashfuse", target)
         _make_executable(target)
-        source_lib_dir = Path(tmp) / "usr" / "lib" / "x86_64-linux-gnu"
         _, target_lib_dir = fuse_tool_paths(bin_dir.parent)
         target_lib_dir.mkdir(parents=True, exist_ok=True)
-        for name in _SQUASHFUSE_LIBRARIES:
-            _install_file((source_lib_dir / name).resolve(), target_lib_dir / name)
+        for name, source_dir in _SQUASHFUSE_LIBRARIES.items():
+            _install_file(
+                (Path(tmp) / source_dir / name).resolve(), target_lib_dir / name
+            )
 
 
 def _ensure_fusermount3_symlink(bin_dir: Path) -> None:

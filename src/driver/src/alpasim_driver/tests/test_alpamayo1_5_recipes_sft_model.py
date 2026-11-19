@@ -7,6 +7,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 import torch
 from alpasim_driver.models import alpamayo1_5_recipes_sft_model as recipes_model
 from alpasim_driver.models.alpamayo1_5_model import Alpamayo15Model
@@ -79,6 +80,20 @@ def test_model_reuses_alpamayo15_driver_initialization(monkeypatch) -> None:
     assert adapter._chat_template is chat_template
     assert adapter._force_determinism is True
     assert adapter._cfg_guidance_weight is None
+
+
+def test_recipes_model_uses_eager_expert_when_release_preset_enables_graphs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = SimpleNamespace(
+        cfg_guidance_weight=None,
+        diffusion_expert_cuda_graph=True,
+    )
+
+    kwargs = recipes_model.Alpamayo15RecipesSFTModel._variant_init_kwargs(config)
+
+    assert kwargs == {"cfg_guidance_weight": None}
+    assert "using eager expert forwards" in caplog.text
 
 
 def test_model_uses_recipes_future_only_prompt_with_alpamayo15_camera_order() -> None:

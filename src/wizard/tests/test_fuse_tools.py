@@ -179,14 +179,22 @@ def test_fetch_squashfuse_installs_package_binary(
         extracted_bin = extracted_root / "usr" / "bin"
         extracted_bin.mkdir(parents=True, exist_ok=True)
         (extracted_bin / "squashfuse").write_bytes(b"binary")
-        extracted_lib = extracted_root / "usr" / "lib" / "x86_64-linux-gnu"
-        extracted_lib.mkdir(parents=True, exist_ok=True)
-        for name in ("libsquashfuse.so.0.0.0", "libfuseprivate.so.0.0.0"):
-            (extracted_lib / name).write_bytes(name.encode())
-        for link_name, target_name in (
-            ("libsquashfuse.so.0", "libsquashfuse.so.0.0.0"),
-            ("libfuseprivate.so.0", "libfuseprivate.so.0.0.0"),
+        for lib_dir, link_name, target_name in (
+            (
+                "usr/lib/x86_64-linux-gnu",
+                "libsquashfuse.so.0",
+                "libsquashfuse.so.0.0.0",
+            ),
+            (
+                "usr/lib/x86_64-linux-gnu",
+                "libfuseprivate.so.0",
+                "libfuseprivate.so.0.0.0",
+            ),
+            ("lib/x86_64-linux-gnu", "libfuse.so.2", "libfuse.so.2.9.7"),
         ):
+            extracted_lib = extracted_root / lib_dir
+            extracted_lib.mkdir(parents=True, exist_ok=True)
+            (extracted_lib / target_name).write_bytes(target_name.encode())
             link = extracted_lib / link_name
             link.unlink(missing_ok=True)
             link.symlink_to(target_name)
@@ -202,6 +210,7 @@ def test_fetch_squashfuse_installs_package_binary(
     assert not (bin_dir / "squashfuse_ll").exists()
     assert (tmp_path / "lib" / "libsquashfuse.so.0").is_file()
     assert (tmp_path / "lib" / "libfuseprivate.so.0").is_file()
+    assert (tmp_path / "lib" / "libfuse.so.2").read_bytes() == b"libfuse.so.2.9.7"
 
 
 def test_all_present_verifies_manifest_and_symlink(

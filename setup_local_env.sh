@@ -104,7 +104,9 @@ echo "Installing packages with extras: ${EXTRAS[*]}"
 uv sync "${EXTRAS[@]}"
 if [[ $? -ne 0 ]]; then
     echo "⚠️  Failed to sync packages. You may need to check your environment."
+    return 1
 fi
 
+uv run --no-sync python third_party/alpamayo-transformers5/apply_patches.py || return 1
 
 echo "Setup complete"

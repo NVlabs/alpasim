@@ -9,7 +9,7 @@ busy. Workers never touch these pools — the parent acquires slots, attaches th
 to jobs, and releases them when results arrive.
 
 The pool is purely a token manager: it hands out ``ServiceAddress`` slots and
-reclaims them on release.  Scene-affine routing intelligence (which scenes are
+reclaims them on release.  Clip-affine routing intelligence (which clips are
 cached where) lives in the scheduler, not here.
 """
 
@@ -50,6 +50,7 @@ class AddressPool:
         self.skip = skip
         self._total_capacity: int = 0
         self._address_order: tuple[str, ...] = tuple(addresses) if not skip else ()
+        self._next_unreserved_address = 0
         self._slots: deque[ServiceAddress] = deque()
         if not skip:
             for addr in addresses:
@@ -64,6 +65,18 @@ class AddressPool:
         if not self._slots:
             return None
         return self._slots.popleft()
+
+    def route_unreserved(self) -> ServiceAddress:
+        """Choose an address round-robin without consuming a capacity slot."""
+        if self.skip:
+            return ServiceAddress("skip", skip=True)
+        if not self._address_order:
+            raise RuntimeError("Cannot route an active service without addresses")
+        address = self._address_order[self._next_unreserved_address]
+        self._next_unreserved_address = (self._next_unreserved_address + 1) % len(
+            self._address_order
+        )
+        return ServiceAddress(address, skip=False)
 
     def release(self, slot: ServiceAddress) -> None:
         """Return a slot to the pool."""

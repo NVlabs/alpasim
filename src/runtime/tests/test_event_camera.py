@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,7 +20,7 @@ from alpasim_runtime.events.camera import (
 from alpasim_runtime.events.state import RolloutState
 from alpasim_runtime.force_gt_frame_cache import ForceGtFrameCache, ForceGtFrameKey
 from alpasim_runtime.types import Clock, RuntimeCamera
-from alpasim_utils.types import ImageWithMetadata
+from alpasim_utils.types import ClipDataSource, ImageWithMetadata, Scene
 
 
 def _make_camera(logical_id: str) -> RuntimeCamera:
@@ -38,28 +40,36 @@ async def test_non_aggregated_camera_event_renders_immediately(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
 ):
     camera = _make_camera("cam_front")
     fake_image = MagicMock(spec=ImageWithMetadata)
     mock_sensorsim.render.return_value = fake_image
+    rollout_state.unbound.scene = Scene(
+        ClipDataSource("test-scene", "test-uuid"),
+        2_000_000,
+    )
 
     event = CameraFrameEvent(
         camera=camera,
         trigger=camera.clock.ith_trigger(0),
         sensorsim=mock_sensorsim,
         driver=mock_driver,
+        frame_quality=mock_frame_quality,
     )
 
     queue = EventQueue()
     await event.handle(rollout_state, queue)
 
     mock_sensorsim.render.assert_awaited_once()
+    assert mock_sensorsim.render.await_args.kwargs["clip_id"] == "test-scene"
     mock_sensorsim.aggregated_render.assert_not_awaited()
     assert rollout_state.last_camera_frame_us["cam_front"] == 33_000
-    assert len(rollout_state.step_context.outstanding_tasks) == 1
+    assert len(rollout_state.step_context.outstanding_tasks) == 2
 
     await rollout_state.step_context.drain_outstanding_tasks()
     mock_driver.submit_image.assert_awaited_once_with(fake_image)
+    mock_frame_quality.submit_frame.assert_awaited_once_with(fake_image)
     assert len(queue) == 1
 
 
@@ -68,6 +78,7 @@ async def test_aggregated_camera_events_flush_same_timestamp_together(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
 ):
     cam_front = _make_camera("cam_front")
     cam_rear = _make_camera("cam_rear")
@@ -79,11 +90,11 @@ async def test_aggregated_camera_events_flush_same_timestamp_together(
 
     queue = EventQueue()
     await CameraFrameEvent(
-        cam_front, trigger_front, mock_sensorsim, mock_driver
+        cam_front, trigger_front, mock_sensorsim, mock_driver, mock_frame_quality
     ).handle(rollout_state, queue)
-    await CameraFrameEvent(cam_rear, trigger_rear, mock_sensorsim, mock_driver).handle(
-        rollout_state, queue
-    )
+    await CameraFrameEvent(
+        cam_rear, trigger_rear, mock_sensorsim, mock_driver, mock_frame_quality
+    ).handle(rollout_state, queue)
 
     assert len(rollout_state.pending_camera_triggers[33_000]) == 2
     assert len(queue) == 3  # one flush plus one next frame per camera
@@ -99,6 +110,7 @@ async def test_aggregated_camera_events_flush_same_timestamp_together(
 
     await rollout_state.step_context.drain_outstanding_tasks()
     mock_driver.submit_image.assert_awaited_once_with(fake_image)
+    mock_frame_quality.submit_frame.assert_awaited_once_with(fake_image)
 
 
 @pytest.mark.asyncio
@@ -106,6 +118,7 @@ async def test_bundled_flush_uses_batch_render_when_flag_set(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
 ):
     """render_bundling=BATCH_RENDER_RGB routes the flush to NRE batch_render."""
     rollout_state.unbound.render_bundling = RenderBundling.BATCH_RENDER_RGB
@@ -115,9 +128,9 @@ async def test_bundled_flush_uses_batch_render_when_flag_set(
     mock_sensorsim.batch_render.return_value = ([fake_image], None)
 
     queue = EventQueue()
-    await CameraFrameEvent(camera, trigger, mock_sensorsim, mock_driver).handle(
-        rollout_state, queue
-    )
+    await CameraFrameEvent(
+        camera, trigger, mock_sensorsim, mock_driver, mock_frame_quality
+    ).handle(rollout_state, queue)
     flush = next(
         event for event in queue.queue if isinstance(event, CameraRenderFlushEvent)
     )
@@ -134,6 +147,7 @@ async def test_camera_event_schedules_next_frame_ending_at_rollout_boundary(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
 ):
     camera = _make_camera("cam_front")
     rollout_state.unbound.end_timestamp_us = 133_000
@@ -145,6 +159,7 @@ async def test_camera_event_schedules_next_frame_ending_at_rollout_boundary(
         trigger=camera.clock.ith_trigger(0),
         sensorsim=mock_sensorsim,
         driver=mock_driver,
+        frame_quality=mock_frame_quality,
     ).handle(rollout_state, queue)
 
     assert len(queue) == 1
@@ -193,10 +208,59 @@ def _enable_force_gt_cache(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cache_operation", ["get", "put"])
+async def test_force_gt_cache_io_keeps_event_loop_responsive(
+    rollout_state: RolloutState,
+    mock_sensorsim: AsyncMock,
+    mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_operation: str,
+):
+    _enable_force_gt_cache(rollout_state, tmp_path)
+    camera = _make_camera("cam_front")
+    mock_sensorsim.render.return_value = _image("cam_front", 0, 33_000, b"px")
+    cache = rollout_state.force_gt_frame_cache
+    original = getattr(cache, cache_operation)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def blocked_io(*args):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=5), "Cache I/O blocked the event loop"
+        return original(*args)
+
+    monkeypatch.setattr(cache, cache_operation, blocked_io)
+    task = asyncio.create_task(
+        CameraFrameEvent(
+            camera,
+            camera.clock.ith_trigger(0),
+            mock_sensorsim,
+            mock_driver,
+            mock_frame_quality,
+        ).handle(rollout_state, EventQueue())
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert not task.done()
+    finally:
+        release.set()
+        await task
+
+    await rollout_state.step_context.drain_outstanding_tasks()
+    assert cache.path_for(_frame_key("cam_front")).read_bytes() == b"px"
+    assert mock_driver.submit_image.await_args.args[0].image_bytes == b"px"
+    assert mock_frame_quality.submit_frame.await_args.args[0].image_bytes == b"px"
+
+
+@pytest.mark.asyncio
 async def test_force_gt_immediate_render_populates_then_replays_cache(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
     tmp_path,
 ):
     """First force-GT render hits the renderer; a fresh cache replays from disk."""
@@ -205,9 +269,9 @@ async def test_force_gt_immediate_render_populates_then_replays_cache(
     trigger = camera.clock.ith_trigger(0)  # ends at 33_000, within force-GT
     mock_sensorsim.render.return_value = _image("cam_front", 0, 33_000, b"px")
 
-    await CameraFrameEvent(camera, trigger, mock_sensorsim, mock_driver).handle(
-        rollout_state, EventQueue()
-    )
+    await CameraFrameEvent(
+        camera, trigger, mock_sensorsim, mock_driver, mock_frame_quality
+    ).handle(rollout_state, EventQueue())
     await rollout_state.step_context.drain_outstanding_tasks()
 
     mock_sensorsim.render.assert_awaited_once()
@@ -216,13 +280,14 @@ async def test_force_gt_immediate_render_populates_then_replays_cache(
     # A separate cache instance (another worker/run on the same mount) replays.
     mock_driver.submit_image.reset_mock()
     rollout_state.force_gt_frame_cache = ForceGtFrameCache(tmp_path)
-    await CameraFrameEvent(camera, trigger, mock_sensorsim, mock_driver).handle(
-        rollout_state, EventQueue()
-    )
+    await CameraFrameEvent(
+        camera, trigger, mock_sensorsim, mock_driver, mock_frame_quality
+    ).handle(rollout_state, EventQueue())
     await rollout_state.step_context.drain_outstanding_tasks()
 
     mock_sensorsim.render.assert_awaited_once()  # still only the first call
     assert mock_driver.submit_image.await_args.args[0].image_bytes == b"px"
+    assert mock_frame_quality.submit_frame.await_args.args[0].image_bytes == b"px"
 
 
 @pytest.mark.parametrize(
@@ -238,6 +303,7 @@ async def test_force_gt_render_not_cached(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
     tmp_path,
     kwargs,
 ):
@@ -246,9 +312,9 @@ async def test_force_gt_render_not_cached(
     trigger = camera.clock.ith_trigger(0)
     mock_sensorsim.render.return_value = _image("cam_front", 0, 33_000, b"px")
 
-    await CameraFrameEvent(camera, trigger, mock_sensorsim, mock_driver).handle(
-        rollout_state, EventQueue()
-    )
+    await CameraFrameEvent(
+        camera, trigger, mock_sensorsim, mock_driver, mock_frame_quality
+    ).handle(rollout_state, EventQueue())
 
     mock_sensorsim.render.assert_awaited_once()
     assert rollout_state.force_gt_frame_cache.get(_frame_key("cam_front")) is None
@@ -259,6 +325,7 @@ async def test_force_gt_bundled_flush_populates_then_replays_cache(
     rollout_state: RolloutState,
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
     tmp_path,
 ):
     """Bundled force-GT flush renders once, then replays both cameras from cache."""
@@ -278,9 +345,9 @@ async def test_force_gt_bundled_flush_populates_then_replays_cache(
         rollout_state.pending_camera_flush_timestamps.clear()
         queue = EventQueue()
         for cam in (cam_front, cam_rear):
-            await CameraFrameEvent(cam, trigger, mock_sensorsim, mock_driver).handle(
-                rollout_state, queue
-            )
+            await CameraFrameEvent(
+                cam, trigger, mock_sensorsim, mock_driver, mock_frame_quality
+            ).handle(rollout_state, queue)
         flush = next(e for e in queue.queue if isinstance(e, CameraRenderFlushEvent))
         await flush.handle(rollout_state, queue)
 
@@ -307,6 +374,7 @@ async def test_force_gt_bundled_flush_populates_then_replays_cache(
 def test_initial_sensorsim_render_events_skip_first_triggers_outside_rollout(
     mock_sensorsim: AsyncMock,
     mock_driver: AsyncMock,
+    mock_frame_quality: AsyncMock,
 ):
     inside = RuntimeCamera(
         logical_id="inside",
@@ -333,6 +401,7 @@ def test_initial_sensorsim_render_events_skip_first_triggers_outside_rollout(
         runtime_cameras=[inside, exact_end, outside],
         renderer_service=mock_sensorsim,
         driver=mock_driver,
+        frame_quality=mock_frame_quality,
         broadcaster=MagicMock(),
     )
 

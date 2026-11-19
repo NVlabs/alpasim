@@ -8,6 +8,7 @@ import gc
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,11 +24,35 @@ from alpasim_runtime.daemon.engine import (
     build_simulation_return,
 )
 from alpasim_runtime.daemon.scheduler import DaemonUnavailableError
-from alpasim_runtime.scene_loader import SceneLoader, _build_artifact_scene_provider
+from alpasim_runtime.data_source_loader import (
+    DataSourceLoader,
+    _build_artifact_data_source_provider,
+)
 from alpasim_runtime.worker.ipc import JobResult
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene, scene_to_proto
 
 from eval.data import AggregationType, MetricReturn
 from eval.scenario_evaluator import ScenarioEvalResult
+
+
+def _rollout_spec(scene: Scene, nr_rollouts: int = 1) -> runtime_pb2.RolloutSpec:
+    return runtime_pb2.RolloutSpec(scene=scene_to_proto(scene), nr_rollouts=nr_rollouts)
+
+
+def _install_scene(
+    engine: DaemonEngine,
+    clip_id: str,
+    policy_start_us: int | Literal["AUTO"] = T0_AUTO,
+) -> Scene:
+    scene = Scene(ClipDataSource(clip_id, f"uuid-for-{clip_id}"), policy_start_us)
+
+    def resolve(requested: Scene) -> Scene:
+        if requested != scene:
+            raise KeyError(requested.scene_key)
+        return scene
+
+    engine._scene_registry = SimpleNamespace(resolve=resolve)
+    return scene
 
 
 def _make_config() -> SimpleNamespace:
@@ -36,13 +61,21 @@ def _make_config() -> SimpleNamespace:
             nr_workers=1,
             renderer=RendererConfig(kind=RendererKind.sensorsim),
             smooth_trajectories=True,
-            scenes=[SimpleNamespace(scene_id="clipgt-a")],
+            scenes=[
+                SimpleNamespace(
+                    source=SimpleNamespace(
+                        clip_id="clipgt-a",
+                        usdz_uuid="uuid-a",
+                    ),
+                    policy_start_us=T0_AUTO,
+                )
+            ],
             endpoints=SimpleNamespace(startup_timeout_s=1),
-            scene_affine_dispatch=SimpleNamespace(
+            clip_affine_dispatch=SimpleNamespace(
                 enabled=False,
                 cache_refresh_interval_s=5.0,
-                max_renderers_per_scene=2,
-                max_scenes_per_renderer=None,
+                max_renderers_per_clip=2,
+                max_clips_per_renderer=None,
             ),
             max_rollout_retries=2,
         ),
@@ -87,7 +120,7 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
     def _make_failing_artifact_loader(*args, **kwargs):
         del args, kwargs
 
-        def _load_artifact(scene_id: str, artifact_path: str):
+        def _load_artifact(artifact_path: str):
             pytest.fail(
                 "get_runtime_info should not load artifacts through the runtime cache"
             )
@@ -95,13 +128,13 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
         return _load_artifact
 
     monkeypatch.setattr(
-        "alpasim_runtime.scene_loader.make_artifact_loader",
+        "alpasim_runtime.data_source_loader.make_artifact_loader",
         _make_failing_artifact_loader,
     )
     artifact_path = tmp_path / "scene.usdz"
     _write_usdz_metadata(artifact_path)
-    scene_loader = SceneLoader(
-        _build_artifact_scene_provider(
+    data_source_loader = DataSourceLoader(
+        _build_artifact_data_source_provider(
             user_config=SimpleNamespace(smooth_trajectories=True),
             usdz_provider_config=SimpleNamespace(
                 data_dir=str(artifact_path),
@@ -121,6 +154,7 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
     engine._version_ids = _version_ids()
     engine._runtime_context = SimpleNamespace(
         max_in_flight=2,
+        nav_routes=None,
         config=SimpleNamespace(
             user=SimpleNamespace(
                 nr_workers=3,
@@ -131,7 +165,13 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
             "driver": AddressPool(["driver-a:50051"], n_concurrent=2, skip=False),
             "renderer": AddressPool([], n_concurrent=0, skip=True),
         },
-        scene_loader=scene_loader,
+        data_source_loader=data_source_loader,
+        scene_registry=SimpleNamespace(
+            scenes=[
+                Scene(ClipDataSource("clipgt-a", "uuid-a"), T0_AUTO),
+                Scene(ClipDataSource("clipgt-a", "uuid-a"), 3_000_000),
+            ]
+        ),
     )
 
     info = await engine.get_runtime_info()
@@ -141,10 +181,23 @@ async def test_engine_get_runtime_info_reports_capacity_scenes_and_versions(
     assert info.renderer_type == "sensorsim"
     assert info.runtime_version.version_id == "runtime"
     assert info.video_model_version.version_id == "video-model"
-    assert [scene.scene_id for scene in info.scenes] == ["clipgt-a"]
-    assert info.scenes[0].provider_kind == "usdz"
-    assert info.scenes[0].metadata.camera_ids == ["camera_front", "camera_left"]
+    assert info.scenes[0].metadata.camera_ids == [
+        "camera_front",
+        "camera_left",
+    ]
     assert info.scenes[0].metadata.start_time_us == 1648604351509172
+    assert [
+        (scene.source.clip.clip_id, scene.HasField("policy_start_us"))
+        for scene in info.scenes
+    ] == [
+        ("clipgt-a", False),
+        ("clipgt-a", True),
+    ]
+    assert info.scenes[1].policy_start_us == 3_000_000
+    assert [scene.source.clip.usdz_uuid for scene in info.scenes] == [
+        "uuid-a",
+        "uuid-a",
+    ]
     capacities = {
         capacity.service_name: capacity for capacity in info.service_capacities
     }
@@ -183,9 +236,12 @@ async def test_engine_startup_gathers_versions_and_validates_scenes(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_loader=MagicMock(),
+            data_source_loader=MagicMock(),
+            scene_registry=MagicMock(),
             pools={"driver": AddressPool(["driver-a:50051"], 1, skip=False)},
             max_in_flight=1,
+            ego_mask_overrides=None,
+            nav_routes=None,
         )
 
     monkeypatch.setattr(
@@ -239,9 +295,12 @@ async def test_engine_startup_skips_config_scene_validation_when_disabled(
             config=config,
             eval_config=eval_config,
             version_ids=version_ids,
-            scene_loader=MagicMock(),
+            data_source_loader=MagicMock(),
+            scene_registry=MagicMock(),
             pools={"driver": AddressPool(["driver-a:50051"], 1, skip=False)},
             max_in_flight=1,
+            ego_mask_overrides=None,
+            nav_routes=None,
         )
 
     monkeypatch.setattr(
@@ -294,10 +353,10 @@ async def test_engine_simulate_submits_without_global_request_lock() -> None:
         log_dir="/tmp/log",
     )
     engine._started = True
-    # Mock SceneLoader with a fake data source
-    mock_scene_loader = MagicMock()
-    mock_scene_loader.get_data_source.return_value = MagicMock()
-    engine._scene_loader = mock_scene_loader
+    mock_data_source_loader = MagicMock()
+    mock_data_source_loader.get_data_source.return_value = MagicMock()
+    engine._data_source_loader = mock_data_source_loader
+    scene = _install_scene(engine, "clipgt-a")
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -307,9 +366,7 @@ async def test_engine_simulate_submits_without_global_request_lock() -> None:
     )
     engine._scheduler = _FakeScheduler()
 
-    request = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1)]
-    )
+    request = runtime_pb2.SimulationRequest(rollout_specs=[_rollout_spec(scene)])
 
     first = asyncio.create_task(engine.simulate(request))
     await entered_wait.wait()
@@ -344,10 +401,10 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
         log_dir="/tmp/log",
     )
     engine._started = True
-    # Mock SceneLoader with a fake data source
-    mock_scene_loader = MagicMock()
-    mock_scene_loader.get_data_source.return_value = MagicMock()
-    engine._scene_loader = mock_scene_loader
+    mock_data_source_loader = MagicMock()
+    mock_data_source_loader.get_data_source.return_value = MagicMock()
+    engine._data_source_loader = mock_data_source_loader
+    scene = _install_scene(engine, "clipgt-a")
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -364,7 +421,7 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
                 port=50051,
             ),
         ],
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1)],
+        rollout_specs=[_rollout_spec(scene)],
         n_concurrent_per_driver=2,
     )
 
@@ -379,8 +436,7 @@ async def test_engine_simulate_passes_driver_pool_when_request_has_available_dri
 
 
 @pytest.mark.asyncio
-async def test_engine_simulate_rejects_offset_for_video_model_renderer() -> None:
-    """A start offset is rejected up front when the renderer is the video model."""
+async def test_engine_simulate_rejects_unknown_scene_address() -> None:
     engine = DaemonEngine(
         user_config="u.yaml",
         network_config="n.yaml",
@@ -388,17 +444,18 @@ async def test_engine_simulate_rejects_offset_for_video_model_renderer() -> None
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._renderer_kind = RendererKind.video_model
+    engine._data_source_loader = SimpleNamespace(has_data_source=lambda _: True)
+    engine._scene_registry = SimpleNamespace(
+        resolve=lambda scene: (_ for _ in ()).throw(KeyError(scene.scene_key))
+    )
 
     request = runtime_pb2.SimulationRequest(
         rollout_specs=[
-            runtime_pb2.RolloutSpec(
-                scenario_id="clipgt-a", nr_rollouts=1, start_time_offset_us=1_000_000
-            )
+            _rollout_spec(Scene(ClipDataSource("clipgt-a", "uuid-a"), T0_AUTO))
         ]
     )
 
-    with pytest.raises(InvalidRequestError, match="video_model"):
+    with pytest.raises(InvalidRequestError, match="clipgt-a"):
         await engine.simulate(request)
 
 
@@ -423,10 +480,10 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
         log_dir="/tmp/log",
     )
     engine._started = True
-    # Mock SceneLoader with a fake data source
-    mock_scene_loader = MagicMock()
-    mock_scene_loader.get_data_source.return_value = MagicMock()
-    engine._scene_loader = mock_scene_loader
+    mock_data_source_loader = MagicMock()
+    mock_data_source_loader.get_data_source.return_value = MagicMock()
+    engine._data_source_loader = mock_data_source_loader
+    scene = _install_scene(engine, "clipgt-a")
     engine._version_ids = RolloutMetadata.VersionIds(
         runtime_version=VersionId(version_id="runtime", git_hash="a"),
         sensorsim_version=VersionId(version_id="sensorsim", git_hash="b"),
@@ -437,7 +494,7 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
     engine._scheduler = _CapturingScheduler()
 
     request = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="clipgt-a", nr_rollouts=1)],
+        rollout_specs=[_rollout_spec(scene)],
     )
 
     await engine.simulate(request)
@@ -447,17 +504,17 @@ async def test_engine_simulate_no_driver_pool_when_request_has_no_available_driv
 
 
 @pytest.mark.asyncio
-async def test_engine_prefetch_scene_coalesces_duplicate_requests(
+async def test_engine_prefetch_clip_coalesces_duplicate_requests(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Concurrent requests for one scene share a single NRE backend load."""
+    """Concurrent requests for one clip share a single NRE backend load."""
     load_started = asyncio.Event()
     release_load = asyncio.Event()
     prefetch_calls: list[tuple[str, str]] = []
 
-    async def _prefetch_scene(address: str, scene_id: str) -> None:
-        prefetch_calls.append((address, scene_id))
+    async def _prefetch_clip(address: str, clip_id: str) -> None:
+        prefetch_calls.append((address, clip_id))
         load_started.set()
         await release_load.wait()
 
@@ -468,8 +525,9 @@ async def test_engine_prefetch_scene_coalesces_duplicate_requests(
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_loader = MagicMock()
-    engine._scene_loader.has_scene.return_value = True
+    engine._data_source_loader = MagicMock()
+    engine._data_source_loader.has_data_source.return_value = True
+    clip_id = "clip-A"
     engine._runtime_context = SimpleNamespace(
         config=SimpleNamespace(
             user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
@@ -477,23 +535,23 @@ async def test_engine_prefetch_scene_coalesces_duplicate_requests(
         pools={"renderer": AddressPool(["nre.local:50052"], 4, skip=False)},
     )
     monkeypatch.setattr(
-        "alpasim_runtime.daemon.engine.prefetch_nre_scene", _prefetch_scene
+        "alpasim_runtime.daemon.engine.prefetch_nre_clip", _prefetch_clip
     )
 
     with caplog.at_level("INFO"):
-        first = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        first = asyncio.create_task(engine.prefetch_clip(clip_id))
         await load_started.wait()
-        second = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        second = asyncio.create_task(engine.prefetch_clip(clip_id))
         await asyncio.sleep(0)
         release_load.set()
         await asyncio.gather(first, second)
 
-    assert prefetch_calls == [("nre.local:50052", "scene-A")]
+    assert prefetch_calls == [("nre.local:50052", clip_id)]
     assert "coalesced" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_engine_prefetch_scene_requires_one_renderer_address() -> None:
+async def test_engine_prefetch_clip_requires_one_renderer_address() -> None:
     """Prefetch rejects ambiguous multi-renderer routing."""
     engine = DaemonEngine(
         user_config="u.yaml",
@@ -502,8 +560,9 @@ async def test_engine_prefetch_scene_requires_one_renderer_address() -> None:
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_loader = MagicMock()
-    engine._scene_loader.has_scene.return_value = True
+    engine._data_source_loader = MagicMock()
+    engine._data_source_loader.has_data_source.return_value = True
+    clip_id = "clip-A"
     engine._runtime_context = SimpleNamespace(
         config=SimpleNamespace(
             user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
@@ -516,11 +575,11 @@ async def test_engine_prefetch_scene_requires_one_renderer_address() -> None:
     )
 
     with pytest.raises(ValueError, match="exactly one renderer address"):
-        await engine.prefetch_scene("scene-A")
+        await engine.prefetch_clip(clip_id)
 
 
 @pytest.mark.asyncio
-async def test_engine_shutdown_rejects_new_scene_prefetches(tmp_path: Path) -> None:
+async def test_engine_shutdown_rejects_new_clip_prefetches(tmp_path: Path) -> None:
     """Shutdown stops admitting prefetches before awaiting component cleanup."""
     shutdown_started = asyncio.Event()
     release_shutdown = asyncio.Event()
@@ -544,7 +603,7 @@ async def test_engine_shutdown_rejects_new_scene_prefetches(tmp_path: Path) -> N
     await shutdown_started.wait()
 
     with pytest.raises(DaemonUnavailableError, match="daemon is shutting down"):
-        await engine.prefetch_scene("scene-A")
+        await engine.prefetch_clip("clip-A")
 
     release_shutdown.set()
     await shutdown
@@ -562,7 +621,7 @@ async def test_engine_shutdown_stops_worker_when_scheduler_shutdown_fails() -> N
     )
     engine._started = True
     engine._runtime_context = SimpleNamespace()
-    engine._scene_loader = MagicMock()
+    engine._data_source_loader = MagicMock()
     engine._scheduler = SimpleNamespace(
         shutdown=AsyncMock(side_effect=RuntimeError("scheduler failed"))
     )
@@ -575,7 +634,7 @@ async def test_engine_shutdown_stops_worker_when_scheduler_shutdown_fails() -> N
     assert engine._scheduler is None
     assert engine._worker_runtime is None
     assert engine._runtime_context is None
-    assert engine._scene_loader is None
+    assert engine._data_source_loader is None
     assert engine._started is False
     assert engine._shutting_down is False
     await engine.shutdown()
@@ -593,8 +652,8 @@ async def test_engine_prefetch_retrieves_failure_after_waiter_cancels(
     previous_handler = loop.get_exception_handler()
     loop.set_exception_handler(lambda _, context: unhandled_contexts.append(context))
 
-    async def _prefetch_scene(address: str, scene_id: str) -> None:
-        del address, scene_id
+    async def _prefetch_clip(address: str, clip_id: str) -> None:
+        del address, clip_id
         load_started.set()
         await release_load.wait()
         raise RuntimeError("prefetch failed")
@@ -606,8 +665,9 @@ async def test_engine_prefetch_retrieves_failure_after_waiter_cancels(
         log_dir="/tmp/log",
     )
     engine._started = True
-    engine._scene_loader = MagicMock()
-    engine._scene_loader.has_scene.return_value = True
+    engine._data_source_loader = MagicMock()
+    engine._data_source_loader.has_data_source.return_value = True
+    clip_id = "clip-A"
     engine._runtime_context = SimpleNamespace(
         config=SimpleNamespace(
             user=SimpleNamespace(renderer=RendererConfig(kind=RendererKind.sensorsim))
@@ -615,11 +675,11 @@ async def test_engine_prefetch_retrieves_failure_after_waiter_cancels(
         pools={"renderer": AddressPool(["nre.local:50052"], 4, skip=False)},
     )
     monkeypatch.setattr(
-        "alpasim_runtime.daemon.engine.prefetch_nre_scene", _prefetch_scene
+        "alpasim_runtime.daemon.engine.prefetch_nre_clip", _prefetch_clip
     )
 
     try:
-        waiter = asyncio.create_task(engine.prefetch_scene("scene-A"))
+        waiter = asyncio.create_task(engine.prefetch_clip(clip_id))
         await load_started.wait()
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -676,7 +736,9 @@ def _make_eval_result() -> ScenarioEvalResult:
 
 def test_build_simulation_return_without_eval_results() -> None:
     request = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="s1", nr_rollouts=1)]
+        rollout_specs=[
+            _rollout_spec(Scene(ClipDataSource("clipgt-s1", "artifact-uuid"), T0_AUTO))
+        ]
     )
     result = JobResult(
         request_id="r1",
@@ -702,9 +764,42 @@ def test_build_simulation_return_without_eval_results() -> None:
     assert dict(rr.aggregated_metrics) == {}
 
 
+@pytest.mark.parametrize("requested_policy_start_us", [T0_AUTO, 0])
+def test_build_simulation_return_preserves_requested_policy_start(
+    requested_policy_start_us: int | Literal["AUTO"],
+) -> None:
+    scene = Scene(
+        ClipDataSource("clipgt-s1", "artifact-uuid"), requested_policy_start_us
+    )
+    rollout_spec = _rollout_spec(scene)
+    request = runtime_pb2.SimulationRequest(rollout_specs=[rollout_spec])
+    result = JobResult(
+        request_id="r1",
+        job_id="j1",
+        rollout_spec_index=0,
+        success=True,
+        error=None,
+        error_traceback=None,
+        rollout_uuid="uuid-1",
+    )
+
+    [rollout_return] = build_simulation_return(
+        request=request,
+        version_ids=_version_ids(),
+        results=[result],
+    ).rollout_returns
+
+    assert rollout_return.rollout_spec.scene.HasField("policy_start_us") == (
+        requested_policy_start_us != T0_AUTO
+    )
+    assert rollout_return.rollout_spec.scene.source.clip.clip_id == "clipgt-s1"
+
+
 def test_build_simulation_return_with_eval_results() -> None:
     request = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="s1", nr_rollouts=1)]
+        rollout_specs=[
+            _rollout_spec(Scene(ClipDataSource("clipgt-s1", "artifact-uuid"), T0_AUTO))
+        ]
     )
     eval_result = _make_eval_result()
     result = JobResult(
@@ -747,10 +842,53 @@ def test_build_simulation_return_with_eval_results() -> None:
     assert offroad_metric.time_aggregation == runtime_pb2.TIME_AGGREGATION_MEAN
 
 
+def test_build_simulation_return_supports_p90_metrics() -> None:
+    request = runtime_pb2.SimulationRequest(
+        rollout_specs=[
+            _rollout_spec(Scene(ClipDataSource("clipgt-s1", "artifact-uuid"), T0_AUTO))
+        ]
+    )
+    eval_result = ScenarioEvalResult(
+        timestep_metrics=[
+            MetricReturn(
+                name="frame_quality_score",
+                timestamps_us=[1000, 2000],
+                values=[0.1, 0.9],
+                valid=[True, True],
+                time_aggregation=AggregationType.P90,
+            )
+        ],
+        aggregated_metrics={"frame_quality_score": 0.82},
+    )
+    result = JobResult(
+        request_id="r1",
+        job_id="j1",
+        rollout_spec_index=0,
+        success=True,
+        error=None,
+        error_traceback=None,
+        rollout_uuid="uuid-1",
+        eval_result=eval_result,
+    )
+
+    ret = build_simulation_return(
+        request=request, version_ids=_version_ids(), results=[result]
+    )
+
+    assert (
+        ret.rollout_returns[0].timestep_metrics[0].time_aggregation
+        == runtime_pb2.TIME_AGGREGATION_P90
+    )
+
+
 def test_build_simulation_return_mixed_results_with_and_without_eval() -> None:
     """One result has eval metrics, the other does not (e.g. failed rollout)."""
     request = runtime_pb2.SimulationRequest(
-        rollout_specs=[runtime_pb2.RolloutSpec(scenario_id="s1", nr_rollouts=2)]
+        rollout_specs=[
+            _rollout_spec(
+                Scene(ClipDataSource("clipgt-s1", "artifact-uuid"), T0_AUTO), 2
+            )
+        ]
     )
     results = [
         JobResult(

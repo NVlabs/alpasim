@@ -188,6 +188,19 @@ class TestAddressPool:
         pool = AddressPool(["A"], n_concurrent=2, skip=True)
         assert pool.address_order == ()
 
+    def test_route_unreserved_round_robins_without_consuming_slots(self):
+        pool = AddressPool(["A", "B"], n_concurrent=1, skip=False)
+
+        routed = [pool.route_unreserved() for _ in range(4)]
+
+        assert [slot.address for slot in routed] == ["A", "B", "A", "B"]
+        assert pool.free_slot_counts() == {"A": 1, "B": 1}
+
+    def test_route_unreserved_returns_skip_address(self):
+        pool = AddressPool([], n_concurrent=0, skip=True)
+
+        assert pool.route_unreserved() == ServiceAddress("skip", skip=True)
+
 
 class TestTryAcquireAll:
     """Tests for try_acquire_all function."""

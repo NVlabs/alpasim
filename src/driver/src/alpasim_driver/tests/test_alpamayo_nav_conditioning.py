@@ -3,8 +3,8 @@
 
 """Navigation conditioning in the Alpamayo prediction path.
 
-Uses a stub model so the route hand-off and the generation budget can be tested
-without a checkpoint.
+Uses a stub model so the instruction hand-off and the generation budget can be
+tested without a checkpoint.
 """
 
 from __future__ import annotations
@@ -14,11 +14,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 from alpasim_driver.models.alpamayo1_5_model import Alpamayo15Model
-from alpasim_driver.models.alpamayo_base import AlpamayoBaseModel, route_in_rig_at_t0
+from alpasim_driver.models.alpamayo_base import AlpamayoBaseModel
 from alpasim_driver.models.base import DriveCommand, PredictionInput
 from alpasim_grpc.v0.common_pb2 import Pose, PoseAtTime, Quat, Vec3
-from alpasim_grpc.v0.egodriver_pb2 import Route
-from alpasim_utils.geometry import Pose as GeometryPose
+from alpasim_grpc.v0.egodriver_pb2 import NavigationInstruction, Route
 
 CAMERA_ID = "camera_front_wide_120fov"
 NUM_WAYPOINTS = 20
@@ -80,7 +79,11 @@ def _route(timestamp_us: int, waypoints: np.ndarray) -> Route:
     )
 
 
-def _prediction_input(latest_us: int, route: Route | None) -> PredictionInput:
+def _prediction_input(
+    latest_us: int,
+    route: Route | None,
+    navigation: NavigationInstruction | None = None,
+) -> PredictionInput:
     return PredictionInput(
         camera_images={CAMERA_ID: [(latest_us, np.zeros((8, 8, 3), dtype=np.uint8))]},
         command=DriveCommand.STRAIGHT,
@@ -90,6 +93,7 @@ def _prediction_input(latest_us: int, route: Route | None) -> PredictionInput:
         inference_seed=0,
         previous_plan=None,
         route=route,
+        navigation=navigation,
     )
 
 
@@ -100,58 +104,39 @@ def _turn_left_route() -> np.ndarray:
     return np.array(ahead + left)
 
 
-def test_route_reaches_the_model_as_navigation_text() -> None:
+def test_the_navigation_instruction_reaches_the_model_as_text() -> None:
+    """The runtime's instruction is already in the trained wording."""
+    model = _StubAlpamayo()
+    navigation = NavigationInstruction(
+        timestamp_us=2_000_000,
+        instruction_text="Turn right onto Oak Ave in 42m",
+        debug_info=NavigationInstruction.DebugInfo(
+            remaining_distance_m=42.0, status=NavigationInstruction.DebugInfo.UPCOMING
+        ),
+    )
+
+    model.predict(
+        _prediction_input(2_000_000, _route(2_000_000, _turn_left_route()), navigation)
+    )
+
+    assert model.nav_text == "Turn right onto Oak Ave in 42m"
+
+
+def test_a_route_alone_leaves_the_model_unconditioned() -> None:
+    """Route geometry is turned into text by the runtime, never by the driver."""
     model = _StubAlpamayo()
 
     model.predict(_prediction_input(2_000_000, _route(2_000_000, _turn_left_route())))
 
-    assert model.nav_text == "Turn left in 16m"
+    assert model.nav_text is None
 
 
-def test_without_a_route_the_model_runs_unconditioned() -> None:
+def test_without_navigation_the_model_runs_unconditioned() -> None:
     model = _StubAlpamayo()
 
     model.predict(_prediction_input(2_000_000, route=None))
 
     assert model.nav_text is None
-
-
-def test_a_route_without_waypoints_leaves_the_model_unconditioned() -> None:
-    model = _StubAlpamayo()
-
-    model.predict(_prediction_input(2_000_000, _route(2_000_000, np.zeros((0, 3)))))
-
-    assert model.nav_text is None
-
-
-def test_route_is_re_expressed_at_the_prediction_time() -> None:
-    """A route older than t0 is corrected for the ego motion since it arrived."""
-    latest_us = 2_000_000
-    route = _route(latest_us - 1_000_000, _turn_left_route())
-
-    model = _StubAlpamayo()
-    model.predict(_prediction_input(latest_us, route))
-
-    # The ego covered 10 m in the second between the route and t0, so the turn
-    # that was 16 m ahead is now 6 m ahead.
-    assert model.nav_text == "Turn left in 7m"
-
-
-def test_route_waypoints_move_with_the_ego() -> None:
-    waypoints = np.array([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]])
-    latest_us = 2_000_000
-
-    in_rig_t0 = route_in_rig_at_t0(
-        _route(latest_us - 500_000, waypoints),
-        _poses(latest_us),
-        pose_local_to_rig_t0=GeometryPose(
-            np.array([SPEED_M_S * latest_us / 1e6, 0.0, 0.0], dtype=np.float32),
-            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-        ),
-    )
-
-    # Half a second of travel at 10 m/s pulls the waypoints 5 m closer.
-    np.testing.assert_allclose(in_rig_t0[:, 0], [5.0, 15.0], atol=1e-3)
 
 
 def test_chain_of_thought_budget_is_not_left_to_the_checkpoint() -> None:

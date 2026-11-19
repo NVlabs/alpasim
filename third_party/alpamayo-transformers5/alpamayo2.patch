@@ -1,0 +1,80 @@
+diff --git a/src/alpamayo2_super/models/alpamayo2_super.py b/src/alpamayo2_super/models/alpamayo2_super.py
+index 82a677e..8d55a01 100644
+--- a/src/alpamayo2_super/models/alpamayo2_super.py
++++ b/src/alpamayo2_super/models/alpamayo2_super.py
+@@ -143,6 +143,7 @@ class Alpamayo2Super(PreTrainedModel):
+             self.expert = ExpertModel._from_config(self.config.expert_config)
+             if not self.config.cotrain_expert_vlm:
+                 self.vlm.requires_grad_(False)
++        self.post_init()
+ 
+     def enable_diffusion_expert_cuda_graph(
+         self,
+@@ -174,10 +175,9 @@ class Alpamayo2Super(PreTrainedModel):
+         """Return the nested VLM input embeddings."""
+         return self.vlm.get_input_embeddings()
+ 
+-    def tie_weights(self) -> None:
++    def tie_weights(self, *args: Any, **kwargs: Any) -> None:
+         """Delegate weight tying to the nested VLM model."""
+-        if hasattr(self, "vlm") and hasattr(self.vlm, "tie_weights"):
+-            self.vlm.tie_weights()
++        super().tie_weights(*args, **kwargs)
+ 
+     def _generate_with_shared_prefill(
+         self,
+@@ -197,6 +197,7 @@ class Alpamayo2Super(PreTrainedModel):
+         prefill_outputs = self.vlm.model(
+             input_ids=input_ids[:, :-1],
+             attention_mask=prompt_attention_mask[:, :-1],
++            mm_token_type_ids=tokenized_data["mm_token_type_ids"][:, :-1],
+             use_cache=True,
+             **vision_inputs,
+         )
+diff --git a/src/alpamayo2_super/models/diffusion_expert_cuda_graph.py b/src/alpamayo2_super/models/diffusion_expert_cuda_graph.py
+index 2d79f0f..777b5db 100644
+--- a/src/alpamayo2_super/models/diffusion_expert_cuda_graph.py
++++ b/src/alpamayo2_super/models/diffusion_expert_cuda_graph.py
+@@ -29,8 +29,10 @@ class _ReadOnlyPromptCacheLayer(CacheLayerMixin):
+         self.values = values
+         self.is_initialized = True
+ 
+-    def lazy_initialization(self, key_states: torch.Tensor) -> None:
+-        del key_states
++    def lazy_initialization(
++        self, key_states: torch.Tensor, value_states: torch.Tensor
++    ) -> None:
++        del key_states, value_states
+         raise RuntimeError("Read-only prompt cache layers must be initialized")
+ 
+     def update(
+@@ -45,13 +47,13 @@ class _ReadOnlyPromptCacheLayer(CacheLayerMixin):
+             torch.cat((self.values, value_states), dim=-2),
+         )
+ 
+-    def get_mask_sizes(self, cache_position: torch.Tensor) -> tuple[int, int]:
+-        return self.get_seq_length() + cache_position.shape[0], 0
++    def get_mask_sizes(self, query_length: int) -> tuple[int, int]:
++        return self.get_seq_length() + query_length, 0
+ 
+     def get_seq_length(self) -> int:
+         return self.keys.shape[-2]
+ 
+-    def get_max_cache_shape(self) -> int:
++    def get_max_length(self) -> int:
+         return -1
+ 
+     def crop(self, max_length: int) -> None:
+diff --git a/src/alpamayo2_super/models/expert.py b/src/alpamayo2_super/models/expert.py
+index 920c9c2..8b1f992 100644
+--- a/src/alpamayo2_super/models/expert.py
++++ b/src/alpamayo2_super/models/expert.py
+@@ -95,6 +95,8 @@ class ExpertModel(PreTrainedModel):
+             out_features=self.action_space.get_action_space_dims()[-1],
+         )
+ 
++        self.post_init()
++
+     def _process_traj_future_training(self, traj_data: dict[str, Any]) -> dict[str, Any]:
+         """Convert ground-truth future trajectories into noisy expert training targets."""
+         action = self.action_space.traj_to_action(

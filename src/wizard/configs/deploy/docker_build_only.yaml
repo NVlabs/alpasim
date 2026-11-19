@@ -14,4 +14,4 @@ wizard:
   log_dir: "./generated_configs"
 
 scenes:
-  scene_ids: []
+  clip_ids: []

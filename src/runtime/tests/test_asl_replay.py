@@ -9,7 +9,11 @@ from unittest.mock import Mock
 
 import pytest
 from alpasim_grpc.v0.common_pb2 import Empty, Pose, PoseAtTime, Trajectory, Vec3
-from alpasim_grpc.v0.egodriver_pb2 import RolloutCameraImage, RouteRequest
+from alpasim_grpc.v0.egodriver_pb2 import (
+    RolloutCameraImage,
+    RouteRequest,
+    VectorizedObservation,
+)
 from alpasim_grpc.v0.logging_pb2 import LogEntry
 from alpasim_grpc.v0.physics_pb2 import (
     PhysicsGroundIntersectionRequest,
@@ -25,6 +29,7 @@ from alpasim_grpc.v0.sensorsim_pb2 import (
 )
 from alpasim_grpc.v0.traffic_pb2 import TrafficRequest, TrafficReturn
 from alpasim_runtime.replay_services.asl_reader import ASLReader, _remove_dynamic_fields
+from alpasim_runtime.replay_services.driver_replay_service import DriverReplayService
 
 
 def _build_physics_request(now_us: int, future_us: int, future_x: float) -> Any:
@@ -177,6 +182,23 @@ class TestLoadExchangesPairing:
         assert reader.get_exchanges("sensorsim", "batch_render_rgb") == [
             (request, None)
         ]
+
+    @pytest.mark.asyncio
+    async def test_vectorized_observation_is_loaded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        request = VectorizedObservation(session_uuid="session")
+        request.timestamp_us = 123
+        self._patch_asl_reader(monkeypatch, [LogEntry(vectorized_observation=request)])
+
+        reader = ASLReader("dummy.asl")
+        await reader.load_exchanges()
+
+        exchanges = reader.get_exchanges("driver", "submit_vectorized_observation")
+        assert len(exchanges) == 1
+        recorded_request, recorded_response = exchanges[0]
+        assert recorded_request == request
+        assert isinstance(recorded_response, Empty)
 
     @pytest.mark.asyncio
     async def test_response_without_pending_request_raises_clear_error(
@@ -371,6 +393,19 @@ class TestFloatTolerance:
 
 class TestFindingAndConsumingExchanges:
     """Test exchange finding and consumption tracking."""
+
+    def test_driver_replay_consumes_vectorized_observation(self) -> None:
+        reader = ASLReader("dummy.asl")
+        request = VectorizedObservation(session_uuid="session")
+        request.timestamp_us = 123
+        response = Empty()
+        reader._add_exchange(
+            "driver", "submit_vectorized_observation", request, response
+        )
+        service = DriverReplayService(reader)
+
+        assert service.submit_vectorized_observation(request, Mock()) == response
+        assert reader._consumed_indices["driver.submit_vectorized_observation"] == {0}
 
     def test_find_and_consume_basic(self) -> None:
         """Test basic find and consume operation."""

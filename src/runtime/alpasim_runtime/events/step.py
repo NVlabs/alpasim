@@ -96,7 +96,7 @@ class StepEvent(RecurringEvent):
 class InitialStepEvent(Event):
     """Log the initial rollout state before the first policy step."""
 
-    priority: int = EventPriority.STEP
+    priority: int = EventPriority.INITIAL_STEP
 
     def __init__(self, timestamp_us: int, services: ServiceBundle):
         super().__init__(timestamp_us=timestamp_us)

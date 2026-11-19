@@ -5,18 +5,16 @@ build-backend = "uv_build"
 
 [project]
 name = "alpasim_driver"
-version = "0.91.0"
+version = "0.151.0"
 description = "Adapters for open-source drivers in Alpasim"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "vam",
-  "alpamayo_r1",
-  "alpamayo1_5",
   "einops",
   "numpy",
   "opencv-python-headless",
   "torch",
+  "torchvision",
   "pillow",
   "rich",
   "click",
@@ -27,7 +25,11 @@ dependencies = [
   "alpasim_plugins",
   "pygame>=2.5.0", # manual driving
   "alpasim_utils[geometry]",
+  "vam",
+  "alpamayo_r1",
+  "alpamayo1_5",
   "alpamayo2_super",
+  "alpamayo2-edge",
 ]
 
 [project.optional-dependencies]
@@ -44,14 +46,12 @@ alpamayo1 = "alpasim_driver.models.alpamayo1_model:Alpamayo1Model"
 alpamayo1_5 = "alpasim_driver.models.alpamayo1_5_model:Alpamayo15Model"
 alpamayo1_5_recipes_sft = "alpasim_driver.models.alpamayo1_5_recipes_sft_model:Alpamayo15RecipesSFTModel"
 alpamayo2 = "alpasim_driver.models.alpamayo2_model:Alpamayo2Model"
+alpamayo2_edge = "alpasim_driver.models.alpamayo2_edge_model:Alpamayo2EdgeModel"
 vam = "alpasim_driver.models.vam_model:VAMModel"
 manual = "alpasim_driver.models.manual_model:ManualModel"
 
 [tool.uv.sources]
 vam = { git = "https://github.com/valeoai/VideoActionModel.git" }
-alpamayo_r1 = { git = "https://github.com/NVlabs/alpamayo.git" }
-alpamayo1_5 = { git = "https://github.com/NVlabs/alpamayo1.5.git" }
-alpamayo2_super = { git = "https://github.com/NVlabs/alpamayo2.git" }
 alpasim-grpc = { workspace = true }
 alpasim_utils = { workspace = true }
 alpasim_plugins = { workspace = true }

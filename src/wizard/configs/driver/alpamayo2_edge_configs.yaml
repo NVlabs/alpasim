@@ -1,0 +1,8 @@
+# @package _global_
+runtime:
+  simulation_config:
+    # Edge conditions on a longer history than the other Alpamayo models: its
+    # 21-frame context spans 2 s of camera images and it takes 20 ego poses at
+    # 10 Hz. The default 1.7 s warmup cannot fill that, so drive with ground
+    # truth for 2.2 s before the first Edge request.
+    force_gt_duration_us: 2_200_000

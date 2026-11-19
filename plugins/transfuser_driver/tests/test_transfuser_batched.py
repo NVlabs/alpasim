@@ -30,6 +30,8 @@ from alpasim_transfuser.transfuser_model import TransfuserModel
 # ---------------------------------------------------------------------------
 CAMERA_IDS = ["cam_l0", "cam_f0", "cam_r0", "cam_r1"]
 NUM_CAMERAS = 4
+# Raw camera resolution — preprocessing handles resize to 270×480
+RAW_CAM_H, RAW_CAM_W = 1080, 1920
 PER_CAM_H, PER_CAM_W = 270, 480
 N_WAYPOINTS = 6
 
@@ -42,7 +44,7 @@ def _yaws(rotations: np.ndarray) -> np.ndarray:
     return np.arctan2(rotations[:, 1, 0], rotations[:, 0, 0])
 
 
-def _make_image(h: int = PER_CAM_H, w: int = PER_CAM_W, seed: int = 0) -> np.ndarray:
+def _make_image(h: int = RAW_CAM_H, w: int = RAW_CAM_W, seed: int = 0) -> np.ndarray:
     """Generate a deterministic random image."""
     rng = np.random.RandomState(seed)
     return rng.randint(0, 256, (h, w, 3), dtype=np.uint8)
@@ -68,6 +70,7 @@ def _make_prediction_input(
         inference_seed=seed,
         previous_plan=None,
         route=None,
+        navigation=None,
     )
 
 
@@ -76,9 +79,10 @@ def _make_prediction_input(
 # ---------------------------------------------------------------------------
 @dataclass
 class _FakeConfig:
-    """Minimal config stub providing torch_float_type."""
+    """Minimal config stub for Transfuser inference."""
 
     torch_float_type: torch.dtype = torch.float32
+    use_mixed_precision_training: bool = False
 
 
 @dataclass
@@ -290,6 +294,7 @@ class TestPredictBatch:
             inference_seed=0,
             previous_plan=None,
             route=None,
+            navigation=None,
         )
 
         with pytest.raises(ValueError, match=r"expects 1 frame"):
@@ -313,3 +318,150 @@ class TestPredictBatch:
         assert commands[0].argmax().item() == 0  # LEFT
         assert commands[1].argmax().item() == 1  # FORWARD/STRAIGHT
         assert commands[2].argmax().item() == 2  # RIGHT
+
+    def test_mixed_precision_cuda_uses_autocast(self, transfuser_model):
+        """CUDA mixed-precision inference enters the configured autocast context."""
+        model, _ = transfuser_model
+        model._device = mock.Mock(type="cuda")
+        model._config.torch_float_type = torch.bfloat16
+        model._config.use_mixed_precision_training = True
+        real_tensor = torch.tensor
+
+        def cpu_tensor(*args, **kwargs):
+            kwargs.pop("device", None)
+            return real_tensor(*args, **kwargs)
+
+        rgb = torch.zeros(1, 3, PER_CAM_H, NUM_CAMERAS * PER_CAM_W)
+        with (
+            mock.patch.object(model, "_preprocess_batch", return_value=rgb),
+            mock.patch(
+                "alpasim_transfuser.transfuser_model.torch.tensor",
+                side_effect=cpu_tensor,
+            ),
+            mock.patch(
+                "alpasim_transfuser.transfuser_model.torch.amp.autocast"
+            ) as autocast,
+        ):
+            model.predict_batch([_make_prediction_input()])
+
+        autocast.assert_called_once_with("cuda", dtype=torch.bfloat16)
+
+
+# ===================================================================
+# TestGPUPreprocessing
+# ===================================================================
+class TestGPUPreprocessing:
+    """Tests verifying GPU-batched preprocessing against a PIL reference."""
+
+    def _reference_pipeline_single_cam(self, image: np.ndarray) -> torch.Tensor:
+        """Resize and center-crop one camera with PIL.
+
+        Returns a (C, H, W) uint8 tensor.
+        """
+        from PIL import Image
+
+        h, w = image.shape[:2]
+        target_h, target_w = PER_CAM_H, PER_CAM_W
+
+        if h == target_h and w == target_w:
+            return torch.from_numpy(image).permute(2, 0, 1)
+
+        pil_img = Image.fromarray(image)
+        scale = target_h / h
+        new_w = int(w * scale)
+        pil_img = pil_img.resize((new_w, target_h), Image.Resampling.BILINEAR)
+
+        if new_w > target_w:
+            left = (new_w - target_w) // 2
+            pil_img = pil_img.crop((left, 0, left + target_w, target_h))
+
+        arr = np.array(pil_img)
+        return torch.from_numpy(arr).permute(2, 0, 1)  # CHW uint8
+
+    def _reference_pipeline_concat(
+        self, camera_images: list[np.ndarray]
+    ) -> torch.Tensor:
+        """Resize each camera with PIL and concatenate them horizontally.
+
+        Returns a (C, H, W_total) uint8 tensor.
+        """
+        resized = [
+            self._reference_pipeline_single_cam(image) for image in camera_images
+        ]
+        return torch.cat(resized, dim=2)
+
+    def test_model_preprocess_batch_matches_pil_concat(self, transfuser_model):
+        """TransfuserModel._preprocess_batch output must match the PIL reference
+        pipeline (resize + horizontal concatenation) within ±1/255 per pixel."""
+        model, _ = transfuser_model
+        rng = np.random.RandomState(42)
+
+        # Generate 4 raw camera images
+        cam_images = [
+            rng.randint(0, 256, (RAW_CAM_H, RAW_CAM_W, 3), dtype=np.uint8)
+            for _ in range(NUM_CAMERAS)
+        ]
+
+        reference = self._reference_pipeline_concat(cam_images)  # (C, H, W_total)
+        model_out = model._preprocess_batch(cam_images)  # (1, C, H, W_total)
+
+        assert model_out.shape == (
+            1,
+            *reference.shape,
+        ), f"Shape mismatch: model={model_out.shape} vs reference=(1, {reference.shape})"
+        max_diff = (reference.float() - model_out[0].float()).abs().max().item()
+        assert max_diff <= 1.0, f"Max pixel difference {max_diff} exceeds tolerance 1"
+
+    def test_batched_preprocess_matches_per_sample(self, transfuser_model):
+        """Batching B=2 samples through _preprocess_batch gives the same
+        result as processing each sample individually."""
+        model, _ = transfuser_model
+        rng = np.random.RandomState(99)
+
+        # 2 samples × 4 cameras
+        all_images = [
+            rng.randint(0, 256, (RAW_CAM_H, RAW_CAM_W, 3), dtype=np.uint8)
+            for _ in range(2 * NUM_CAMERAS)
+        ]
+
+        # Batch both samples together
+        batched = model._preprocess_batch(all_images)  # (2, C, H, W_total)
+
+        # Process each sample individually
+        sample0 = model._preprocess_batch(
+            all_images[:NUM_CAMERAS]
+        )  # (1, C, H, W_total)
+        sample1 = model._preprocess_batch(
+            all_images[NUM_CAMERAS:]
+        )  # (1, C, H, W_total)
+
+        assert torch.equal(batched[0], sample0[0])
+        assert torch.equal(batched[1], sample1[0])
+
+    def test_camera_order_preserved(self, transfuser_model):
+        """predict_batch concatenates cameras in model order, not mapping order."""
+        model, mock_fwd = transfuser_model
+
+        camera_images = {
+            cam_id: [
+                CameraFrame(
+                    timestamp_us=1_000_000,
+                    image=np.full(
+                        (PER_CAM_H, PER_CAM_W, 3),
+                        fill_value=(i + 1) * 50,
+                        dtype=np.uint8,
+                    ),
+                )
+            ]
+            for i, cam_id in reversed(list(enumerate(CAMERA_IDS)))
+        }
+        inp = _make_prediction_input()
+        inp.camera_images = camera_images
+
+        model.predict_batch([inp])
+
+        result = mock_fwd.call_args[0][0]["rgb"]
+        for i in range(NUM_CAMERAS):
+            region = result[0, :, :, i * PER_CAM_W : (i + 1) * PER_CAM_W]
+            expected_val = (i + 1) * 50
+            assert torch.all(region == expected_val)

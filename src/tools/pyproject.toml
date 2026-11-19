@@ -7,7 +7,7 @@ name = "alpasim-tools"
 version = "0.1.0"
 description = "Collection of tools for Alpasim development and analysis"
 requires-python = ">=3.11"
-license = {text = "Proprietary"}
+license = {text = "Apache-2.0"}
 
 # Base dependencies that most tools need
 dependencies = [

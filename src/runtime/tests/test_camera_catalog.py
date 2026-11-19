@@ -39,7 +39,7 @@ def _make_local_camera_definition(logical_id: str) -> CameraDefinitionConfig:
 
 
 @pytest.mark.asyncio
-async def test_register_scene_appends_local_definition() -> None:
+async def test_register_clip_appends_local_definition() -> None:
     local_cfg = _make_local_camera_definition("camera_local")
     catalog = CameraCatalog([local_cfg])
 
@@ -62,17 +62,17 @@ async def test_register_scene_appends_local_definition() -> None:
 
     sensorsim_cameras = [sensorsim_camera_front, sensorsim_camera_local]
 
-    await catalog.merge_local_and_sensorsim_cameras("scene_a", sensorsim_cameras)
+    await catalog.merge_local_and_sensorsim_cameras("clip_a", sensorsim_cameras)
 
-    merged = catalog.get_camera_definitions("scene_a")
+    merged = catalog.get_camera_definitions("clip_a")
     assert set(merged.keys()) == {"camera_front", "camera_local"}
     assert (
         merged["camera_local"].intrinsics.shutter_type
         == sensorsim_pb2.ShutterType.ROLLING_TOP_TO_BOTTOM
     )
 
-    await catalog.merge_local_and_sensorsim_cameras("scene_a", sensorsim_cameras)
-    refreshed = catalog.get_camera_definitions("scene_a")
+    await catalog.merge_local_and_sensorsim_cameras("clip_a", sensorsim_cameras)
+    refreshed = catalog.get_camera_definitions("clip_a")
     assert refreshed is not merged
     assert set(refreshed.keys()) == {"camera_front", "camera_local"}
     for key, original_def in merged.items():
@@ -93,7 +93,7 @@ async def test_register_scene_appends_local_definition() -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_scene_overwrites_intrinsics() -> None:
+async def test_register_clip_overwrites_intrinsics() -> None:
     local_cfg = _make_local_camera_definition("camera_front")
     catalog = CameraCatalog([local_cfg])
 
@@ -106,9 +106,9 @@ async def test_register_scene_overwrites_intrinsics() -> None:
     )
     sensorsim_camera.rig_to_camera.quat.w = 1.0
 
-    await catalog.merge_local_and_sensorsim_cameras("scene_b", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip_b", [sensorsim_camera])
 
-    merged = catalog.get_camera_definitions("scene_b")
+    merged = catalog.get_camera_definitions("clip_b")
     assert merged["camera_front"].intrinsics.shutter_type == (
         sensorsim_pb2.ShutterType.ROLLING_TOP_TO_BOTTOM
     )
@@ -118,9 +118,9 @@ async def test_register_scene_overwrites_intrinsics() -> None:
 async def test_ensure_camera_defined_missing_definition_raises() -> None:
     catalog = CameraCatalog([])
 
-    await catalog.merge_local_and_sensorsim_cameras("scene_a", [])
+    await catalog.merge_local_and_sensorsim_cameras("clip_a", [])
 
-    scenario_camera = RuntimeCameraConfig(
+    clip_camera = RuntimeCameraConfig(
         logical_id="camera_front",
         height=320,
         width=512,
@@ -129,7 +129,7 @@ async def test_ensure_camera_defined_missing_definition_raises() -> None:
     )
 
     with pytest.raises(KeyError):
-        catalog.ensure_camera_defined("scene_a", scenario_camera.logical_id)
+        catalog.ensure_camera_defined("clip_a", clip_camera.logical_id)
 
 
 def test_duplicate_local_definitions_raise() -> None:
@@ -254,9 +254,9 @@ async def test_partial_override_rig_to_camera_only() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # rig_to_camera should be overridden
     assert merged.rig_to_camera.vec3[0] == 10.0
@@ -281,9 +281,9 @@ async def test_partial_override_resolution_only() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # Resolution should be overridden
     assert merged.intrinsics.resolution_h == 1080
@@ -308,9 +308,9 @@ async def test_partial_override_shutter_type_only() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # Shutter type should be overridden
     assert (
@@ -343,9 +343,9 @@ async def test_partial_override_intrinsics_only() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # Intrinsics should be overridden
     assert merged.intrinsics.opencv_pinhole_param.focal_length_x == 500.0
@@ -373,9 +373,9 @@ async def test_partial_override_multiple_fields() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # Both overridden fields should be applied
     assert merged.rig_to_camera.vec3[0] == 5.0
@@ -397,9 +397,9 @@ async def test_no_override_preserves_sensorsim_values() -> None:
     catalog = CameraCatalog([override])
 
     sensorsim_camera = _make_sensorsim_camera("camera_front")
-    await catalog.merge_local_and_sensorsim_cameras("scene", [sensorsim_camera])
+    await catalog.merge_local_and_sensorsim_cameras("clip", [sensorsim_camera])
 
-    merged = catalog.get_camera_definition("scene", "camera_front")
+    merged = catalog.get_camera_definition("clip", "camera_front")
 
     # All values should be preserved from sensorsim
     assert merged.rig_to_camera.vec3[0] == 1.0

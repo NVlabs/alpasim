@@ -3,3 +3,6 @@ defaults:
   - _self_
 
 mpc_implementation: nonlinear
+
+gains:
+  idx_start_penalty: 0

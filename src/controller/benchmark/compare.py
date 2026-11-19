@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-"""
-Comparison tools for benchmark results.
+"""Comparison tools for benchmark results.
 
 Generates plots and reports comparing two benchmark runs.
 """
@@ -82,7 +81,52 @@ class BenchmarkComparator:
                 change_str = "N/A"
 
             print(
-                f"{label:<25} {fmt.format(base_val):>15} {fmt.format(comp_val):>15} {change_str:>12}"
+                f"{label:<25} {fmt.format(base_val):>15} "
+                f"{fmt.format(comp_val):>15} {change_str:>12}"
+            )
+
+        print("-" * 70)
+
+        print("\n" + "-" * 70)
+        print("TRACKING AND CONTROL COMPARISON (all iterations)")
+        print("-" * 70)
+        print(f"{'Metric':<30} {'Baseline':>15} {'Comparison':>15} {'Change':>12}")
+        print("-" * 70)
+
+        quality_metrics = [
+            ("Tracking RMSE (m)", "tracking_rmse_m", "{:.3f}"),
+            ("Tracking max error (m)", "tracking_max_error_m", "{:.3f}"),
+            ("Steering max abs (rad)", "steering_cmd_abs_max_rad", "{:.3f}"),
+            ("Steering mean abs (rad)", "steering_cmd_abs_mean_rad", "{:.3f}"),
+            ("Accel max abs (m/s^2)", "acceleration_cmd_abs_max_mps2", "{:.2f}"),
+            ("Accel mean abs (m/s^2)", "acceleration_cmd_abs_mean_mps2", "{:.2f}"),
+            ("Accel min (m/s^2)", "acceleration_cmd_min_mps2", "{:.2f}"),
+            ("Accel max (m/s^2)", "acceleration_cmd_max_mps2", "{:.2f}"),
+            ("Jerk mean abs (m/s^3)", "jerk_cmd_abs_mean_mps3", "{:.2f}"),
+            ("Jerk RMS (m/s^3)", "jerk_cmd_rms_mps3", "{:.2f}"),
+            ("Jerk max abs (m/s^3)", "jerk_cmd_abs_max_mps3", "{:.2f}"),
+            ("Curvature mean abs (1/m)", "curvature_abs_mean_1pm", "{:.4f}"),
+            ("Curvature RMS (1/m)", "curvature_rms_1pm", "{:.4f}"),
+            ("Curvature max abs (1/m)", "curvature_abs_max_1pm", "{:.4f}"),
+            ("Curv rate mean abs (1/m/s)", "curvature_rate_abs_mean_1pmps", "{:.3f}"),
+            ("Curv rate RMS (1/m/s)", "curvature_rate_rms_1pmps", "{:.3f}"),
+            ("Aggressiveness score", "control_aggressiveness_score", "{:.3f}"),
+            ("Control violations", "total_control_violation_count", "{:.0f}"),
+        ]
+
+        for label, key, fmt in quality_metrics:
+            base_val = base_stats[key]
+            comp_val = comp_stats[key]
+            if base_val != 0:
+                change_pct = ((comp_val - base_val) / abs(base_val)) * 100
+                change_str = f"{change_pct:+.1f}%"
+            elif comp_val != 0:
+                change_str = "new"
+            else:
+                change_str = "0.0%"
+            print(
+                f"{label:<30} {fmt.format(base_val):>15} "
+                f"{fmt.format(comp_val):>15} {change_str:>12}"
             )
 
         print("-" * 70)
@@ -136,7 +180,7 @@ class BenchmarkComparator:
             for it in sim.iterations
         ]
 
-        bins = np.linspace(0, max(max(base_times), max(comp_times)) * 1.1, 50)
+        bins = np.linspace(0, max([*base_times, *comp_times]) * 1.1, 50)
         ax.hist(base_times, bins=bins, alpha=0.5, label=self.baseline_name)
         ax.hist(comp_times, bins=bins, alpha=0.5, label=self.comparison_name)
         ax.set_xlabel("Solve Time (ms)")

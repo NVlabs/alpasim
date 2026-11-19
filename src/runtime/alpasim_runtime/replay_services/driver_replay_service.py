@@ -87,6 +87,16 @@ class DriverReplayService(
         """Validate route request"""
         return self.validate_request("submit_route", request, context)
 
+    def submit_vectorized_observation(
+        self, request: Any, context: grpc.ServicerContext
+    ) -> Any:
+        """Validate vectorized observation request."""
+        return self.validate_request("submit_vectorized_observation", request, context)
+
+    def submit_navigation(self, request: Any, context: grpc.ServicerContext) -> Any:
+        """Validate navigation instruction"""
+        return self.validate_request("submit_navigation", request, context)
+
     def submit_recording_ground_truth(
         self, request: Any, context: grpc.ServicerContext
     ) -> Any:

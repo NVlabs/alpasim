@@ -1,7 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 NVIDIA Corporation
+
 import numpy as np
 import pytest
+from alpasim_grpc.v0.common_pb2 import (
+    DynamicState,
+    Pose,
+    PoseAtTime,
+    Quat,
+    Trajectory,
+    Vec3,
+)
 
 from ..frame_cache import FrameCache
+
+
+@pytest.fixture()
+def session():
+    """Minimal Session for testing pose/dynamic state management."""
+    from alpasim_driver.main import Session
+
+    return Session(
+        uuid="test-session",
+        seed=0,
+        debug_scene_id="test-scene",
+        frame_caches={"cam0": FrameCache(context_length=1)},
+    )
+
+
+def _make_pose_at_time(timestamp_us: int) -> PoseAtTime:
+    return PoseAtTime(
+        pose=Pose(vec=Vec3(x=0.0, y=0.0, z=0.0), quat=Quat(w=1.0, x=0.0, y=0.0, z=0.0)),
+        timestamp_us=timestamp_us,
+    )
+
+
+def _make_trajectory(timestamps: list[int]) -> Trajectory:
+    traj = Trajectory()
+    for ts in timestamps:
+        traj.poses.append(_make_pose_at_time(ts))
+    return traj
+
+
+def _make_dynamic_state() -> DynamicState:
+    return DynamicState(
+        linear_velocity=Vec3(x=1.0, y=0.0, z=0.0),
+        linear_acceleration=Vec3(x=0.0, y=0.0, z=0.0),
+    )
+
+
+class TestSessionPoseInsertion:
+    def test_egoposes_maintained_sorted(self, session):
+        session.add_egoposes(_make_trajectory([300, 100, 200]))
+        timestamps = [p.timestamp_us for p in session.poses]
+        assert timestamps == [100, 200, 300]
+
+    def test_egoposes_appended_in_order(self, session):
+        session.add_egoposes(_make_trajectory([100]))
+        session.add_egoposes(_make_trajectory([200]))
+        session.add_egoposes(_make_trajectory([300]))
+        timestamps = [p.timestamp_us for p in session.poses]
+        assert timestamps == [100, 200, 300]
+
+    def test_egoposes_pruned_to_bound(self, session):
+        for i in range(200):
+            session.add_egoposes(_make_trajectory([i * 1000]))
+        assert len(session.poses) == 100
+        assert session.poses[0].timestamp_us == 100 * 1000
+        assert session.poses[-1].timestamp_us == 199 * 1000
+
+    def test_dynamic_states_maintained_sorted(self, session):
+        session.add_dynamic_state(300, _make_dynamic_state())
+        session.add_dynamic_state(100, _make_dynamic_state())
+        session.add_dynamic_state(200, _make_dynamic_state())
+        timestamps = [ts for ts, _ in session.dynamic_states]
+        assert timestamps == [100, 200, 300]
+
+    def test_dynamic_states_pruned_to_bound(self, session):
+        for i in range(200):
+            session.add_dynamic_state(i * 1000, _make_dynamic_state())
+        assert len(session.dynamic_states) == 100
+        assert session.dynamic_states[0][0] == 100 * 1000
+        assert session.dynamic_states[-1][0] == 199 * 1000
 
 
 def _make_image(seed: int) -> np.ndarray:

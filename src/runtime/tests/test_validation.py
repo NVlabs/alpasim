@@ -11,6 +11,7 @@ from alpasim_grpc import API_VERSION_MESSAGE
 from alpasim_grpc.v0.common_pb2 import VersionId
 from alpasim_grpc.v0.logging_pb2 import RolloutMetadata
 from alpasim_runtime.config import (
+    ClipDataSourceConfig,
     EndpointAddresses,
     NetworkSimulatorConfig,
     PhysicsUpdateMode,
@@ -93,7 +94,13 @@ def _make_simulator_config(
                 force_gt_duration_us=force_gt_duration_us,
                 cameras=cameras,
             ),
-            scenes=[SceneConfig(scene_id="clipgt-test", n_rollouts=1)],
+            scenes=[
+                SceneConfig(
+                    source=ClipDataSourceConfig("clipgt-test", "uuid-test"),
+                    policy_start_us="AUTO",
+                    n_rollouts=1,
+                )
+            ],
             endpoints=_make_user_endpoints(skip_physics=skip_physics),
             renderer=RendererConfig(kind=RendererKind.sensorsim),
             nr_workers=1,
@@ -465,3 +472,54 @@ def test_force_gt_cache_rejects_video_model_renderer() -> None:
     )
     with pytest.raises(ValueError, match="only supported by the sensorsim"):
         validate_renderer_config(config)
+
+
+def test_clip_texture_overrides_reject_non_native_renderer() -> None:
+    """Per-clip NuRec banks cannot silently run on a renderer that ignores them."""
+    config = _make_simulator_config()
+    config.user.renderer = RendererConfig(
+        kind=RendererKind.video_model, video_model_config=VideoModelConfig()
+    )
+    config.user.simulation_config.ego_mask_overrides_file = "/assets/overrides.yaml"
+    with pytest.raises(
+        ValueError, match="ego_mask_overrides_file requires the sensorsim"
+    ):
+        validate_renderer_config(config)
+
+
+@pytest.mark.parametrize("source", ["none", "geometry", "recorded"])
+def test_navigation_source_controls_dataset_requirements(tmp_path, source):
+    from alpasim_runtime.config import NavInstructionConfig
+    from alpasim_runtime.runtime_context import validate_nav_instruction_config
+
+    cfg = NavInstructionConfig(source=source)
+    if source != "recorded":
+        validate_nav_instruction_config(cfg)
+    else:
+        with pytest.raises(ValueError, match="route_index_dir"):
+            validate_nav_instruction_config(cfg)
+        cfg.route_index_dir = str(tmp_path)
+        validate_nav_instruction_config(cfg)
+
+
+def test_geometry_navigation_requires_a_route_generator():
+    """Geometry text is classified from the generated route; without one it is a misconfig."""
+    from alpasim_runtime.config import NavInstructionConfig, RouteGeneratorType
+    from alpasim_runtime.runtime_context import validate_nav_instruction_config
+
+    cfg = NavInstructionConfig(source="geometry")
+    validate_nav_instruction_config(cfg, RouteGeneratorType.MAP)
+    with pytest.raises(ValueError, match="route_generator_type other than NONE"):
+        validate_nav_instruction_config(cfg, RouteGeneratorType.NONE)
+    # Recorded and none do not read the generated route.
+    validate_nav_instruction_config(
+        NavInstructionConfig(source="none"), RouteGeneratorType.NONE
+    )
+
+
+def test_unknown_navigation_source_is_rejected():
+    from alpasim_runtime.config import NavInstructionConfig
+    from alpasim_runtime.runtime_context import validate_nav_instruction_config
+
+    with pytest.raises(ValueError, match="source must be"):
+        validate_nav_instruction_config(NavInstructionConfig(source="typo"))

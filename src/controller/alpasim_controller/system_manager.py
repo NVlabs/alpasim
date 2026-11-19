@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
-"""
-SystemManager - manages multiple systems, each with vehicle dynamics and controller
+"""SystemManager - manages multiple systems, each with vehicle dynamics and controller
 """
 
 import logging
 
+import numpy as np
 from alpasim_controller.mpc_controller import ControllerConfig
 from alpasim_controller.system import System, create_system
 from alpasim_grpc.v0 import common_pb2, controller_pb2
@@ -103,3 +103,21 @@ class SystemManager:
             system = self._create_system(session_uuid, request.state)
 
         return system.run_controller_and_vehicle_model(request)
+
+    def get_control_input(self, session_uuid: str) -> np.ndarray:
+        """Return the latest control command for a live session."""
+        if session_uuid not in self._sessions:
+            raise KeyError(f"Session {session_uuid} does not exist")
+        system = self._sessions[session_uuid]
+        if system is None:
+            raise ValueError(f"Session {session_uuid} has not run yet")
+        return system.current_control_input
+
+    def get_controller_status(self, session_uuid: str) -> str:
+        """Return the latest controller solve status for a live session."""
+        if session_uuid not in self._sessions:
+            raise KeyError(f"Session {session_uuid} does not exist")
+        system = self._sessions[session_uuid]
+        if system is None:
+            raise ValueError(f"Session {session_uuid} has not run yet")
+        return system.last_controller_status

@@ -179,7 +179,7 @@ def _actor_class_id_from_label(label: str) -> int:
 def build_camera_specs_and_initial_frames(
     runtime_cameras: list[RuntimeCamera],
     camera_catalog: CameraCatalog,
-    scene_id: str,
+    clip_id: str,
     usdz_path: str,
 ) -> tuple[
     list[sensorsim_pb2.CameraSpec],
@@ -199,7 +199,7 @@ def build_camera_specs_and_initial_frames(
     initial_frames: list[tuple[bytes, video_model_pb2.ImageFormat]] = []
 
     for camera in runtime_cameras:
-        cam_def = camera_catalog.get_camera_definition(scene_id, camera.logical_id)
+        cam_def = camera_catalog.get_camera_definition(clip_id, camera.logical_id)
 
         # Preserve all recorded intrinsics, including linear_cde. A previous
         # hand-rolled copy dropped linear_cde and caused inconsistent FTheta
@@ -291,10 +291,11 @@ def _extract_clip_id_from_usdz(usdz: zipfile.ZipFile) -> str:
         raise ValueError("metadata.yaml not found in USDZ")
     with usdz.open("metadata.yaml") as f:
         metadata = yaml.safe_load(f)
-    scene_id = metadata.get("scene_id")
-    if not scene_id:
+    # USDZ metadata calls the ClipGT ID ``scene_id``.
+    clip_id = metadata.get("scene_id")
+    if not clip_id:
         raise ValueError("scene_id not found in metadata.yaml")
-    return scene_id[len("clipgt-") :] if scene_id.startswith("clipgt-") else scene_id
+    return clip_id[len("clipgt-") :] if clip_id.startswith("clipgt-") else clip_id
 
 
 def extract_first_frames(

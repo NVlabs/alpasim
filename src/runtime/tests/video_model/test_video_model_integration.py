@@ -370,7 +370,7 @@ def test_extract_hdmap_missing_metadata_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 3: VideoModelService._register_scene_cameras + _apply_override
+# Section 3: VideoModelService._register_clip_cameras + _apply_override
 # ---------------------------------------------------------------------------
 
 
@@ -383,7 +383,7 @@ def _make_service(camera_catalog: CameraCatalog | None = None) -> VideoModelServ
     )
 
 
-def test_register_scene_cameras_uses_usdz_calibration_and_applies_resolution_override(
+def test_register_clip_cameras_uses_usdz_calibration_and_applies_resolution_override(
     tmp_path: Path,
 ) -> None:
     """USDZ supplies real calibration; local overrides may patch resolution.
@@ -415,7 +415,7 @@ def test_register_scene_cameras_uses_usdz_calibration_and_applies_resolution_ove
     )
     service = _make_service(camera_catalog=catalog)
 
-    service._register_scene_cameras(scene_id="clipgt-deadbeef", usdz_path=str(usdz))
+    service._register_clip_cameras(clip_id="clipgt-deadbeef", usdz_path=str(usdz))
 
     cam = catalog.get_camera_definition("clipgt-deadbeef", "camera_front_wide_120fov")
     # Override applied:
@@ -465,7 +465,7 @@ def test_register_scene_cameras_uses_usdz_calibration_and_applies_resolution_ove
         ),
     ],
 )
-def test_register_scene_cameras_rejects_unsafe_video_model_overrides(
+def test_register_clip_cameras_rejects_unsafe_video_model_overrides(
     tmp_path: Path, override: CameraDefinitionConfig, field: str
 ) -> None:
     """Video-model seed frames must stay aligned with recorded calibration."""
@@ -479,10 +479,10 @@ def test_register_scene_cameras_rejects_unsafe_video_model_overrides(
     service = _make_service(camera_catalog=catalog)
 
     with pytest.raises(ValueError, match=field):
-        service._register_scene_cameras(scene_id="clipgt-deadbeef", usdz_path=str(usdz))
+        service._register_clip_cameras(clip_id="clipgt-deadbeef", usdz_path=str(usdz))
 
 
-def test_register_scene_cameras_rejects_override_without_matching_usdz_camera(
+def test_register_clip_cameras_rejects_override_without_matching_usdz_camera(
     tmp_path: Path,
 ) -> None:
     """An override with no matching USDZ camera is a configuration error.
@@ -505,7 +505,7 @@ def test_register_scene_cameras_rejects_override_without_matching_usdz_camera(
     service = _make_service(camera_catalog=catalog)
 
     with pytest.raises(ValueError, match="camera_does_not_exist"):
-        service._register_scene_cameras(scene_id="clipgt-x", usdz_path=str(usdz))
+        service._register_clip_cameras(clip_id="clipgt-x", usdz_path=str(usdz))
 
 
 def test_apply_override_resolution_only() -> None:
@@ -587,12 +587,12 @@ def test_build_camera_specs_and_initial_frames_uses_real_ftheta_and_shutter(
         [CameraDefinitionConfig(logical_id="camera_front_wide_120fov")]
     )
     service = _make_service(camera_catalog=catalog)
-    service._register_scene_cameras(scene_id="clipgt-x", usdz_path=str(usdz))
+    service._register_clip_cameras(clip_id="clipgt-x", usdz_path=str(usdz))
 
     specs, rig_to_camera, frames = build_camera_specs_and_initial_frames(
         runtime_cameras=[_runtime_camera("camera_front_wide_120fov")],
         camera_catalog=catalog,
-        scene_id="clipgt-x",
+        clip_id="clipgt-x",
         usdz_path=str(usdz),
     )
 
@@ -637,12 +637,12 @@ def test_build_camera_specs_and_initial_frames_uses_timestamped_frames(
         [CameraDefinitionConfig(logical_id="camera_front_wide_120fov")]
     )
     service = _make_service(camera_catalog=catalog)
-    service._register_scene_cameras(scene_id="clipgt-x", usdz_path=str(usdz))
+    service._register_clip_cameras(clip_id="clipgt-x", usdz_path=str(usdz))
 
     _specs, _rig_to_camera, frames = build_camera_specs_and_initial_frames(
         runtime_cameras=[_runtime_camera("camera_front_wide_120fov")],
         camera_catalog=catalog,
-        scene_id="clipgt-x",
+        clip_id="clipgt-x",
         usdz_path=str(usdz),
     )
 

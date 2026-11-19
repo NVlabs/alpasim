@@ -14,12 +14,15 @@ The accumulator handles all message types and builds ScenarioEvalInput,
 eliminating code duplication between asl_loader.py and runtime_evaluator.py.
 """
 
+import json
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
 from alpasim_grpc.v0.common_pb2 import AABB
 from alpasim_grpc.v0.egodriver_pb2 import DriveResponse
+from alpasim_grpc.v0.frame_quality_pb2 import FrameQualityResponse
 from alpasim_grpc.v0.logging_pb2 import ActorPoses, LogEntry, RolloutMetadata
 from alpasim_grpc.v0.traffic_pb2 import TrafficReturn, TrafficSessionRequest
 from alpasim_utils.geometry import (
@@ -32,8 +35,12 @@ from trajdata.maps import VectorMap
 
 from eval.data import (
     RAABB,
+    AggregationType,
     Cameras,
     DriverResponses,
+    MetricReturn,
+    NavInstructionAtTime,
+    NavInstructions,
     RenderableTrajectory,
     Routes,
     ScenarioEvalInput,
@@ -100,6 +107,12 @@ class EvalDataAccumulator:
     # Camera and route data
     _cameras: Cameras = field(default_factory=Cameras, init=False)
     _routes: Routes = field(default_factory=Routes, init=False)
+    _nav_instructions: NavInstructions = field(
+        default_factory=NavInstructions, init=False
+    )
+    _frame_quality_responses: dict[int, FrameQualityResponse] = field(
+        default_factory=dict, init=False
+    )
 
     @property
     def session_metadata(self) -> RolloutMetadata.SessionMetadata | None:
@@ -131,6 +144,17 @@ class EvalDataAccumulator:
             self._cameras.add_camera_image(message.driver_camera_image.camera_image)
         elif msg_type == "route_request":
             self._routes.add_route(message.route_request.route)
+        elif msg_type == "navigation_instruction":
+            nav = message.navigation_instruction
+            self._nav_instructions.add(
+                NavInstructionAtTime(
+                    timestamp_us=int(nav.timestamp_us),
+                    instruction_text=nav.instruction_text,
+                    remaining_distance_m=float(nav.debug_info.remaining_distance_m),
+                    status=nav.DebugInfo.Status.Name(nav.debug_info.status),
+                    route_offset_m=float(nav.debug_info.route_offset_m),
+                )
+            )
         elif msg_type == "driver_request":
             self._pending_request = (
                 message.driver_request.time_now_us,
@@ -151,6 +175,90 @@ class EvalDataAccumulator:
         elif msg_type == "available_cameras_return":
             for available_camera in message.available_cameras_return.available_cameras:
                 self._cameras.add_calibration(available_camera)
+        elif msg_type == "frame_quality_response":
+            self._handle_frame_quality_response(message.frame_quality_response)
+
+    def _handle_frame_quality_response(self, response: FrameQualityResponse) -> None:
+        if (
+            not response.session_uuid
+            or not response.camera_logical_id
+            or not response.checkpoint_id
+            or not response.checkpoint_sha256
+        ):
+            raise ValueError("frame quality response has incomplete provenance")
+        score = float(response.score)
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            raise ValueError(
+                f"frame quality score must be finite and in [0, 1], got {score}"
+            )
+
+        timestamp_us = int(response.timestamp_us)
+        if timestamp_us in self._frame_quality_responses:
+            raise ValueError(
+                f"frame quality response has duplicate timestamp {timestamp_us}"
+            )
+        if self._frame_quality_responses:
+            previous = next(iter(self._frame_quality_responses.values()))
+            if (
+                response.session_uuid != previous.session_uuid
+                or response.camera_logical_id != previous.camera_logical_id
+                or response.checkpoint_id != previous.checkpoint_id
+                or response.checkpoint_sha256 != previous.checkpoint_sha256
+            ):
+                raise ValueError("frame quality responses have conflicting provenance")
+
+        stored_response = FrameQualityResponse()
+        stored_response.CopyFrom(response)
+        self._frame_quality_responses[timestamp_us] = stored_response
+
+    def _build_frame_quality_metrics(self) -> list[MetricReturn]:
+        if not self._frame_quality_responses:
+            return []
+        if self._session_metadata is None:
+            raise ValueError(
+                "Cannot validate frame quality response without session metadata"
+            )
+
+        responses = sorted(
+            self._frame_quality_responses.values(),
+            key=lambda response: response.timestamp_us,
+        )
+        first = responses[0]
+        if first.session_uuid != self._session_metadata.session_uuid:
+            raise ValueError(
+                "frame quality response session does not match rollout metadata: "
+                f"{first.session_uuid!r} != {self._session_metadata.session_uuid!r}"
+            )
+        camera = self._cameras.camera_by_logical_id.get(first.camera_logical_id)
+        response_timestamps = {int(response.timestamp_us) for response in responses}
+        camera_timestamps = set(camera.timestamps_us) if camera is not None else set()
+        if response_timestamps != camera_timestamps:
+            raise ValueError(
+                "frame quality response stream is incomplete for camera "
+                f"{first.camera_logical_id!r}: scored={len(response_timestamps)} "
+                f"frames={len(camera_timestamps)}"
+            )
+
+        return [
+            MetricReturn(
+                name="frame_quality_score",
+                timestamps_us=[int(response.timestamp_us) for response in responses],
+                values=[float(response.score) for response in responses],
+                valid=[True] * len(responses),
+                time_aggregation=AggregationType.P90,
+                info=json.dumps(
+                    {
+                        "metadata": {
+                            "camera_logical_id": first.camera_logical_id,
+                            "checkpoint_id": first.checkpoint_id,
+                            "checkpoint_sha256": first.checkpoint_sha256,
+                        },
+                        "source": "frame_quality",
+                    },
+                    sort_keys=True,
+                ),
+            )
+        ]
 
     def _handle_rollout_metadata(self, metadata: RolloutMetadata) -> None:
         """Extract data from rollout_metadata message.
@@ -409,7 +517,11 @@ class EvalDataAccumulator:
             vec_map=vec_map,
             cameras=self._cameras if self._cameras.camera_by_logical_id else None,
             routes=self._routes if self._routes.routes_in_rig_frame else None,
+            nav_instructions=(
+                self._nav_instructions if self._nav_instructions.timestamps_us else None
+            ),
             run_uuid=run_uuid,
             run_name=run_name,
             force_gt_duration_us=self._force_gt_duration_us,
+            recorded_metrics=self._build_frame_quality_metrics(),
         )

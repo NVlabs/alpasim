@@ -10,6 +10,7 @@ Sets up the logger and config schema for the wizard, and provides a main_wrapper
 
 import logging
 import os
+import re
 import subprocess
 from typing import Callable
 
@@ -20,7 +21,8 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, MissingMandatoryValue, OmegaConf
 
-from .schema import AlpasimConfig
+from .scenes.scene_suite import find_scene_suite_csv
+from .schema import AlpasimConfig, SceneSuiteConfig
 
 logger = logging.getLogger("alpasim_wizard")
 
@@ -29,6 +31,8 @@ cs = ConfigStore.instance()
 cs.store(name="config_schema", node=AlpasimConfig)
 
 REPO_ROOT = find_repo_root(__file__)
+
+_DEFAULT_CLIP_IDS = ("clipgt-01d503d4-449b-46fc-8d78-9085e70d3554",)
 
 
 def _list_config_group_options(group: str) -> list[str]:
@@ -149,6 +153,17 @@ def validate_config(cfg: AlpasimConfig) -> None:
     """
     _check_run_sim_services_defined(cfg)
     _check_required_config_groups(cfg)
+    if cfg.wizard.enable_mps and not cfg.wizard.run_method.is_slurm:
+        raise ValueError("wizard.enable_mps is only supported on SLURM")
+    # The pipe directory goes unquoted into shell commands (including `rm -rf`)
+    # and comma-separated container mount lists.
+    if cfg.wizard.mps_pipe_dir is not None and not re.fullmatch(
+        r"/[A-Za-z0-9._/-]+", cfg.wizard.mps_pipe_dir
+    ):
+        raise ValueError(
+            "wizard.mps_pipe_dir must be an absolute path of letters, digits, "
+            f"'.', '_', '-' and '/'; got {cfg.wizard.mps_pipe_dir!r}"
+        )
 
     do_shutdown = OmegaConf.select(cfg.runtime, "endpoints.do_shutdown", default=True)
     if do_shutdown is False:
@@ -177,43 +192,109 @@ def validate_config(cfg: AlpasimConfig) -> None:
 
 
 def update_scene_config(cfg: AlpasimConfig) -> None:
-    """Remove scene_ids from the config if multiple scene sources are specified or
-    add all available artifacts if source is set to local and scene_ids is None.
+    """Validate scene selectors and normalize suite IDs to suite configs.
 
-    Only one of scene_ids or test_suite_id should be specified in the config.
-    However, we specify a default scene_ids in base_config.yaml, requiring
-    users to explicitly set scene_ids to None if they want to use a
-    test_suite_id.
-
-    This function removes this requirement by removing scene_ids from the config
-    if:
-    - exactly one of scene_ids or test_suite_id is specified in the command line
-        arguments
-    - scene_ids has exactly one element (which we assume to be the default one)
+    A local USDZ directory selects all discovered clips unless
+    ``scenes.clip_ids`` provides a filter.
     """
     scene_config = cfg.scenes
 
-    # Database scene handling
-    scene_config_keys = ("scene_ids", "test_suite_id")
-    if sum(getattr(scene_config, key) is not None for key in scene_config_keys) == 1:
-        # Exactly one specified in config, all good, no need to do anything.
-        return
-
     hydra_cfg = HydraConfig.get()
     cmd_line_overrides = hydra_cfg.overrides.task
-    cmd_line_overrides_str = " ".join(cmd_line_overrides)
+    # Compare normalized Hydra keys exactly so exclude_clip_ids does not count as
+    # selecting clip_ids. Hydra keys may use +/~ prefixes.
+    override_keys = {
+        override.partition("=")[0].strip().lstrip("+~")
+        for override in cmd_line_overrides
+    }
+    clip_ids_selected_on_cli = "scenes.clip_ids" in override_keys
+    local_directory_selected_on_cli = "scenes.local_usdz_dir" in override_keys
+    suite_ids_selected_on_cli = "scenes.suite_ids" in override_keys
+    suite_configs_selected_on_cli = "scenes.suite_configs" in override_keys
+    suite_groups_selected_on_cli = "scenes.suite_groups" in override_keys
 
-    # We specify a default scene_id in the config so simulations can run by default.
-    # However, when users specify test_suite_id on the command line, we need to
-    # clear the default scene_ids to avoid conflicts.
-    # Here, we check that exactly one scene source was specified via command line
-    # and scene_ids has only one element (which we assume to be the default one).
+    inherited_default_selected = tuple(scene_config.clip_ids or ()) == _DEFAULT_CLIP_IDS
     if (
-        sum(key in cmd_line_overrides_str for key in scene_config_keys) == 1
-        and scene_config.scene_ids is not None
-        and len(scene_config.scene_ids) == 1
+        (
+            suite_ids_selected_on_cli
+            or suite_configs_selected_on_cli
+            or suite_groups_selected_on_cli
+        )
+        and not clip_ids_selected_on_cli
+        and inherited_default_selected
     ):
-        scene_config.scene_ids = None
+        scene_config.clip_ids = None
+
+    if (
+        scene_config.local_usdz_dir is not None
+        and local_directory_selected_on_cli
+        and not clip_ids_selected_on_cli
+        and inherited_default_selected
+    ):
+        scene_config.clip_ids = None
+
+    suite_ids = scene_config.suite_ids
+    suite_ids_selected = suite_ids is not None
+    suite_configs_selected = scene_config.suite_configs is not None
+    suite_groups = getattr(scene_config, "suite_groups", {})
+    if suite_groups_selected_on_cli and not suite_groups:
+        raise ValueError("scenes.suite_groups must not be empty.")
+    if suite_groups:
+        if any(not configs for configs in suite_groups.values()):
+            raise ValueError("Every scenes.suite_groups entry must be non-empty.")
+        if scene_config.exclude_clip_ids or scene_config.limit_to_first_n > 0:
+            raise ValueError(
+                "scenes.suite_groups cannot be combined with exclude_clip_ids or "
+                "limit_to_first_n."
+            )
+        if suite_ids_selected or suite_configs_selected:
+            raise ValueError(
+                "Set either scenes.suite_groups or a single suite selector, not both."
+            )
+        if scene_config.local_usdz_dir is not None or scene_config.clip_ids is not None:
+            raise ValueError(
+                "Set either scenes.suite_groups or another scene selector, not both."
+            )
+        return
+    if suite_ids_selected and not suite_ids:
+        raise ValueError("scenes.suite_ids must not be empty.")
+    if suite_ids_selected and suite_configs_selected:
+        raise ValueError(
+            "Set either scenes.suite_ids or scenes.suite_configs, not both."
+        )
+
+    suite_selected = suite_ids_selected or suite_configs_selected
+    selected_suite_key = (
+        "scenes.suite_ids" if suite_ids_selected else "scenes.suite_configs"
+    )
+    if suite_selected and scene_config.local_usdz_dir is not None:
+        raise ValueError(
+            f"Set either {selected_suite_key} or scenes.local_usdz_dir, not both."
+        )
+    if suite_selected and scene_config.clip_ids is not None:
+        raise ValueError(
+            f"Set either {selected_suite_key} or scenes.clip_ids, not both."
+        )
+    if (
+        not suite_selected
+        and scene_config.clip_ids is None
+        and scene_config.local_usdz_dir is None
+    ):
+        raise ValueError(
+            "Set one scene selector: scenes.clip_ids, scenes.suite_ids, "
+            "scenes.suite_configs, or scenes.local_usdz_dir."
+        )
+
+    if suite_ids is not None:
+        scene_config.suite_configs = [
+            SceneSuiteConfig(
+                csv_path=str(
+                    find_scene_suite_csv(suite_id, scene_config.scene_suite_dirs)
+                )
+            )
+            for suite_id in suite_ids
+        ]
+        scene_config.suite_ids = None
 
 
 def cmd_line_args(cfg: DictConfig) -> str:
@@ -261,7 +342,7 @@ def _read_base_image_tag() -> str:
     """Return the stable or CI-built base image tag for this checkout."""
     version = _read_repo_version()
     branch = _git_output("rev-parse", "--abbrev-ref", "HEAD")
-    if branch in {None, "HEAD", "main"}:
+    if branch is None or branch == "main":
         return version
 
     merge_base = _git_output("merge-base", "HEAD", "origin/main")

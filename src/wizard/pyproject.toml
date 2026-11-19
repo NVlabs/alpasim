@@ -22,6 +22,8 @@ dependencies = [
     "filelock",
     "boto3",
     "huggingface_hub",
+    "numpy",
+    "pillow",
     "tqdm",
     "typing-extensions",
     "pytest",
@@ -48,3 +50,4 @@ alpasim_wizard = ["telemetry/resources/*.sh", "telemetry/resources/*.csv"]
 [project.scripts]
 alpasim_wizard = "alpasim_wizard.__main__:main"
 alpasim_check_config = "alpasim_wizard.check_config:main"
+alpasim-scenes-validate = "alpasim_wizard.scenes.validate:main"

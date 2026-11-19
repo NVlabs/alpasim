@@ -2,9 +2,49 @@
 # Copyright (c) 2025-2026 NVIDIA Corporation
 
 import numpy as np
+from shapely.geometry import LineString, Point
 
 from eval.data import AggregationType, MetricReturn, SimulationResult
 from eval.scorers.base import Scorer
+
+
+def _end_direction(gt_linestring: LineString) -> np.ndarray | None:
+    """Final travel direction supported by at least 1 m of displacement.
+
+    A stopped recording can end with duplicate positions or millimetre jitter.
+    Look backwards for meaningful motion rather than normalizing that noise.
+    Paths confined within 1 m of their endpoint have no supported direction.
+    """
+    coords = np.asarray(gt_linestring.coords, dtype=np.float64)[:, :2]
+    for start_point in coords[-2::-1]:
+        direction = coords[-1] - start_point
+        norm = float(np.linalg.norm(direction))
+        if norm >= 1.0:
+            return direction / norm
+    return None
+
+
+def _lateral_distance_to_gt(
+    gt_linestring: LineString,
+    point: Point,
+    end_direction: np.ndarray | None,
+) -> float:
+    """Distance to the recorded path union its forward endpoint ray.
+
+    The ray separates longitudinal overshoot from lateral departure even when
+    endpoint jitter puts the closest recorded point before the final station.
+    Ordinary distance still determines the supported aggregation window.
+    """
+    distance = float(gt_linestring.distance(point))
+    if end_direction is None:
+        return distance
+
+    end_point = np.asarray(gt_linestring.coords, dtype=np.float64)[-1, :2]
+    offset = np.array([point.x, point.y], dtype=np.float64) - end_point
+    if float(offset @ end_direction) <= 0:
+        return distance
+    lateral = float(abs(offset[0] * end_direction[1] - offset[1] * end_direction[0]))
+    return min(distance, lateral)
 
 
 class GroundTruthScorer(Scorer):
@@ -12,8 +52,8 @@ class GroundTruthScorer(Scorer):
 
     Adds the following metrics:
     * progress: The progress along the _full_ ground truth trajectory.
-    * progress_rel_to_total: Ratio of progress along the full ground truth trajectory
-        for scene scoring.
+    * progress_rel_to_total: Progress for scene scoring, relative to the ground
+        truth reachable within the simulated window. May exceed 1.0.
     * progress_rel: The progress along the current ground truth trajectory up to
         the current timestamp. Gives a better sense of progression during the
         simulation.
@@ -32,8 +72,11 @@ class GroundTruthScorer(Scorer):
         progress_along_current_gt = [1.0, 1.0]
         progress_along_full_gt = []
         distance_to_gt_trajectory = [0.0, 0.0]
+        lateral_distance_to_gt_trajectory = [0.0, 0.0]
         distance_to_current_gt_point = [0.0, 0.0]
         distance_traveled = [0.0, 0.0]
+        gt_end_direction = _end_direction(full_gt_linestring)
+        corridor_m = self.cfg.aggregation_modifiers.max_dist_to_gt_trajectory
         gt_distance_traveled = [full_gt_distance_traveled_m] * len(
             simulation_result.timestamps_us
         )
@@ -70,6 +113,13 @@ class GroundTruthScorer(Scorer):
             distance_to_gt_trajectory.append(
                 full_gt_linestring.distance(ego_polygon.centroid)
             )
+            lateral_distance_to_gt_trajectory.append(
+                _lateral_distance_to_gt(
+                    full_gt_linestring,
+                    ego_polygon.centroid,
+                    gt_end_direction,
+                )
+            )
 
         # Heuristically interpolate the first two timestamps
         if len(progress_along_full_gt) > 0:
@@ -77,6 +127,27 @@ class GroundTruthScorer(Scorer):
                 list(np.linspace(0, progress_along_full_gt[0], 3)[:2])
                 + progress_along_full_gt
             )
+
+        # Normalize by the GT the rollout can actually reach: the rollout stops at
+        # the last whole control step that fits the recording, so a perfect replay
+        # still falls short of the full path -- badly so when the ego is
+        # accelerating and most of the path lies in that trailing step.
+        reachable_gt_distance_m = full_gt_distance_traveled_m
+        if len(simulation_result.timestamps_us) > 0 and full_gt_distance_traveled_m > 0:
+            last_gt_point = full_gt_trajectory.interpolate_to_timestamps(
+                np.array([simulation_result.timestamps_us[-1]])
+            ).to_point()
+            reachable_gt_distance_m = float(full_gt_linestring.project(last_gt_point))
+
+        if reachable_gt_distance_m > 0:
+            reachable_scale = full_gt_distance_traveled_m / reachable_gt_distance_m
+        else:
+            reachable_scale = 1.0
+        # Deliberately unclipped so out-running the recording stays visible; the
+        # scene score clamps to [0, 1] itself.
+        progress_rel_to_total = [
+            value * reachable_scale for value in progress_along_full_gt
+        ]
 
         return [
             MetricReturn(
@@ -88,8 +159,8 @@ class GroundTruthScorer(Scorer):
             ),
             MetricReturn(
                 name="progress_rel_to_total",
-                values=progress_along_full_gt,
-                valid=[True] * len(progress_along_full_gt),
+                values=progress_rel_to_total,
+                valid=[True] * len(progress_rel_to_total),
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.LAST,
             ),
@@ -104,6 +175,23 @@ class GroundTruthScorer(Scorer):
                 name="dist_to_gt_trajectory",
                 values=distance_to_gt_trajectory,
                 valid=[True] * len(distance_to_gt_trajectory),
+                timestamps_us=list(simulation_result.timestamps_us),
+                time_aggregation=AggregationType.MAX,
+            ),
+            MetricReturn(
+                name="lateral_dist_to_gt_trajectory",
+                values=lateral_distance_to_gt_trajectory,
+                valid=[True] * len(lateral_distance_to_gt_trajectory),
+                timestamps_us=list(simulation_result.timestamps_us),
+                time_aggregation=AggregationType.MAX,
+            ),
+            MetricReturn(
+                name="left_corridor_laterally",
+                values=[
+                    float(value >= corridor_m)
+                    for value in lateral_distance_to_gt_trajectory
+                ],
+                valid=[True] * len(lateral_distance_to_gt_trajectory),
                 timestamps_us=list(simulation_result.timestamps_us),
                 time_aggregation=AggregationType.MAX,
             ),

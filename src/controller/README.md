@@ -38,7 +38,35 @@ state.
 
 The vehicle model is implemented as a planar dynamic bicycle model. The equations of motion can be found in
 e.g. _Vehicle Dynamics and Control_ by Rajamani, with minor deviations to support the rear-axis coordinate
-system definition. To avoid singularities at low speed, a kinematic model is used below a speed threshold.
+system definition. One dynamic model is used from standstill through highway speeds.
+
+The lateral state `z = [vy_cg, yaw_rate]` is advanced with backward Euler at substeps of at most
+10 ms. Multiplying the update by the end-of-step forward speed `v` gives
+`(v I - h v A(v)) z_next = v z + h v b steering_next`. The matrix `v A(v)` has no division
+by speed. At zero speed the tire matrix enforces zero lateral velocity and yaw rate; as speed
+approaches zero, the steady solution approaches the small-angle no-slip kinematic limit.
+There is no speed threshold, speed floor, or kinematic/dynamic blend in this update.
+
+Steering and acceleration actuators use their exact constant-command solution. Position uses
+trapezoidal velocities and midpoint heading, with `vy_rig = vy_cg - l_rig_to_cg * yaw_rate`
+at all speeds. Reported body-velocity derivatives are differences over the final integration
+substep, including the forward-speed clamp when stopping.
+
+The simulator, linear MPC, and SQP MPC share the discrete update. At the zero-speed clamp,
+symbolic predictors use the forward derivative. Nonlinear MPC retains implicit Radau
+collocation of continuous dynamics. It uses the same tire coefficients with a smooth
+regularization speed `sqrt(v**2 + 0.01**2)` and scales the steering force by
+`v / sqrt(v**2 + 0.01**2)`. This preserves the steady-turn and no-slip limits without a
+switch or standstill steering force, while avoiding a hard stop clamp inside IPOPT.
+Its continuous predictor retains the existing small reverse-velocity slack; the simulator
+still clamps forward speed at zero. Predictor agreement is tested separately from exact
+parity of the discrete backends.
+
+The model remains
+forward-only and assumes linear tires and small steering/slip angles. Numerical stability at
+low speed does not supply a standstill friction model, tire saturation, or reverse dynamics.
+The speed-range tests cover 0–45 m/s, with numerical stress cases through 80 m/s; these are
+numerical checks, not real-vehicle calibration.
 
 ### State Vector
 
@@ -74,14 +102,38 @@ For each time step, the system will:
 7. Apply the relative motion to the `local` to `rig` transformation
 
 ## Backend Implementations
-Two MPC implementations are provided: a nonlinear MPC using `do_mpc` and a linear MPC using `OSQP`.
-In both cases, the same cost function/constraints are used, but the problem formulation and solvers
-differ. The trade-off between the two implementations is speed vs. accuracy--the responses are
-similar for most normal driving scenarios, but the nonlinear MPC is more accurate for aggressive
-maneuvers or tight turns.
+
+Three MPC implementations are provided:
+
+- `linear`: Linearizes the shared discrete bicycle model and solves an affine QP with `OSQP`.
+- `nonlinear`: Uses smooth continuous bicycle dynamics with `do_mpc`/IPOPT.
+- `sqp`: Repeatedly linearizes the nonlinear dynamics around the current SQP iterate, solves
+  QP subproblems with `OSQP`, and regularizes changes between SQP iterates.
+
+The implementations share the controller API and the common tracking/smoothness terms where
+applicable. The linear controller prioritizes runtime, nonlinear MPC optimizes the full nonlinear
+problem directly, and SQP is intended to recover most of the nonlinear tracking quality at lower
+runtime by warm-starting from the reference trajectory and previous solve.
 
 The desired implementation can be selected via the wizard controller config group
 (e.g. `controller=nonlinear`) or by passing a YAML config via `--config` when running the server standalone.
+
+`System` owns physical coercion: refresh derivatives, align held actuator commands,
+and call the backend's required `reset_warm_start()`, including between MPC ticks.
+`MPCController.compute_control()` owns command acceptance and failure cleanup;
+backends implement `_compute_control()` and return a command/status or `None`/reason.
+Unsuccessful or nonfinite solves return no command, a `failed:` status and cleared
+warm starts. `System` retains its active command, which coercion synchronizes with
+the supplied actuators. SQP rejects any failed QP; its outer iteration limit remains an
+explicitly approximate accepted update. Holding a command does not guarantee safe driving.
+Other controller implementations can use the same service interface.
+
+Cold nonlinear solves seed their initial guess and previous-command penalty from the
+supplied state and actuators; accepted subsequent solves retain the previous command.
+Controller responses include per-request `solver_stats` with MPC update and failed
+update counts, which runtime records in ASL. Held propagation and inner SQP iterations
+do not count as updates. An absent field means unsupported diagnostics, rather than
+zero updates.
 
 ### MPC Penalty Design
 
@@ -103,12 +155,28 @@ dynamics and cost function are defined symbolically using `casadi`, and the resu
 program is solved using the IPOPT solver.
 
 ### Linear MPC
-The linear MPC implementation casts the problem as a reduced form quadratic program (QP). Starting
-from the quadratic cost function, the dynamics are linearized about the "free" trajectory (i.e.
-assuming no control inputs) at each time step to for the linearized perturbation dynamics. After
-discretizing, the full state transition matrices are constructed over the horizon, and the QP is formed
-by plugging those dynamics into the cost function. The resulting QP is solved using `OSQP`.
 
+The linear MPC implementation casts the problem as a reduced form quadratic program (QP).
+CasADi differentiates the shared discrete update about the current state and zero command.
+The affine residual preserves the prediction at that operating point, including products of
+speed and steering. The resulting state transition matrices and accumulated residual are
+used to construct the horizon cost and constraints. The QP is solved using `OSQP`.
+
+### SQP MPC
+
+The SQP implementation builds a full-state reference from the reference poses: speed, curvature
+and acceleration are derived from the poses; the velocity, yaw-rate, steering, and acceleration references are
+rolled out through the bicycle model, and the position and heading references are
+the reference poses themselves (the rollout carries rear-axle slip that the path-tangent poses do
+not, so re-integrated positions would drift outside of turns). Each SQP iteration linearizes the nonlinear
+dynamic bicycle model around the current state/control trajectory, solves a constrained QP with
+`OSQP`, and stops when the step size falls below `gains.sqp_step_tolerance` or
+`gains.sqp_max_iterations` is reached.
+
+Additional SQP terms include velocity, lateral velocity, yaw-rate, and steering-state tracking, plus
+proximal penalties `gains.sqp_state_step_weight` and `gains.sqp_control_step_weight` that stabilize
+successive SQP iterates. `gains.max_curvature_abs` and `gains.max_curvature_speed_floor` define the
+hard yaw-rate/curvature envelope used by both nonlinear and SQP MPC at low speed.
 
 ## Third-Party Licenses
 

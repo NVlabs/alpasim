@@ -6,12 +6,24 @@
 from alpasim_grpc.v0 import runtime_pb2
 
 
-class UnknownSceneError(ValueError):
-    """Raised when a scene_id cannot be resolved to a known data source."""
+class UnknownClipError(ValueError):
+    """Raised when a clip ID cannot be resolved to a known data source."""
 
-    def __init__(self, scene_id: str):
-        super().__init__(f"No data source found for scene_id: {scene_id}")
-        self.scene_id = scene_id
+    def __init__(self, clip_id: str):
+        super().__init__(f"No data source found for clip_id: {clip_id}")
+        self.clip_id = clip_id
+
+
+class UnknownSceneError(ValueError):
+    """Raised when a structured scene address is not configured."""
+
+    def __init__(self, source_id: str, policy_start_us: int | str):
+        super().__init__(
+            "No configured scene found for "
+            f"source_id={source_id!r}, policy_start_us={policy_start_us!r}"
+        )
+        self.source_id = source_id
+        self.policy_start_us = policy_start_us
 
 
 class RolloutError(Exception):
@@ -25,7 +37,7 @@ class InvalidSceneError(RolloutError):
 
     error_code = runtime_pb2.ROLLOUT_ERROR_CODE_INVALID_SCENE
 
-    def __init__(self, scene_id: str, detail: str):
-        super().__init__(f"INVALID_SCENE: Scene {scene_id!r} is invalid: {detail}")
-        self.scene_id = scene_id
+    def __init__(self, scene_key: str, detail: str):
+        super().__init__(f"INVALID_SCENE: Scene {scene_key!r} is invalid: {detail}")
+        self.scene_key = scene_key
         self.detail = detail

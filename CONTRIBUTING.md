@@ -181,6 +181,8 @@ position_ego_aabb_local = (pose_local_to_ego_rig @ pose_ego_rig_to_aabb).vec3
   - `submit_trajectory`: sends the noised history in the `local` frame (i.e. the noisy rig location
     in the local coordinate frame)
   - `submit_route`: sends waypoints in the `noisy rig` frame.
+  - `submit_navigation`: sends the turn-by-turn instruction; it carries no geometry, but the ego
+    is located along the recorded route with its `true` pose.
   - `submit_recording_ground_truth`: sends the gt trajectory in the `rig` frame. Note that because
     the driver doesn't know it's true location (only the estimated one), if it transforms the GT to
     the local frame, there's some error.

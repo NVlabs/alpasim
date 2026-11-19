@@ -36,6 +36,7 @@ from alpasim_runtime.worker.ipc import (
     _ShutdownSentinel,
 )
 from alpasim_runtime.worker.runtime import WorkerRuntime
+from alpasim_utils.types import T0_AUTO, ClipDataSource, Scene
 
 
 def _report_worker_start_method(args: SimpleNamespace) -> None:
@@ -71,10 +72,12 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config = MagicMock()
     config.user.nr_workers = nr_workers
     config.user.smooth_trajectories = True
-    config.user.scene_affine_dispatch.enabled = False
-    config.user.scene_affine_dispatch.max_renderers_per_scene = 2
-    config.user.scene_affine_dispatch.max_scenes_per_renderer = None
+    config.user.clip_affine_dispatch.enabled = False
+    config.user.clip_affine_dispatch.max_renderers_per_clip = 2
+    config.user.clip_affine_dispatch.max_clips_per_renderer = None
     config.user.simulation_config.force_gt_frame_cache.enabled = False
+    config.user.simulation_config.ego_mask_overrides_file = None
+    config.user.simulation_config.nav_instruction.source = "geometry"
     config.user.renderer = RendererConfig(kind=RendererKind.sensorsim)
     config.user.endpoints.driver.skip = False
     config.user.endpoints.driver.n_concurrent_rollouts = 2
@@ -86,12 +89,15 @@ def _make_config_mock(nr_workers: int = 1) -> MagicMock:
     config.user.endpoints.trafficsim.n_concurrent_rollouts = 2
     config.user.endpoints.controller.skip = False
     config.user.endpoints.controller.n_concurrent_rollouts = 2
+    config.user.endpoints.frame_quality.skip = True
+    config.user.endpoints.frame_quality.n_concurrent_rollouts = 0
 
     config.network.driver.endpoints = [ServiceEndpoint("driver:50051")]
     config.network.renderer.endpoints = [ServiceEndpoint("sensorsim:50052")]
     config.network.physics.endpoints = [ServiceEndpoint("physics:50053")]
     config.network.trafficsim.endpoints = [ServiceEndpoint("trafficsim:50054")]
     config.network.controller.endpoints = [ServiceEndpoint("controller:50055")]
+    config.network.frame_quality.endpoints = []
 
     return config
 
@@ -142,6 +148,24 @@ class TestComputeMaxInFlight:
         with pytest.raises(ValueError, match="Service 'driver' has zero capacity"):
             compute_max_in_flight(pools, _make_config_mock())
 
+    def test_enabled_frame_quality_does_not_limit_rollout_concurrency(self) -> None:
+        pools = _make_pools(
+            driver_cap=4,
+            renderer_cap=4,
+            physics_cap=4,
+            trafficsim_cap=4,
+            controller_cap=4,
+        )
+        pools["frame_quality"] = AddressPool(
+            ["quality:50056"], n_concurrent=1, skip=False
+        )
+        config = _make_config_mock()
+        config.user.endpoints.frame_quality.skip = False
+        config.user.endpoints.frame_quality.n_concurrent_rollouts = 1
+        config.network.frame_quality.endpoints = [ServiceEndpoint("quality:50056")]
+
+        assert compute_max_in_flight(pools, config) == 4
+
 
 class TestComputeNumConsumersPerWorker:
     def test_uses_job_count_cap_for_batch(self) -> None:
@@ -182,9 +206,11 @@ def test_create_address_pools_builds_expected_service_pools() -> None:
         "physics",
         "trafficsim",
         "controller",
+        "frame_quality",
     }
     assert pools["driver"].skip is True
     assert pools["driver"].total_capacity is None
+    assert pools["frame_quality"].skip is True
     assert pools["physics"].skip is False
     assert pools["physics"].total_capacity == 2
 
@@ -328,7 +354,10 @@ def _make_assigned_job(request_id: str, job_id: str) -> AssignedRolloutJob:
     return AssignedRolloutJob(
         request_id=request_id,
         job_id=job_id,
-        scene_id="scene-A",
+        scene=Scene(
+            ClipDataSource("clip-A", "uuid-for-clip-A"),
+            T0_AUTO,
+        ),
         rollout_spec_index=0,
         endpoints=_make_endpoints(),
         dispatch_kind="fifo",
